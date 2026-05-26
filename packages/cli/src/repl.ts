@@ -12,6 +12,7 @@ import {
 } from "@siberflow/core";
 import type { Provider } from "@siberflow/core";
 import { ui } from "./ui.js";
+import { MarkdownStreamer } from "./markdown.js";
 import { ToolCallRenderer } from "./tool-renderer.js";
 
 const VERSION = "0.1.0";
@@ -132,35 +133,45 @@ async function persistAfterTurn(ctx: SessionContext): Promise<void> {
 }
 
 async function runTurn(input: string, ctx: SessionContext): Promise<void> {
-  let assistantLineOpen = false;
   const renderers = new Map<number, ToolCallRenderer>();
+  const md = new MarkdownStreamer();
+  let prefixPrinted = false;
 
-  const closeAssistantLine = () => {
-    if (assistantLineOpen) {
-      process.stdout.write("\n");
-      assistantLineOpen = false;
+  const ensurePrefix = () => {
+    if (!prefixPrinted) {
+      process.stdout.write(ui.assistantPrefix());
+      prefixPrinted = true;
+    }
+  };
+
+  const flushMd = () => {
+    const rest = md.finish();
+    if (rest) {
+      ensurePrefix();
+      process.stdout.write(rest + "\n");
     }
   };
 
   try {
     await ctx.agent.send(input, {
       onAssistantStart: () => {
-        assistantLineOpen = false;
+        prefixPrinted = false;
+        md.reset();
         renderers.clear();
       },
       onContent: (delta) => {
-        if (!assistantLineOpen) {
-          process.stdout.write(ui.assistantPrefix());
-          assistantLineOpen = true;
+        const formatted = md.feed(delta);
+        if (formatted) {
+          ensurePrefix();
+          process.stdout.write(formatted);
         }
-        process.stdout.write(delta);
       },
       onAssistantEnd: () => {
-        closeAssistantLine();
+        flushMd();
         for (const r of renderers.values()) r.finishArgs();
       },
       onToolCallStart: (index, name) => {
-        closeAssistantLine();
+        flushMd();
         renderers.set(index, new ToolCallRenderer(name));
       },
       onToolCallArgs: (index, delta) => {
@@ -172,7 +183,7 @@ async function runTurn(input: string, ctx: SessionContext): Promise<void> {
     });
     await persistAfterTurn(ctx);
   } catch (err) {
-    closeAssistantLine();
+    flushMd();
     console.log(ui.error((err as Error).message));
   }
 }
