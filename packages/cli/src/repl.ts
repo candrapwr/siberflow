@@ -222,7 +222,7 @@ function applyChoice(ctx: SessionContext, choice: SessionChoice): void {
     createdAt: now,
     updatedAt: now,
     messages: [...ctx.agent.history()],
-    usage: { promptTokens: 0, completionTokens: 0 },
+    usage: emptyUsage(),
   };
   console.log(ui.info(`  new session: ${sessionLabel(ctx.current)}`));
 }
@@ -242,6 +242,13 @@ function formatRelative(iso: string): string {
   return `${month}mo ago`;
 }
 
+function emptyUsage() {
+  return {
+    last: { promptTokens: 0, completionTokens: 0 },
+    total: { promptTokens: 0, completionTokens: 0 },
+  };
+}
+
 function buildSessionFromAgent(ctx: SessionContext, id: string): Session {
   const now = new Date().toISOString();
   const existing = ctx.current;
@@ -255,7 +262,7 @@ function buildSessionFromAgent(ctx: SessionContext, id: string): Session {
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
     messages: [...ctx.agent.history()],
-    usage: existing?.usage ?? { promptTokens: 0, completionTokens: 0 },
+    usage: existing?.usage ?? emptyUsage(),
   };
 }
 
@@ -278,9 +285,11 @@ async function runTurn(input: string, ctx: SessionContext): Promise<void> {
   let onFirstLine = false;
   let seenAnyContent = false;
 
-  // Latest LLM iteration's usage. Each call's prompt_tokens already includes
-  // the full conversation history, so we replace rather than accumulate.
+  // Track both: latest call's usage (current context size) AND sum of all
+  // calls in this turn (for the cumulative `total` billing counter).
   let latestUsage: { promptTokens: number; completionTokens: number } | undefined;
+  let turnAddPrompt = 0;
+  let turnAddCompletion = 0;
 
   const ensurePrefix = () => {
     if (!prefixPrinted) {
@@ -349,7 +358,11 @@ async function runTurn(input: string, ctx: SessionContext): Promise<void> {
       },
       onAssistantEnd: (_msg, meta) => {
         spinner.stop();
-        if (meta.usage) latestUsage = meta.usage;
+        if (meta.usage) {
+          latestUsage = meta.usage;
+          turnAddPrompt += meta.usage.promptTokens;
+          turnAddCompletion += meta.usage.completionTokens;
+        }
         if (currentLine.length > 0 || onFirstLine) flushCurrentLine(true);
         for (const r of renderers.values()) r.finishArgs();
       },
@@ -366,7 +379,9 @@ async function runTurn(input: string, ctx: SessionContext): Promise<void> {
       },
     });
     if (ctx.current && latestUsage) {
-      ctx.current.usage = latestUsage;
+      ctx.current.usage.last = latestUsage;
+      ctx.current.usage.total.promptTokens += turnAddPrompt;
+      ctx.current.usage.total.completionTokens += turnAddCompletion;
     }
     await persistAfterTurn(ctx);
   } catch (err) {
@@ -447,7 +462,7 @@ async function handleSlashCommand(
         createdAt: now,
         updatedAt: now,
         messages: [...ctx.agent.history()],
-        usage: { promptTokens: 0, completionTokens: 0 },
+        usage: emptyUsage(),
       };
       console.log(ui.info(`started new session: ${sessionLabel(ctx.current)}`));
       return "ok";
@@ -505,11 +520,12 @@ async function handleSlashCommand(
         return "ok";
       }
       const fmt = (n: number) => n.toLocaleString("en-US");
+      const last = u.last;
+      const total = u.total;
       const lines = [
-        `session:    ${sessionLabel(ctx.current)}`,
-        `prompt:     ${fmt(u.promptTokens)} tokens`,
-        `completion: ${fmt(u.completionTokens)} tokens`,
-        `total:      ${fmt(u.promptTokens + u.completionTokens)} tokens`,
+        `session:       ${sessionLabel(ctx.current)}`,
+        `last call:     ${fmt(last.promptTokens)} prompt + ${fmt(last.completionTokens)} completion = ${fmt(last.promptTokens + last.completionTokens)} tokens (current context)`,
+        `session total: ${fmt(total.promptTokens)} prompt + ${fmt(total.completionTokens)} completion = ${fmt(total.promptTokens + total.completionTokens)} tokens (billed)`,
       ];
       console.log(ui.info(lines.join("\n")));
       return "ok";
