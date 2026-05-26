@@ -1,4 +1,4 @@
-import type { Message } from "../agent/types.js";
+import type { Message, UsageStats } from "../agent/types.js";
 
 export const SESSION_FORMAT_VERSION = 1;
 
@@ -12,6 +12,8 @@ export interface Session {
   createdAt: string;
   updatedAt: string;
   messages: Message[];
+  /** Cumulative token usage across all turns in this session. */
+  usage: UsageStats;
 }
 
 export interface SessionSummary {
