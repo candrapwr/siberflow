@@ -1,24 +1,32 @@
 # Siberflow
 
-AI platform with multi-provider support and tool calling. Currently supports the CLI interface with the DeepSeek provider; web and VSCode extension are planned.
+AI platform dengan dukungan multi-provider, tool calling streaming, sandbox file, dan persistensi multi-session. Interface saat ini: CLI. Web & VSCode extension menyusul.
 
-## Structure
+## Provider yang didukung
 
-This is an npm workspaces monorepo.
+- `deepseek` (default) — `deepseek-chat`, `deepseek-reasoner`
+- `gemini` — `gemini-2.5-flash` (via endpoint OpenAI-compatible Google)
+- `openai` — `gpt-5.4-nano` (default; ganti via env kalau model lain)
 
-- `packages/core` — provider-agnostic agent loop, provider adapters, tool registry, and built-in tools (file management & CLI exec)
-- `packages/cli` — interactive terminal interface
+## Struktur
+
+npm workspaces monorepo.
+
+- `packages/core` — agent loop, provider adapter, tool registry, session store
+- `packages/cli` — REPL interaktif
 
 ## Quick start
 
 ```bash
 npm install
 cp .env.example .env
-# edit .env and add your DEEPSEEK_API_KEY
+# isi minimal salah satu API key: DEEPSEEK_API_KEY / GEMINI_API_KEY / OPENAI_API_KEY
 
 npm run dev:cli
 ```
 
+Saat startup, CLI menampilkan daftar sesi yang tersimpan untuk project ini dan minta dipilih (atau dibuat baru dengan nama).
+
 ## Developer docs
 
-Untuk arsitektur, alur eksekusi, cara menambah provider/tool/interface, roadmap, dan catatan desain — baca [DEVELOPMENT.md](DEVELOPMENT.md).
+Detail teknis, struktur kode, cara menambah provider/tool, dan internal CLI rendering ada di [DEVELOPMENT.md](DEVELOPMENT.md).

@@ -57,6 +57,21 @@ export async function deleteSession(id: string): Promise<boolean> {
   }
 }
 
+/**
+ * Delete every session matching the filter. Returns the number removed.
+ * Without a filter, deletes ALL sessions across all projects.
+ */
+export async function clearSessions(filter?: {
+  projectDir?: string;
+}): Promise<number> {
+  const summaries = await listSessions(filter);
+  let removed = 0;
+  for (const s of summaries) {
+    if (await deleteSession(s.id)) removed++;
+  }
+  return removed;
+}
+
 export async function listSessions(filter?: {
   projectDir?: string;
 }): Promise<SessionSummary[]> {

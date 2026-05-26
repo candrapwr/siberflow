@@ -53,7 +53,8 @@ export class MarkdownStreamer {
     return this.renderLine(line);
   }
 
-  private renderLine(line: string): string {
+  /** Public so the REPL can do raw streaming + reformat-on-newline. */
+  renderLine(line: string): string {
     const trimmed = line.trim();
 
     if (trimmed.startsWith("```")) {

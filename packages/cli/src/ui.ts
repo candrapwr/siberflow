@@ -25,35 +25,29 @@ const LOGO_LINES = [
   "╚══════╝╚═╝╚═════╝ ╚══════╝╚═╝  ╚═╝╚═╝     ╚══════╝ ╚═════╝  ╚══╝╚══╝ ",
 ];
 
-export interface BannerInfo {
+export interface SplashInfo {
   version: string;
   provider: string;
   model: string;
   projectDir: string;
-  session: { label: string; messageCount: number } | null;
 }
 
 export const ui = {
-  banner(info: BannerInfo): string {
+  splashBanner(info: SplashInfo): string {
     const logo = LOGO_LINES.map(
       (line, i) => `  ${LOGO_GRADIENT[i] ?? ""}${BOLD}${line}${RESET}`,
     ).join("\n");
-
-    const sessionLine = info.session
-      ? `${info.session.label} ${DIM}(${info.session.messageCount} msgs)${RESET}`
-      : `${DIM}(new, unsaved — /name <label> to save)${RESET}`;
 
     const meta = [
       "",
       `  ${DIM}v${info.version}${RESET}  ${DIM}·${RESET}  ${YELLOW}${info.provider}${RESET}${DIM}/${RESET}${YELLOW}${info.model}${RESET}`,
       `  ${DIM}project${RESET}  ${info.projectDir} ${DIM}· sandbox${RESET}`,
-      `  ${DIM}session${RESET}  ${sessionLine}`,
-      "",
-      `  ${DIM}/help · /list · /new · /exit${RESET}`,
-      "",
     ].join("\n");
 
     return logo + "\n" + meta;
+  },
+  helpLine(): string {
+    return `${DIM}/help · /list · /new · /exit${RESET}`;
   },
   prompt(): string {
     return `${BOLD}${GREEN}you${RESET} ${DIM}›${RESET} `;
