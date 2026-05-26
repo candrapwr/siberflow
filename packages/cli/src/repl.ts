@@ -222,6 +222,7 @@ function applyChoice(ctx: SessionContext, choice: SessionChoice): void {
     createdAt: now,
     updatedAt: now,
     messages: [...ctx.agent.history()],
+    usage: { promptTokens: 0, completionTokens: 0 },
   };
   console.log(ui.info(`  new session: ${sessionLabel(ctx.current)}`));
 }
@@ -254,6 +255,7 @@ function buildSessionFromAgent(ctx: SessionContext, id: string): Session {
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
     messages: [...ctx.agent.history()],
+    usage: existing?.usage ?? { promptTokens: 0, completionTokens: 0 },
   };
 }
 
@@ -275,6 +277,10 @@ async function runTurn(input: string, ctx: SessionContext): Promise<void> {
   let prefixPrinted = false;
   let onFirstLine = false;
   let seenAnyContent = false;
+
+  // Per-turn token usage accumulator (sum across all LLM iterations in this turn).
+  let turnPromptTokens = 0;
+  let turnCompletionTokens = 0;
 
   const ensurePrefix = () => {
     if (!prefixPrinted) {
@@ -341,8 +347,12 @@ async function runTurn(input: string, ctx: SessionContext): Promise<void> {
           }
         }
       },
-      onAssistantEnd: () => {
+      onAssistantEnd: (_msg, meta) => {
         spinner.stop();
+        if (meta.usage) {
+          turnPromptTokens += meta.usage.promptTokens;
+          turnCompletionTokens += meta.usage.completionTokens;
+        }
         if (currentLine.length > 0 || onFirstLine) flushCurrentLine(true);
         for (const r of renderers.values()) r.finishArgs();
       },
@@ -358,6 +368,10 @@ async function runTurn(input: string, ctx: SessionContext): Promise<void> {
         renderers.get(index)?.result(result);
       },
     });
+    if (ctx.current && (turnPromptTokens > 0 || turnCompletionTokens > 0)) {
+      ctx.current.usage.promptTokens += turnPromptTokens;
+      ctx.current.usage.completionTokens += turnCompletionTokens;
+    }
     await persistAfterTurn(ctx);
   } catch (err) {
     spinner.stop();
@@ -391,6 +405,7 @@ async function handleSlashCommand(
             "/load <name|id>  switch to a saved session",
             "/name <name>     rename the current session",
             "/save            force-save the current session",
+            "/usage           show token usage for the active session",
             "/delete <name>   delete a single session",
             "/clear-all       delete ALL sessions in this project (asks to confirm)",
             "/exit, /quit     leave the REPL",
@@ -436,6 +451,7 @@ async function handleSlashCommand(
         createdAt: now,
         updatedAt: now,
         messages: [...ctx.agent.history()],
+        usage: { promptTokens: 0, completionTokens: 0 },
       };
       console.log(ui.info(`started new session: ${sessionLabel(ctx.current)}`));
       return "ok";
@@ -483,6 +499,23 @@ async function handleSlashCommand(
       await saveSession(session);
       ctx.current = session;
       console.log(ui.info(`saved: ${sessionLabel(session)}`));
+      return "ok";
+    }
+
+    case "/usage": {
+      const u = ctx.current?.usage;
+      if (!u) {
+        console.log(ui.info("(no active session)"));
+        return "ok";
+      }
+      const fmt = (n: number) => n.toLocaleString("en-US");
+      const lines = [
+        `session:    ${sessionLabel(ctx.current)}`,
+        `prompt:     ${fmt(u.promptTokens)} tokens`,
+        `completion: ${fmt(u.completionTokens)} tokens`,
+        `total:      ${fmt(u.promptTokens + u.completionTokens)} tokens`,
+      ];
+      console.log(ui.info(lines.join("\n")));
       return "ok";
     }
 

@@ -34,13 +34,16 @@ export async function saveSession(session: Session): Promise<void> {
 export async function loadSession(id: string): Promise<Session | null> {
   try {
     const content = await readFile(pathFor(id), "utf8");
-    const parsed = JSON.parse(content) as Session;
+    const parsed = JSON.parse(content) as Partial<Session>;
     if (parsed.version !== SESSION_FORMAT_VERSION) {
       throw new Error(
         `Session ${id} has unsupported format version ${parsed.version}`,
       );
     }
-    return parsed;
+    return {
+      ...(parsed as Session),
+      usage: parsed.usage ?? { promptTokens: 0, completionTokens: 0 },
+    };
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw err;
