@@ -7,7 +7,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import type { Session, SessionSummary } from "./types.js";
+import type { Session, SessionSummary, SessionUsage } from "./types.js";
 import { SESSION_FORMAT_VERSION } from "./types.js";
 
 const SESSIONS_DIR = join(homedir(), ".siberflow", "sessions");
@@ -34,20 +34,45 @@ export async function saveSession(session: Session): Promise<void> {
 export async function loadSession(id: string): Promise<Session | null> {
   try {
     const content = await readFile(pathFor(id), "utf8");
-    const parsed = JSON.parse(content) as Partial<Session>;
+    const parsed = JSON.parse(content) as Record<string, unknown>;
     if (parsed.version !== SESSION_FORMAT_VERSION) {
       throw new Error(
-        `Session ${id} has unsupported format version ${parsed.version}`,
+        `Session ${id} has unsupported format version ${String(parsed.version)}`,
       );
     }
     return {
-      ...(parsed as Session),
-      usage: parsed.usage ?? { promptTokens: 0, completionTokens: 0 },
+      ...(parsed as unknown as Session),
+      usage: normalizeUsage(parsed.usage),
     };
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw err;
   }
+}
+
+const ZERO = (): { promptTokens: number; completionTokens: number } => ({
+  promptTokens: 0,
+  completionTokens: 0,
+});
+
+function normalizeUsage(raw: unknown): SessionUsage {
+  if (!raw || typeof raw !== "object") {
+    return { last: ZERO(), total: ZERO() };
+  }
+  const u = raw as Record<string, unknown>;
+  // New nested shape: { last, total }
+  if ("last" in u && "total" in u) {
+    return u as unknown as SessionUsage;
+  }
+  // Legacy flat shape from previous version: { promptTokens, completionTokens }.
+  // Earlier code accumulated, so treat the legacy value as `total` (billing-style).
+  if (typeof u.promptTokens === "number" && typeof u.completionTokens === "number") {
+    return {
+      last: ZERO(),
+      total: { promptTokens: u.promptTokens, completionTokens: u.completionTokens },
+    };
+  }
+  return { last: ZERO(), total: ZERO() };
 }
 
 export async function deleteSession(id: string): Promise<boolean> {
