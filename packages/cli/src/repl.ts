@@ -278,9 +278,9 @@ async function runTurn(input: string, ctx: SessionContext): Promise<void> {
   let onFirstLine = false;
   let seenAnyContent = false;
 
-  // Per-turn token usage accumulator (sum across all LLM iterations in this turn).
-  let turnPromptTokens = 0;
-  let turnCompletionTokens = 0;
+  // Latest LLM iteration's usage. Each call's prompt_tokens already includes
+  // the full conversation history, so we replace rather than accumulate.
+  let latestUsage: { promptTokens: number; completionTokens: number } | undefined;
 
   const ensurePrefix = () => {
     if (!prefixPrinted) {
@@ -349,10 +349,7 @@ async function runTurn(input: string, ctx: SessionContext): Promise<void> {
       },
       onAssistantEnd: (_msg, meta) => {
         spinner.stop();
-        if (meta.usage) {
-          turnPromptTokens += meta.usage.promptTokens;
-          turnCompletionTokens += meta.usage.completionTokens;
-        }
+        if (meta.usage) latestUsage = meta.usage;
         if (currentLine.length > 0 || onFirstLine) flushCurrentLine(true);
         for (const r of renderers.values()) r.finishArgs();
       },
@@ -368,9 +365,8 @@ async function runTurn(input: string, ctx: SessionContext): Promise<void> {
         renderers.get(index)?.result(result);
       },
     });
-    if (ctx.current && (turnPromptTokens > 0 || turnCompletionTokens > 0)) {
-      ctx.current.usage.promptTokens += turnPromptTokens;
-      ctx.current.usage.completionTokens += turnCompletionTokens;
+    if (ctx.current && latestUsage) {
+      ctx.current.usage = latestUsage;
     }
     await persistAfterTurn(ctx);
   } catch (err) {
