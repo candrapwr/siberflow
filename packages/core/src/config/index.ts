@@ -74,5 +74,10 @@ function apiKeyEnvVar(provider: ProviderName): string {
   switch (provider) {
     case "deepseek":
       return "DEEPSEEK_API_KEY";
+    case "gemini":
+      return "GEMINI_API_KEY";
+    case "openai":
+    case "openai-responses":
+      return "OPENAI_API_KEY";
   }
 }

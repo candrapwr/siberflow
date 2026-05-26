@@ -1,9 +1,12 @@
 import { createInterface } from "node:readline/promises";
+import type { Interface as ReadlineInterface } from "node:readline/promises";
 import {
   Agent,
+  clearSessions,
   deleteSession,
   findByNameOrId,
   listSessions,
+  loadSession,
   newSessionId,
   saveSession,
   SESSION_FORMAT_VERSION,
@@ -13,6 +16,7 @@ import {
 import type { Provider } from "@siberflow/core";
 import { ui } from "./ui.js";
 import { MarkdownStreamer } from "./markdown.js";
+import { Spinner } from "./spinner.js";
 import { ToolCallRenderer } from "./tool-renderer.js";
 
 const VERSION = "0.1.0";
@@ -47,21 +51,26 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
     current: null,
   };
 
-  const resumed = await tryResumeLatest(ctx);
-
   console.log(
-    ui.banner({
+    ui.splashBanner({
       version: VERSION,
       provider: opts.provider.name,
       model: opts.model,
       projectDir: opts.projectDir,
-      session: resumed
-        ? { label: sessionLabel(resumed), messageCount: resumed.messages.length }
-        : null,
     }),
   );
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
+
+  const choice = await chooseSession(rl, ctx.projectDir);
+  if (!choice) {
+    rl.close();
+    return;
+  }
+  applyChoice(ctx, choice);
+  console.log();
+  console.log(ui.info(`  ${ui.helpLine()}`));
+  console.log();
 
   while (true) {
     let input: string;
@@ -73,7 +82,7 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
     if (!input) continue;
 
     if (input.startsWith("/")) {
-      const handled = await handleSlashCommand(input, ctx, opts.registry);
+      const handled = await handleSlashCommand(input, ctx, opts.registry, rl);
       if (handled === "exit") break;
       continue;
     }
@@ -97,16 +106,139 @@ function sessionLabel(s: Session | null): string {
   return s.name ?? s.id;
 }
 
-async function tryResumeLatest(ctx: SessionContext): Promise<Session | null> {
-  const summaries = await listSessions({ projectDir: ctx.projectDir });
-  const latest = summaries[0];
-  if (!latest) return null;
-  const { loadSession } = await import("@siberflow/core");
-  const full = await loadSession(latest.id);
-  if (!full) return null;
-  ctx.agent.loadHistory(full.messages);
-  ctx.current = full;
-  return full;
+type SessionChoice =
+  | { type: "loaded"; session: Session }
+  | { type: "new"; name: string | null };
+
+async function chooseSession(
+  rl: ReadlineInterface,
+  projectDir: string,
+): Promise<SessionChoice | null> {
+  const summaries = await listSessions({ projectDir });
+
+  console.log();
+  if (summaries.length === 0) {
+    console.log(ui.info("  belum ada sesi tersimpan untuk project ini."));
+    const name = await promptSessionName(rl);
+    if (name === null && summaries.length === 0) {
+      // null only via ctrl+c; treat as abort
+      return null;
+    }
+    return { type: "new", name };
+  }
+
+  console.log(ui.info("  Sesi yang tersedia:"));
+  const shown = summaries.slice(0, 10);
+  for (let i = 0; i < shown.length; i++) {
+    const s = shown[i]!;
+    const label = s.name ?? `(unnamed) ${s.id.slice(0, 19)}`;
+    console.log(
+      `   [${i + 1}] ${label}  ${ui.info(`${s.messageCount} msgs · ${formatRelative(s.updatedAt)}`)}`,
+    );
+  }
+  if (summaries.length > shown.length) {
+    console.log(
+      ui.info(
+        `   ... +${summaries.length - shown.length} sesi lain (ketik nama untuk pilih)`,
+      ),
+    );
+  }
+  console.log(`   [n] buat sesi baru`);
+  console.log();
+
+  while (true) {
+    let answer: string;
+    try {
+      answer = (
+        await rl.question(ui.info("  Pilihan (nomor/nama, n=new): "))
+      ).trim();
+    } catch {
+      return null;
+    }
+    if (answer === "") continue;
+
+    const lower = answer.toLowerCase();
+    if (lower === "n" || lower === "new") {
+      const name = await promptSessionName(rl);
+      return { type: "new", name };
+    }
+
+    const numeric = Number.parseInt(answer, 10);
+    if (
+      !Number.isNaN(numeric) &&
+      numeric >= 1 &&
+      numeric <= shown.length &&
+      String(numeric) === answer
+    ) {
+      const pick = shown[numeric - 1]!;
+      const session = await loadSession(pick.id);
+      if (session) return { type: "loaded", session };
+      console.log(ui.error(`gagal load session ${pick.id}`));
+      continue;
+    }
+
+    const byName = await findByNameOrId(answer, projectDir);
+    if (byName) return { type: "loaded", session: byName };
+
+    console.log(ui.error(`pilihan tidak valid: "${answer}"`));
+  }
+}
+
+async function promptSessionName(
+  rl: ReadlineInterface,
+): Promise<string | null> {
+  try {
+    const answer = (
+      await rl.question(
+        ui.info("  Nama sesi (Enter untuk tanpa nama): "),
+      )
+    ).trim();
+    return answer.length > 0 ? answer : null;
+  } catch {
+    return null;
+  }
+}
+
+function applyChoice(ctx: SessionContext, choice: SessionChoice): void {
+  if (choice.type === "loaded") {
+    ctx.agent.loadHistory(choice.session.messages);
+    ctx.current = choice.session;
+    console.log(
+      ui.info(
+        `  resumed: ${sessionLabel(choice.session)} (${choice.session.messages.length} msgs)`,
+      ),
+    );
+    return;
+  }
+  const id = newSessionId();
+  const now = new Date().toISOString();
+  ctx.current = {
+    version: SESSION_FORMAT_VERSION,
+    id,
+    name: choice.name,
+    projectDir: ctx.projectDir,
+    provider: ctx.provider,
+    model: ctx.model,
+    createdAt: now,
+    updatedAt: now,
+    messages: [...ctx.agent.history()],
+  };
+  console.log(ui.info(`  new session: ${sessionLabel(ctx.current)}`));
+}
+
+function formatRelative(iso: string): string {
+  const diff = Date.now() - Date.parse(iso);
+  if (Number.isNaN(diff) || diff < 0) return iso;
+  const sec = Math.floor(diff / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hour = Math.floor(min / 60);
+  if (hour < 24) return `${hour}h ago`;
+  const day = Math.floor(hour / 24);
+  if (day < 30) return `${day}d ago`;
+  const month = Math.floor(day / 30);
+  return `${month}mo ago`;
 }
 
 function buildSessionFromAgent(ctx: SessionContext, id: string): Session {
@@ -135,43 +267,88 @@ async function persistAfterTurn(ctx: SessionContext): Promise<void> {
 async function runTurn(input: string, ctx: SessionContext): Promise<void> {
   const renderers = new Map<number, ToolCallRenderer>();
   const md = new MarkdownStreamer();
+  const spinner = new Spinner();
+
+  // Track raw-stream state so each completed line can be erased and
+  // re-rendered with markdown formatting.
+  let currentLine = "";
   let prefixPrinted = false;
+  let onFirstLine = false;
+  let seenAnyContent = false;
 
   const ensurePrefix = () => {
     if (!prefixPrinted) {
       process.stdout.write(ui.assistantPrefix());
       prefixPrinted = true;
+      onFirstLine = true;
     }
   };
 
-  const flushMd = () => {
-    const rest = md.finish();
-    if (rest) {
-      ensurePrefix();
-      process.stdout.write(rest + "\n");
+  // "ai  › " = 6 visible chars (ANSI codes don't count toward width)
+  const PREFIX_VISIBLE_WIDTH = 6;
+
+  // Clear ALL rows occupied by the line we just streamed (handling terminal
+  // wrap) and re-emit it with markdown formatting.
+  const flushCurrentLine = (withNewline: boolean) => {
+    const hasContent = currentLine.length > 0;
+    if (!hasContent && !onFirstLine) {
+      if (withNewline) process.stdout.write("\n");
+      return;
     }
+    const termWidth = process.stdout.columns ?? 80;
+    const totalWidth =
+      currentLine.length + (onFirstLine ? PREFIX_VISIBLE_WIDTH : 0);
+    const rowsUsed = Math.max(
+      1,
+      Math.floor((totalWidth - 1) / termWidth) + 1,
+    );
+    if (rowsUsed > 1) {
+      process.stdout.write(`\x1b[${rowsUsed - 1}A`);
+    }
+    process.stdout.write("\r\x1b[0J");
+    if (onFirstLine) {
+      process.stdout.write(ui.assistantPrefix());
+      onFirstLine = false;
+    }
+    process.stdout.write(md.renderLine(currentLine));
+    if (withNewline) process.stdout.write("\n");
+    currentLine = "";
   };
 
   try {
     await ctx.agent.send(input, {
       onAssistantStart: () => {
+        currentLine = "";
         prefixPrinted = false;
+        onFirstLine = false;
+        seenAnyContent = false;
         md.reset();
         renderers.clear();
+        spinner.start();
       },
       onContent: (delta) => {
-        const formatted = md.feed(delta);
-        if (formatted) {
-          ensurePrefix();
-          process.stdout.write(formatted);
+        spinner.stop();
+        for (let i = 0; i < delta.length; i++) {
+          const ch = delta[i]!;
+          if (ch === "\n") {
+            if (!seenAnyContent) continue; // drop leading blank lines
+            flushCurrentLine(true);
+          } else {
+            seenAnyContent = true;
+            ensurePrefix();
+            currentLine += ch;
+            process.stdout.write(ch);
+          }
         }
       },
       onAssistantEnd: () => {
-        flushMd();
+        spinner.stop();
+        if (currentLine.length > 0 || onFirstLine) flushCurrentLine(true);
         for (const r of renderers.values()) r.finishArgs();
       },
       onToolCallStart: (index, name) => {
-        flushMd();
+        spinner.stop();
+        if (currentLine.length > 0 || onFirstLine) flushCurrentLine(true);
         renderers.set(index, new ToolCallRenderer(name));
       },
       onToolCallArgs: (index, delta) => {
@@ -183,7 +360,8 @@ async function runTurn(input: string, ctx: SessionContext): Promise<void> {
     });
     await persistAfterTurn(ctx);
   } catch (err) {
-    flushMd();
+    spinner.stop();
+    if (currentLine.length > 0 || onFirstLine) flushCurrentLine(true);
     console.log(ui.error((err as Error).message));
   }
 }
@@ -192,6 +370,7 @@ async function handleSlashCommand(
   input: string,
   ctx: SessionContext,
   registry: ToolRegistry,
+  rl: ReadlineInterface,
 ): Promise<"exit" | "ok"> {
   const [cmd, ...rest] = input.split(/\s+/);
   const arg = rest.join(" ").trim();
@@ -212,7 +391,8 @@ async function handleSlashCommand(
             "/load <name|id>  switch to a saved session",
             "/name <name>     rename the current session",
             "/save            force-save the current session",
-            "/delete <name>   delete a session",
+            "/delete <name>   delete a single session",
+            "/clear-all       delete ALL sessions in this project (asks to confirm)",
             "/exit, /quit     leave the REPL",
           ].join("\n"),
         ),
@@ -324,6 +504,37 @@ async function handleSlashCommand(
         ctx.current = null;
         console.log(ui.info("(current session deleted — now in a fresh unsaved session)"));
       }
+      return "ok";
+    }
+
+    case "/clear-all": {
+      const summaries = await listSessions({ projectDir: ctx.projectDir });
+      if (summaries.length === 0) {
+        console.log(ui.info("no sessions to clear for this project"));
+        return "ok";
+      }
+      let answer: string;
+      try {
+        answer = (
+          await rl.question(
+            ui.info(
+              `Delete all ${summaries.length} session(s) for this project? Type "yes" to confirm: `,
+            ),
+          )
+        ).trim();
+      } catch {
+        return "ok";
+      }
+      if (answer.toLowerCase() !== "yes") {
+        console.log(ui.info("cancelled"));
+        return "ok";
+      }
+      const removed = await clearSessions({ projectDir: ctx.projectDir });
+      ctx.agent.reset();
+      ctx.current = null;
+      console.log(
+        ui.info(`cleared ${removed} session(s); now in a fresh unsaved session`),
+      );
       return "ok";
     }
 
