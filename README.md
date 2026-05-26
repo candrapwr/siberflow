@@ -6,7 +6,8 @@ AI platform dengan dukungan multi-provider, tool calling streaming, sandbox file
 
 - `deepseek` (default) — `deepseek-chat`, `deepseek-reasoner`
 - `gemini` — `gemini-2.5-flash` (via endpoint OpenAI-compatible Google)
-- `openai` — `gpt-5.4-nano` (default; ganti via env kalau model lain)
+- `openai` — `gpt-5.4-nano` (pakai `/v1/chat/completions`)
+- `openai-responses` — `gpt-5.1-codex-mini` (pakai `/v1/responses`; untuk codex / o-series / gpt-5 yang tidak didukung chat completions)
 
 ## Struktur
 
