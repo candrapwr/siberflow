@@ -19,10 +19,12 @@ siberflow/
     │       │   └── agent.ts       # class Agent — streaming loop
     │       ├── providers/
     │       │   ├── base.ts        # interface Provider (chatStream only)
-    │       │   ├── openai-compatible.ts  # base class: SSE + tool delta accumulator
+    │       │   ├── sse.ts         # parseSSE() — shared SSE parser
+    │       │   ├── openai-compatible.ts  # base class untuk /chat/completions style
     │       │   ├── deepseek.ts    # extends OpenAICompatibleProvider
     │       │   ├── gemini.ts      # extends OpenAICompatibleProvider
-    │       │   ├── openai.ts      # extends OpenAICompatibleProvider
+    │       │   ├── openai.ts      # extends OpenAICompatibleProvider (/v1/chat/completions)
+    │       │   ├── openai-responses.ts   # standalone — OpenAI /v1/responses API
     │       │   └── registry.ts    # createProvider(name, config)
     │       ├── tools/
     │       │   ├── base.ts        # interface Tool, ToolContext { projectDir }
@@ -48,6 +50,7 @@ siberflow/
             ├── repl.ts            # session picker + main loop + slash commands
             ├── markdown.ts        # MarkdownStreamer (renderLine for live reformat)
             ├── tool-renderer.ts   # ToolCallRenderer (raw arg streaming)
+            ├── spinner.ts         # Spinner (loading animation, TTY-only)
             └── ui.ts              # ANSI colors + splashBanner + helpers
 ```
 
@@ -94,15 +97,28 @@ interface Provider {
 }
 ```
 
-Base class `OpenAICompatibleProvider` di [openai-compatible.ts](packages/core/src/providers/openai-compatible.ts) menangani:
+Ada dua keluarga provider:
 
+**1. OpenAI Chat Completions style** — [openai-compatible.ts](packages/core/src/providers/openai-compatible.ts) sebagai base. Cocok untuk endpoint `/chat/completions` dengan SSE events `data: {choices: [{delta: ...}]}`. Subclass: `DeepSeekProvider`, `GeminiProvider`, `OpenAIProvider` — masing-masing cuma override `name`, `defaultModel`, `defaultBaseUrl`.
+
+Base class menangani:
 1. Konversi `Message[]` → format OpenAI chat completions
 2. POST dengan `stream: true` + optional `stream_options.include_usage`
-3. SSE parser: `\n\n` delimiter, baca `data: {json}` per event
+3. SSE parser (dari [sse.ts](packages/core/src/providers/sse.ts))
 4. Akumulasi tool_call deltas di `Map<index, ToolCall>`
 5. Emit `StreamEvent` ke iterator
 
-DeepSeek / Gemini / OpenAI subclass-nya cuma override 3 string: `name`, `defaultModel`, `defaultBaseUrl`.
+**2. OpenAI Responses API** — [openai-responses.ts](packages/core/src/providers/openai-responses.ts) standalone, implement `Provider` langsung. Untuk model yang OpenAI tolak di `/chat/completions` (codex, sebagian o-series, gpt-5 tertentu). Perbedaan dari chat completions:
+
+- Endpoint `/v1/responses`
+- Request pakai `input` (array of items) bukan `messages`
+- Assistant + tool calls dipecah jadi `function_call` items + `function_call_output`
+- Tool definition flat (`{type, name, description, parameters}`) tanpa wrapper `function`
+- SSE events bertype `response.output_text.delta`, `response.output_item.added`, `response.function_call_arguments.delta`, `response.completed`
+
+Mapping ke `StreamEvent` di kode masing-masing provider — interface eksternal tetap sama.
+
+[sse.ts](packages/core/src/providers/sse.ts) berisi `parseSSE(body): AsyncIterable<unknown>` yang dipakai kedua keluarga.
 
 ### Tool interface
 
@@ -206,13 +222,13 @@ Semua via env. CLI loader (`packages/cli/src/env.ts`) walk-up dari cwd cari `.en
 
 | Variabel | Default | Keterangan |
 |---|---|---|
-| `SIBERFLOW_PROVIDER` | `deepseek` | `deepseek` / `gemini` / `openai` |
+| `SIBERFLOW_PROVIDER` | `deepseek` | `deepseek` / `gemini` / `openai` / `openai-responses` |
 | `SIBERFLOW_MODEL` | provider default | Override model string |
 | `SIBERFLOW_BASE_URL` | provider default | Override endpoint |
 | `SIBERFLOW_PROJECT_DIR` | `INIT_CWD` → `cwd()` | Sandbox root. Absolute / relative / `~/...`. Divalidasi exists. |
 | `DEEPSEEK_API_KEY` | — | wajib jika `provider=deepseek` |
 | `GEMINI_API_KEY` | — | wajib jika `provider=gemini` |
-| `OPENAI_API_KEY` | — | wajib jika `provider=openai` |
+| `OPENAI_API_KEY` | — | wajib jika `provider=openai` atau `openai-responses` |
 
 Mapping provider → env var nama API key di `config/index.ts` (`apiKeyEnvVar`). Saat tambah provider, tambah case di sana juga.
 
@@ -227,6 +243,17 @@ Mapping provider → env var nama API key di `config/index.ts` (`apiKeyEnvVar`).
 2. Tampilkan list nomor + `[n] buat baru`
 3. Loop sampai input valid: nomor (1-10), nama / id (via `findByNameOrId`), atau `n`/`new`/empty
 4. Kalau new: prompt nama (Enter = unnamed)
+
+### Loading spinner
+
+[spinner.ts](packages/cli/src/spinner.ts) → `Spinner`. Auto-disabled saat `process.stdout.isTTY` false (piped output).
+
+Lifecycle di [repl.ts](packages/cli/src/repl.ts) `runTurn()`:
+- `onAssistantStart` → `spinner.start()` (sembunyikan cursor, draw frame braille setiap 80ms)
+- `onContent` / `onToolCallStart` (token/tool call pertama) → `spinner.stop()` (clear line, kembalikan cursor)
+- `onAssistantEnd` / error → `spinner.stop()` defensif
+
+Spinner muncul antar iterasi juga (saat agent menunggu balasan setelah tool result).
 
 ### Streaming content + markdown
 
@@ -297,20 +324,24 @@ Mode dev (`tsx`) tidak perlu build core dulu.
 
 ### Provider baru
 
-1. Buat `packages/core/src/providers/<name>.ts`:
-   ```ts
-   import { OpenAICompatibleProvider } from "./openai-compatible.js";
-   export class FooProvider extends OpenAICompatibleProvider {
-     constructor(config) {
-       super(config, { name: "foo", defaultModel: "foo-1", defaultBaseUrl: "https://..." });
-     }
-   }
-   ```
-2. Tambah case di `providers/registry.ts` (ProviderName + switch).
-3. Tambah case di `config/index.ts` (`apiKeyEnvVar`).
-4. Tambah env var di `.env.example`.
+**Kalau provider pakai OpenAI chat completions wire format** (DeepSeek, OpenRouter, Groq, vLLM, dll):
 
-Provider dengan format wire berbeda (Anthropic Messages, dll) implement `Provider` interface langsung, jangan extend OpenAICompatibleProvider.
+```ts
+import { OpenAICompatibleProvider } from "./openai-compatible.js";
+export class FooProvider extends OpenAICompatibleProvider {
+  constructor(config) {
+    super(config, { name: "foo", defaultModel: "foo-1", defaultBaseUrl: "https://..." });
+  }
+}
+```
+
+**Kalau format berbeda** (Anthropic Messages, Gemini native, OpenAI Responses, dll): implement `Provider` interface langsung. Lihat [openai-responses.ts](packages/core/src/providers/openai-responses.ts) sebagai contoh — wajib map format wire ke `StreamEvent` internal. Reuse `parseSSE` dari [sse.ts](packages/core/src/providers/sse.ts).
+
+Setelah file provider dibuat:
+
+1. Tambah case di `providers/registry.ts` (ProviderName + switch).
+2. Tambah case di `config/index.ts` (`apiKeyEnvVar`).
+3. Tambah env var di `.env.example`.
 
 ### Tool baru
 
