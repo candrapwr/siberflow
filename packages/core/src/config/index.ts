@@ -1,5 +1,6 @@
 import { statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
+import type { ContextOptimizeConfig } from "../agent/optimize.js";
 import type { ProviderName } from "../providers/registry.js";
 
 export interface SiberflowConfig {
@@ -8,6 +9,7 @@ export interface SiberflowConfig {
   apiKey: string;
   baseUrl?: string;
   projectDir: string;
+  contextOptimize: ContextOptimizeConfig;
 }
 
 export function loadConfigFromEnv(
@@ -26,9 +28,14 @@ export function loadConfigFromEnv(
     provider,
     apiKey,
     projectDir: resolveProjectDir(env),
+    contextOptimize: resolveContextOptimize(env),
     ...(env.SIBERFLOW_MODEL ? { model: env.SIBERFLOW_MODEL } : {}),
     ...(env.SIBERFLOW_BASE_URL ? { baseUrl: env.SIBERFLOW_BASE_URL } : {}),
   };
+}
+
+function resolveContextOptimize(env: NodeJS.ProcessEnv): ContextOptimizeConfig {
+  return { enabled: env.SIBERFLOW_CONTEXT_OPTIMIZE === "true" };
 }
 
 function resolveProjectDir(env: NodeJS.ProcessEnv): string {

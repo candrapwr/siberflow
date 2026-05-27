@@ -8,8 +8,11 @@ import {
   listSessions,
   loadSession,
   newSessionId,
+  optimizeContext,
+  saveOptimizedView,
   saveSession,
   SESSION_FORMAT_VERSION,
+  type ContextOptimizeConfig,
   type Session,
   type ToolRegistry,
 } from "@siberflow/core";
@@ -32,6 +35,7 @@ export interface ReplOptions {
   registry: ToolRegistry;
   model: string;
   projectDir: string;
+  contextOptimize: ContextOptimizeConfig;
 }
 
 export async function runRepl(opts: ReplOptions): Promise<void> {
@@ -41,6 +45,7 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
     model: opts.model,
     systemPrompt: SYSTEM_PROMPT,
     projectDir: opts.projectDir,
+    contextOptimize: opts.contextOptimize,
   });
 
   const ctx: SessionContext = {
@@ -49,6 +54,8 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
     provider: opts.provider.name,
     model: opts.model,
     current: null,
+    contextOptimize: opts.contextOptimize,
+    optStats: { truncatedCalls: 0, bytesSaved: 0 },
   };
 
   console.log(
@@ -99,6 +106,9 @@ interface SessionContext {
   provider: string;
   model: string;
   current: Session | null;
+  contextOptimize: ContextOptimizeConfig;
+  /** Accumulated since this REPL process started (not persisted to session). */
+  optStats: { truncatedCalls: number; bytesSaved: number };
 }
 
 function sessionLabel(s: Session | null): string {
@@ -271,6 +281,14 @@ async function persistAfterTurn(ctx: SessionContext): Promise<void> {
   const session = buildSessionFromAgent(ctx, id);
   await saveSession(session);
   ctx.current = session;
+
+  if (ctx.contextOptimize.enabled) {
+    const { messages: optimized } = optimizeContext(
+      session.messages,
+      ctx.contextOptimize,
+    );
+    await saveOptimizedView(session, optimized);
+  }
 }
 
 async function runTurn(input: string, ctx: SessionContext): Promise<void> {
@@ -376,6 +394,10 @@ async function runTurn(input: string, ctx: SessionContext): Promise<void> {
       },
       onToolResult: (index, _name, result) => {
         renderers.get(index)?.result(result);
+      },
+      onContextOptimized: (stats) => {
+        ctx.optStats.truncatedCalls += 1;
+        ctx.optStats.bytesSaved += stats.bytesSaved;
       },
     });
     if (ctx.current && latestUsage) {
@@ -527,6 +549,12 @@ async function handleSlashCommand(
         `last call:     ${fmt(last.promptTokens)} prompt + ${fmt(last.completionTokens)} completion = ${fmt(last.promptTokens + last.completionTokens)} tokens (current context)`,
         `session total: ${fmt(total.promptTokens)} prompt + ${fmt(total.completionTokens)} completion = ${fmt(total.promptTokens + total.completionTokens)} tokens (billed)`,
       ];
+      if (ctx.contextOptimize.enabled) {
+        const kb = (ctx.optStats.bytesSaved / 1024).toFixed(1);
+        lines.push(
+          `optimization:  enabled — ${ctx.optStats.truncatedCalls} call(s) truncated, ~${kb} KB saved (this CLI run)`,
+        );
+      }
       console.log(ui.info(lines.join("\n")));
       return "ok";
     }

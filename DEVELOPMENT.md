@@ -16,7 +16,8 @@ siberflow/
     │   └── src/
     │       ├── agent/
     │       │   ├── types.ts       # Message, ToolCall, StreamEvent, FinishReason
-    │       │   └── agent.ts       # class Agent — streaming loop
+    │       │   ├── agent.ts       # class Agent — streaming loop
+    │       │   └── optimize.ts    # optimizeContext() — Layer 1 context compaction
     │       ├── providers/
     │       │   ├── base.ts        # interface Provider (chatStream only)
     │       │   ├── sse.ts         # parseSSE() — shared SSE parser
@@ -187,6 +188,48 @@ Method tambahan:
 
 `maxIterations` default 16, mencegah infinite tool loop.
 
+### Context optimization (Layer 1)
+
+[optimize.ts](packages/core/src/agent/optimize.ts) → `optimizeContext(messages, config)` mengembalikan array baru di mana **dua sumber inflasi** di-replace:
+
+1. **Tool result content** di pesan `role: "tool"`:
+   ```
+   [truncated tool result: read_file({"path":"src/foo.ts"}) — original 12,345 bytes]
+   ```
+
+2. **Tool call arguments** di `assistant.toolCalls[].arguments` (untuk `write_file`, `edit_file`, `exec`, dll yang punya payload besar):
+   ```
+   {"_truncated":"write_file args, 5,234 bytes"}
+   ```
+
+Truncation size-based: hanya replace kalau placeholder lebih pendek dari original. `read_file` args (`{"path":"foo.ts"}` ~17 byte) tidak disentuh; `write_file` content (KB++) langsung di-collapse. Tool baru otomatis tercover tanpa konfigurasi tambahan.
+
+Penting — **scope per user turn**:
+- Optimasi dijalankan **sekali di awal `agent.send()`** (setelah user message baru di-push). Pada titik itu, semua `tool` message di history adalah dari turn-turn sebelumnya.
+- Snapshot di-lock untuk seluruh tool loop dalam turn itu. Tool result yang muncul di iterasi-iterasi berikutnya (current turn) ditambahkan sebagai `extras` dan selalu utuh.
+- Request per iterasi = `optimizedBase + extras`.
+
+Alasannya: AI butuh tool result dari iterasi sebelumnya untuk merangkai task — kalau di-truncate mid-loop, AI bisa "lupa" hasil yang baru saja dia minta. Sebaliknya, tool result dari turn sebelumnya (task yang sudah selesai) jarang dibutuhkan detailnya — assistant text sudah summarize.
+
+Properti lain:
+- **Tidak mengubah `Agent.messages`** — hanya snapshot untuk request. Session JSON tetap menyimpan history lengkap.
+- Deterministik, tanpa LLM call.
+- Skip truncate kalau placeholder ≥ original size (small result).
+- Agent emit `onContextOptimized(stats)` saat ada truncation. REPL akumulasi ke `ctx.optStats`, tampil di `/usage`.
+- Config-nya cuma `{ enabled: boolean }` — tidak ada knob lain.
+
+**Monitoring file**: saat `SIBERFLOW_CONTEXT_OPTIMIZE=true`, tiap turn yang sukses juga menulis sibling file `~/.siberflow/sessions/<id>.optimized.json` di samping main session JSON. Bentuknya sama persis dengan `Session`, tapi `messages` di-replace dengan hasil `optimizeContext()` + metadata `_view: "optimized"` dan `_generatedAt`. Berguna untuk:
+
+- Diff: `diff <id>.json <id>.optimized.json` melihat persis apa yang di-truncate
+- Inspeksi: pastikan placeholder benar dan tool result yang seharusnya utuh memang utuh
+- Audit: berapa banyak konteks yang sebenarnya dilihat LLM vs yang tersimpan
+
+File `.optimized.json` di-ignore oleh `listSessions()` (cek extension `.optimized.json`) dan di-cascade hapus saat `deleteSession()` / `clearSessions()`. Tidak ada fungsi load untuknya — ini hanya untuk dibaca manual.
+
+Untuk multi-turn percakapan dengan banyak tool history, `prompt_tokens` turun karena tool result dari turn-turn lama di-truncate saat user mulai turn baru. Storage tetap utuh — matikan optimasi → history lengkap tersedia kembali.
+
+Bisa diperluas ke Layer 2 (LLM summary on threshold) di masa depan tanpa mengubah API ini.
+
 ### Session
 
 Storage: `~/.siberflow/sessions/<id>.json`, satu file per sesi.
@@ -206,10 +249,11 @@ interface Session {
 ```
 
 API di [session/store.ts](packages/core/src/session/store.ts):
-- `saveSession(s)`, `loadSession(id)`, `deleteSession(id)`
-- `listSessions({ projectDir? })` — sorted descending `updatedAt`
+- `saveSession(s)`, `loadSession(id)`, `deleteSession(id)` — `deleteSession` cascade ke `.optimized.json` kalau ada
+- `listSessions({ projectDir? })` — sorted descending `updatedAt`; skip file `.optimized.json`
 - `findByNameOrId(query, projectDir?)` — match prioritas: name exact → id exact → id prefix
 - `clearSessions({ projectDir? })` — batch delete; return count
+- `saveOptimizedView(session, optimizedMessages)` — tulis sibling `<id>.optimized.json` (lihat §Context optimization)
 - `newSessionId()` — timestamp + random 4-char suffix
 
 CLI memanggil `saveSession()` setelah tiap `agent.send()` sukses. Kalau turn throw, tidak disimpan (history mungkin inconsistent: assistant message ada tapi tool result belum).
@@ -226,6 +270,7 @@ Semua via env. CLI loader (`packages/cli/src/env.ts`) walk-up dari cwd cari `.en
 | `SIBERFLOW_MODEL` | provider default | Override model string |
 | `SIBERFLOW_BASE_URL` | provider default | Override endpoint |
 | `SIBERFLOW_PROJECT_DIR` | `INIT_CWD` → `cwd()` | Sandbox root. Absolute / relative / `~/...`. Divalidasi exists. |
+| `SIBERFLOW_CONTEXT_OPTIMIZE` | `false` | Aktifkan Layer 1 — truncate semua tool result dari turn sebelumnya |
 | `DEEPSEEK_API_KEY` | — | wajib jika `provider=deepseek` |
 | `GEMINI_API_KEY` | — | wajib jika `provider=gemini` |
 | `OPENAI_API_KEY` | — | wajib jika `provider=openai` atau `openai-responses` |
