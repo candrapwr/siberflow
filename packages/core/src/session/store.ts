@@ -7,6 +7,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
+import type { Message } from "../agent/types.js";
 import type { Session, SessionSummary, SessionUsage } from "./types.js";
 import { SESSION_FORMAT_VERSION } from "./types.js";
 
@@ -18,6 +19,10 @@ async function ensureDir(): Promise<void> {
 
 function pathFor(id: string): string {
   return join(SESSIONS_DIR, `${id}.json`);
+}
+
+function optimizedPathFor(id: string): string {
+  return join(SESSIONS_DIR, `${id}.optimized.json`);
 }
 
 export function newSessionId(): string {
@@ -76,13 +81,44 @@ function normalizeUsage(raw: unknown): SessionUsage {
 }
 
 export async function deleteSession(id: string): Promise<boolean> {
+  let removed = false;
   try {
     await unlink(pathFor(id));
-    return true;
+    removed = true;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw err;
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
   }
+  // Best-effort cleanup of the optimized view file (if any).
+  try {
+    await unlink(optimizedPathFor(id));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  return removed;
+}
+
+/**
+ * Write a sibling file `<id>.optimized.json` that mirrors the session JSON
+ * but with `messages` replaced by the optimized view. Intended for
+ * monitoring: lets you inspect what the LLM actually sees when context
+ * optimization is enabled. The original `<id>.json` is untouched.
+ */
+export async function saveOptimizedView(
+  session: Session,
+  optimizedMessages: Message[],
+): Promise<void> {
+  await ensureDir();
+  const view = {
+    ...session,
+    messages: optimizedMessages,
+    _view: "optimized" as const,
+    _generatedAt: new Date().toISOString(),
+  };
+  await writeFile(
+    optimizedPathFor(session.id),
+    JSON.stringify(view, null, 2),
+    "utf8",
+  );
 }
 
 /**
@@ -108,6 +144,7 @@ export async function listSessions(filter?: {
   const out: SessionSummary[] = [];
   for (const f of files) {
     if (!f.endsWith(".json")) continue;
+    if (f.endsWith(".optimized.json")) continue; // sibling monitoring file
     try {
       const raw = await readFile(join(SESSIONS_DIR, f), "utf8");
       const s = JSON.parse(raw) as Session;

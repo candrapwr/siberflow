@@ -25,7 +25,13 @@ async function main(): Promise<void> {
   const registry = createDefaultRegistry();
   const model = config.model ?? provider.defaultModel;
 
-  await runRepl({ provider, registry, model, projectDir: config.projectDir });
+  await runRepl({
+    provider,
+    registry,
+    model,
+    projectDir: config.projectDir,
+    contextOptimize: config.contextOptimize,
+  });
 }
 
 main().catch((err) => {
