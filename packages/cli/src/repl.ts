@@ -30,11 +30,18 @@ and shell execution (exec). All file operations are sandboxed to the project dir
 Use tools when the user asks you to read, modify, or inspect their files or system. \
 Keep responses concise.`;
 
-const TASKS_GUIDANCE = `\n\nWhen a request involves multiple steps (e.g. touching several files, \
-a sequence of actions, or anything you'd naturally break into a plan), call the \`task_update\` \
-tool FIRST to lay out the checklist, then update it as you go: mark exactly one item \
-"in_progress" while working on it and "completed" when done. Skip the checklist only for \
-genuinely trivial single-step requests. Always send the COMPLETE list on each task_update call.`;
+const TASKS_GUIDANCE = `\n\n# Task checklist — IMPORTANT, use it aggressively
+You have a \`task_update\` tool that shows the user a live checklist. Rules:
+- If a request needs 2 OR MORE distinct steps, your VERY FIRST action MUST be a \`task_update\` \
+call that lays out the entire plan up front (every item "pending", except set the first to "in_progress"). \
+Do this before any other tool call.
+- After EACH step finishes, immediately call \`task_update\` again with updated statuses: mark the \
+just-finished item "completed" and set the next one to "in_progress". Keep EXACTLY ONE item \
+"in_progress" at a time. Do not batch updates or wait until the end.
+- Always send the COMPLETE list on every call (full replacement), not just the changed item.
+- If you discover new sub-steps mid-task, add them to the list via task_update.
+- Only skip the checklist for a genuinely single-step request (e.g. "read foo.ts", "what does X do?").
+When in doubt, make a checklist — the user prefers seeing progress.`;
 
 export interface ReplOptions {
   provider: Provider;
