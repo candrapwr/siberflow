@@ -10,6 +10,7 @@ import type {
 } from "../agent/types.js";
 import type { Provider, ProviderConfig } from "./base.js";
 import { parseSSE } from "./sse.js";
+import { debug } from "../debug.js";
 
 interface OpenAIChatMessage {
   role: "system" | "user" | "assistant" | "tool";
@@ -91,6 +92,11 @@ export abstract class OpenAICompatibleProvider implements Provider {
       ...(req.maxTokens !== undefined ? { max_tokens: req.maxTokens } : {}),
     };
 
+    debug(
+      `→ ${this.name} POST /chat/completions model=${req.model}`,
+      `msgs=${req.messages.length} tools=${req.tools?.length ?? 0}`,
+    );
+
     const res = await fetch(`${this.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
@@ -100,8 +106,11 @@ export abstract class OpenAICompatibleProvider implements Provider {
       body: JSON.stringify(body),
     });
 
+    debug(`← ${this.name} HTTP ${res.status} ${res.statusText}`);
+
     if (!res.ok) {
       const text = await res.text();
+      debug(`✗ ${this.name} error body:`, text);
       throw new Error(`${this.name} API error ${res.status}: ${text}`);
     }
     if (!res.body) {
@@ -112,10 +121,13 @@ export abstract class OpenAICompatibleProvider implements Provider {
     const toolCallsByIndex = new Map<number, ToolCall>();
     const startedIndices = new Set<number>();
     let finishReason: FinishReason = "other";
+    let rawFinish: string | null = null;
     let usage: UsageStats | undefined;
+    let chunkCount = 0;
 
     for await (const chunk of parseSSE(res.body)) {
       const data = chunk as StreamChunk;
+      chunkCount++;
 
       if (data.usage) {
         usage = {
@@ -164,6 +176,7 @@ export abstract class OpenAICompatibleProvider implements Provider {
       }
 
       if (choice.finish_reason) {
+        rawFinish = choice.finish_reason;
         finishReason = normalizeFinishReason(choice.finish_reason);
       }
     }
@@ -171,6 +184,18 @@ export abstract class OpenAICompatibleProvider implements Provider {
     const toolCalls: ToolCall[] = [...toolCallsByIndex.entries()]
       .sort(([a], [b]) => a - b)
       .map(([, tc]) => tc);
+
+    debug(
+      `✓ ${this.name} stream done: chunks=${chunkCount}`,
+      `finish_reason(raw)=${rawFinish ?? "null"} → ${finishReason}`,
+      `contentLen=${content.length} toolCalls=${toolCalls.length}`,
+      usage ? `usage=${usage.promptTokens}/${usage.completionTokens}` : "usage=none",
+    );
+    if (rawFinish === null) {
+      debug(
+        `⚠ ${this.name} stream ended WITHOUT a finish_reason — likely a dropped/incomplete stream`,
+      );
+    }
 
     const message: AssistantMessage = {
       role: "assistant",
@@ -228,6 +253,13 @@ function toOpenAITool(t: ToolSchema) {
 }
 
 function normalizeFinishReason(r: string): FinishReason {
-  if (r === "stop" || r === "tool_calls" || r === "length") return r;
+  // Tolerate variants from non-OpenAI providers (Gemini, etc.):
+  // case differences and alternate names like MAX_TOKENS / FUNCTION_CALL.
+  const v = r.toLowerCase();
+  if (v === "stop" || v === "end_turn" || v === "complete") return "stop";
+  if (v === "tool_calls" || v === "function_call" || v === "tool_use")
+    return "tool_calls";
+  if (v === "length" || v === "max_tokens" || v === "model_length")
+    return "length";
   return "other";
 }

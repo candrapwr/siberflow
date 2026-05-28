@@ -1,4 +1,5 @@
 import type { Message, UsageStats } from "../agent/types.js";
+import type { Task } from "../agent/tasks.js";
 
 export const SESSION_FORMAT_VERSION = 1;
 
@@ -20,6 +21,8 @@ export interface Session {
   updatedAt: string;
   messages: Message[];
   usage: SessionUsage;
+  /** Task checklist (present when task tracking is/was used). */
+  tasks?: Task[];
 }
 
 export interface SessionSummary {

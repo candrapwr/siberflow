@@ -81,4 +81,13 @@ export const ui = {
   error(text: string): string {
     return `${RED}error:${RESET} ${text}`;
   },
+  taskList(tasks: ReadonlyArray<{ content: string; status: string }>): string {
+    if (tasks.length === 0) return `${DIM}  (no tasks)${RESET}`;
+    const lines = tasks.map((t) => {
+      if (t.status === "completed") return `   ${GREEN}✔${RESET} ${DIM}${t.content}${RESET}`;
+      if (t.status === "in_progress") return `   ${YELLOW}▶${RESET} ${BOLD}${t.content}${RESET}`;
+      return `   ${DIM}○ ${t.content}${RESET}`;
+    });
+    return `${DIM}  tasks:${RESET}\n${lines.join("\n")}`;
+  },
 };
