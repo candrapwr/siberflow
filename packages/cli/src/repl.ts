@@ -30,12 +30,21 @@ and shell execution (exec). All file operations are sandboxed to the project dir
 Use tools when the user asks you to read, modify, or inspect their files or system. \
 Keep responses concise.`;
 
+const TASKS_GUIDANCE = `\n\nWhen a request involves multiple steps (e.g. touching several files, \
+a sequence of actions, or anything you'd naturally break into a plan), call the \`task_update\` \
+tool FIRST to lay out the checklist, then update it as you go: mark exactly one item \
+"in_progress" while working on it and "completed" when done. Skip the checklist only for \
+genuinely trivial single-step requests. Always send the COMPLETE list on each task_update call.`;
+
 export interface ReplOptions {
   provider: Provider;
   registry: ToolRegistry;
   model: string;
   projectDir: string;
   contextOptimize: ContextOptimizeConfig;
+  tasksEnabled: boolean;
+  autoContinue: boolean;
+  maxIterations: number;
 }
 
 export async function runRepl(opts: ReplOptions): Promise<void> {
@@ -43,9 +52,12 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
     provider: opts.provider,
     registry: opts.registry,
     model: opts.model,
-    systemPrompt: SYSTEM_PROMPT,
+    systemPrompt: opts.tasksEnabled ? SYSTEM_PROMPT + TASKS_GUIDANCE : SYSTEM_PROMPT,
     projectDir: opts.projectDir,
     contextOptimize: opts.contextOptimize,
+    tasksEnabled: opts.tasksEnabled,
+    autoContinue: opts.autoContinue,
+    maxIterations: opts.maxIterations,
   });
 
   const ctx: SessionContext = {
@@ -55,6 +67,7 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
     model: opts.model,
     current: null,
     contextOptimize: opts.contextOptimize,
+    tasksEnabled: opts.tasksEnabled,
     optStats: { collapsedTurns: 0, bytesSaved: 0 },
   };
 
@@ -107,6 +120,7 @@ interface SessionContext {
   model: string;
   current: Session | null;
   contextOptimize: ContextOptimizeConfig;
+  tasksEnabled: boolean;
   /** Accumulated since this REPL process started (not persisted to session). */
   optStats: { collapsedTurns: number; bytesSaved: number };
 }
@@ -212,12 +226,18 @@ async function promptSessionName(
 function applyChoice(ctx: SessionContext, choice: SessionChoice): void {
   if (choice.type === "loaded") {
     ctx.agent.loadHistory(choice.session.messages);
+    if (ctx.tasksEnabled && choice.session.tasks?.length) {
+      ctx.agent.loadTasks(choice.session.tasks);
+    }
     ctx.current = choice.session;
     console.log(
       ui.info(
         `  resumed: ${sessionLabel(choice.session)} (${choice.session.messages.length} msgs)`,
       ),
     );
+    if (ctx.tasksEnabled && choice.session.tasks?.length) {
+      console.log(ui.taskList(choice.session.tasks));
+    }
     return;
   }
   const id = newSessionId();
@@ -273,6 +293,7 @@ function buildSessionFromAgent(ctx: SessionContext, id: string): Session {
     updatedAt: now,
     messages: [...ctx.agent.history()],
     usage: existing?.usage ?? emptyUsage(),
+    ...(ctx.tasksEnabled ? { tasks: [...ctx.agent.getTasks()] } : {}),
   };
 }
 
@@ -398,6 +419,18 @@ async function runTurn(input: string, ctx: SessionContext): Promise<void> {
       onContextOptimized: (stats) => {
         ctx.optStats.collapsedTurns += 1;
         ctx.optStats.bytesSaved += stats.bytesSaved;
+      },
+      onTasksUpdated: (tasks) => {
+        process.stdout.write(ui.taskList(tasks) + "\n");
+      },
+      onMaxIterations: (limit) => {
+        process.stdout.write(
+          "\n" +
+            ui.info(
+              `reached the ${limit}-iteration limit — task may be incomplete. Type "lanjutkan" to continue (set SIBERFLOW_MAX_ITERATIONS to raise the cap).`,
+            ) +
+            "\n",
+        );
       },
     });
     if (ctx.current && latestUsage) {

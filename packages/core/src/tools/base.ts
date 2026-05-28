@@ -1,8 +1,11 @@
 import type { ToolSchema } from "../agent/types.js";
+import type { TaskStore } from "../agent/tasks.js";
 
 export interface ToolContext {
   /** Sandbox root — all file operations must resolve inside this directory. */
   projectDir: string;
+  /** Present when task tracking is enabled; used by the task_update tool. */
+  taskStore?: TaskStore;
 }
 
 export interface Tool {

@@ -17,7 +17,8 @@ siberflow/
     │       ├── agent/
     │       │   ├── types.ts       # Message, ToolCall, StreamEvent, FinishReason
     │       │   ├── agent.ts       # class Agent — streaming loop
-    │       │   └── optimize.ts    # optimizeContext() — Layer 1 context compaction
+    │       │   ├── optimize.ts    # optimizeContext() — Layer 1 context compaction
+    │       │   └── tasks.ts       # Task, TaskStore, renderTaskList
     │       ├── providers/
     │       │   ├── base.ts        # interface Provider (chatStream only)
     │       │   ├── sse.ts         # parseSSE() — shared SSE parser
@@ -37,7 +38,10 @@ siberflow/
     │       │   ├── cli/
     │       │   │   ├── exec.ts    # shell exec, cwd=projectDir
     │       │   │   └── index.ts
-    │       │   └── index.ts       # createDefaultRegistry()
+    │       │   ├── task/
+    │       │   │   ├── update.ts  # task_update tool (opt-in via SIBERFLOW_TASKS)
+    │       │   │   └── index.ts
+    │       │   └── index.ts       # createDefaultRegistry({ tasks? })
     │       ├── session/
     │       │   ├── types.ts       # Session, SessionSummary, SESSION_FORMAT_VERSION
     │       │   └── store.ts       # save/load/list/delete/clear/findByNameOrId
@@ -186,7 +190,22 @@ Method tambahan:
 - `reset()` — hapus history tapi pertahankan system prompt
 - `history()` — read-only akses
 
-`maxIterations` default 16, mencegah infinite tool loop.
+`maxIterations` default 50 (via `SIBERFLOW_MAX_ITERATIONS`), mencegah infinite tool loop. Saat cap tercapai tanpa jawaban final, emit `onMaxIterations(limit)` → CLI tampilkan notice "ketik lanjutkan". Dengan task checklist aktif, melanjutkan akan resume dari item pending (state ter-reinject).
+
+### Auto-continue (output kepotong)
+
+Default ON (`SIBERFLOW_AUTO_CONTINUE`, set `false` untuk matikan). Saat satu LLM call selesai dengan `finishReason="length"` (output kena `max_output_tokens`) dan **tanpa** tool call, Agent otomatis menyambung:
+
+1. Bangun request ephemeral: `requestMessages + assistant(partial) + user(CONTINUE_NUDGE)`
+2. Stream lanjutan, gabungkan content ke assistant yang sama
+3. Ulangi sampai `finishReason !== "length"` atau cap `MAX_AUTO_CONTINUES` (4)
+
+Penting:
+- Request continuation **ephemeral** — synthetic user nudge TIDAK masuk history. Hanya **satu** assistant message hasil merge yang disimpan.
+- Streaming tetap mengalir mulus ke user (onContent dari tiap segmen).
+- Logika di-encapsulate di `runStream()` (konsumsi satu chatStream) + loop continuation di `send()`.
+
+Ini mengatasi respons panjang yang terpotong di tengah kalimat. Untuk masalah context-window overflow (beda dari output-length), lihat catatan di akhir bagian Context optimization.
 
 ### Context optimization (Layer 1)
 
@@ -229,6 +248,25 @@ Untuk multi-turn percakapan dengan banyak tool history, `prompt_tokens` turun ka
 
 Bisa diperluas ke Layer 2 (LLM summary on threshold) di masa depan tanpa mengubah API ini.
 
+### Task checklist (opt-in)
+
+Aktif via `SIBERFLOW_TASKS=true`. Konsep: checklist sebagai **managed state**, bukan chat history — supaya tahan terhadap context optimization (yang membuang tool history lama).
+
+Komponen:
+- [tasks.ts](packages/core/src/agent/tasks.ts) — `Task { content, status }`, `TaskStore` (in-memory holder), `renderTaskList()`
+- [tools/task/update.ts](packages/core/src/tools/task/update.ts) — tool `task_update`: model kirim **list lengkap** (full replacement) tiap update. Hanya ter-register kalau `createDefaultRegistry({ tasks: true })`.
+- `ToolContext.taskStore` — Agent menaruh store-nya di sini supaya tool bisa mutasi.
+
+Mekanisme di Agent:
+1. Agent punya satu `TaskStore`. `task_update` mengisinya via `ctx.taskStore`.
+2. **Re-injeksi tiap iterasi**: `withTasks()` menambahkan checklist ke leading system message setiap LLM call. Jadi model selalu lihat state authoritative — baik setelah update mid-turn maupun lintas-turn (tidak mengandalkan chat history yang bisa di-optimize).
+3. Setelah `task_update` dipanggil, emit `onTasksUpdated(tasks)` → CLI render checklist.
+4. Persistensi: `Session.tasks` disimpan di JSON; saat `/load`, `agent.loadTasks()` me-restore.
+
+Kenapa managed state, bukan tool result biasa? Kalau checklist cuma jadi tool result, dia ikut terbuang saat context optimize membersihkan turn lama. Dengan re-injeksi dari store, checklist selalu fresh dan utuh berapapun panjang percakapan.
+
+CLI render (`ui.taskList`): `✔` completed (hijau), `▶` in_progress (kuning bold), `○` pending (dim).
+
 ### Session
 
 Storage: `~/.siberflow/sessions/<id>.json`, satu file per sesi.
@@ -270,6 +308,10 @@ Semua via env. CLI loader (`packages/cli/src/env.ts`) walk-up dari cwd cari `.en
 | `SIBERFLOW_BASE_URL` | provider default | Override endpoint |
 | `SIBERFLOW_PROJECT_DIR` | `INIT_CWD` → `cwd()` | Sandbox root. Absolute / relative / `~/...`. Divalidasi exists. |
 | `SIBERFLOW_CONTEXT_OPTIMIZE` | `false` | Aktifkan Layer 1 — buang tool call & result dari turn sebelumnya, sisakan teks final assistant |
+| `SIBERFLOW_TASKS` | `false` | Aktifkan task checklist (`task_update` tool + injeksi state tiap turn) |
+| `SIBERFLOW_AUTO_CONTINUE` | `true` | Sambung otomatis respons yang kepotong limit output token (set `false` untuk matikan) |
+| `SIBERFLOW_DEBUG` | `false` | Tracing verbose ke stderr (HTTP status, raw finish_reason, usage, error, stream lifecycle) |
+| `SIBERFLOW_MAX_ITERATIONS` | `50` | Batas tool-calling iterasi per turn. Naikkan untuk task besar (scaffolding modul, dll) |
 | `DEEPSEEK_API_KEY` | — | wajib jika `provider=deepseek` |
 | `GEMINI_API_KEY` | — | wajib jika `provider=gemini` |
 | `OPENAI_API_KEY` | — | wajib jika `provider=openai` atau `openai-responses` |

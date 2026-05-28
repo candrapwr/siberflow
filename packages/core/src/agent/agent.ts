@@ -7,6 +7,8 @@ import {
   type ContextOptimizeConfig,
   type OptimizationStats,
 } from "./optimize.js";
+import { TaskStore, renderTaskList, type Task } from "./tasks.js";
+import { debug } from "../debug.js";
 import type {
   AssistantMessage,
   FinishReason,
@@ -14,6 +16,10 @@ import type {
   ToolResultMessage,
   UsageStats,
 } from "./types.js";
+
+const MAX_AUTO_CONTINUES = 4;
+const CONTINUE_NUDGE =
+  "Your previous message was cut off by the output length limit. Continue from exactly where you stopped — do not repeat anything you already wrote, and do not add a preamble.";
 
 export interface AgentOptions {
   provider: Provider;
@@ -25,6 +31,10 @@ export interface AgentOptions {
   projectDir?: string;
   /** Optional context optimization (default: disabled). */
   contextOptimize?: ContextOptimizeConfig;
+  /** Enable task checklist injection (the task_update tool must also be registered). */
+  tasksEnabled?: boolean;
+  /** Auto-continue responses cut off by max output tokens (default: true). */
+  autoContinue?: boolean;
 }
 
 export interface AgentEvents {
@@ -39,6 +49,10 @@ export interface AgentEvents {
   onToolResult?: (index: number, name: string, result: string) => void;
   /** Fires per LLM call when context optimization truncates at least one tool result. */
   onContextOptimized?: (stats: OptimizationStats) => void;
+  /** Fires after the task list changes (task_update tool called). */
+  onTasksUpdated?: (tasks: readonly Task[]) => void;
+  /** Fires when the turn hit the maxIterations cap without a final answer. */
+  onMaxIterations?: (limit: number) => void;
 }
 
 export class Agent {
@@ -48,6 +62,9 @@ export class Agent {
   private readonly maxIterations: number;
   private readonly ctx: ToolContext;
   private readonly contextOpt: ContextOptimizeConfig;
+  private readonly tasksEnabled: boolean;
+  private readonly autoContinue: boolean;
+  private readonly taskStore = new TaskStore();
   private readonly messages: Message[] = [];
 
   constructor(opts: AgentOptions) {
@@ -55,12 +72,26 @@ export class Agent {
     this.registry = opts.registry;
     this.model = opts.model ?? opts.provider.defaultModel;
     this.maxIterations = opts.maxIterations ?? 16;
-    this.ctx = { projectDir: opts.projectDir ?? process.cwd() };
     this.contextOpt = opts.contextOptimize ?? DEFAULT_OPTIMIZE_CONFIG;
+    this.tasksEnabled = opts.tasksEnabled ?? false;
+    this.autoContinue = opts.autoContinue ?? true;
+    this.ctx = {
+      projectDir: opts.projectDir ?? process.cwd(),
+      ...(this.tasksEnabled ? { taskStore: this.taskStore } : {}),
+    };
 
     if (opts.systemPrompt) {
       this.messages.push({ role: "system", content: opts.systemPrompt });
     }
+  }
+
+  getTasks(): readonly Task[] {
+    return this.taskStore.get();
+  }
+
+  /** Seed the task list (e.g. when restoring a saved session). */
+  loadTasks(tasks: readonly Task[]): void {
+    this.taskStore.set([...tasks]);
   }
 
   history(): readonly Message[] {
@@ -101,41 +132,51 @@ export class Agent {
     for (let i = 0; i < this.maxIterations; i++) {
       events.onAssistantStart?.();
 
-      let assistant: AssistantMessage | null = null;
-      let finishReason: FinishReason = "other";
-      let usage: UsageStats | undefined;
-
       // Per-iteration request = locked snapshot + anything appended during
       // this turn (current-turn assistant messages and tool results).
       const extras = this.messages.slice(snapshotEndIndex);
-      const requestMessages =
+      const base =
         extras.length === 0 ? optimizedBase : [...optimizedBase, ...extras];
+      // Re-inject current task list each iteration so the model always sees
+      // authoritative state (survives context optimization, reflects updates
+      // the model just made via task_update mid-turn).
+      const requestMessages = this.withTasks(base);
 
-      for await (const ev of this.provider.chatStream({
-        model: this.model,
-        messages: requestMessages,
-        tools: toolSchemas,
-      })) {
-        switch (ev.type) {
-          case "content":
-            events.onContent?.(ev.delta);
-            break;
-          case "tool_call_start":
-            events.onToolCallStart?.(ev.index, ev.name);
-            break;
-          case "tool_call_args":
-            events.onToolCallArgs?.(ev.index, ev.delta);
-            break;
-          case "done":
-            assistant = ev.message;
-            finishReason = ev.finishReason;
-            usage = ev.usage;
-            break;
-        }
-      }
+      let { assistant, finishReason, usage } = await this.runStream(
+        requestMessages,
+        toolSchemas,
+        events,
+      );
 
-      if (!assistant) {
-        throw new Error("Provider stream ended without a final message");
+      // Auto-continue a text response that was cut off by max output tokens.
+      // The continuation request is ephemeral (partial + nudge); only the
+      // merged assistant message is kept in history.
+      let continues = 0;
+      while (
+        this.autoContinue &&
+        finishReason === "length" &&
+        !assistant.toolCalls?.length &&
+        continues < MAX_AUTO_CONTINUES
+      ) {
+        continues++;
+        debug(
+          `↻ auto-continue ${continues}/${MAX_AUTO_CONTINUES} (output cut off at length)`,
+        );
+        const contMessages: Message[] = [
+          ...requestMessages,
+          { role: "assistant", content: assistant.content ?? "" },
+          { role: "user", content: CONTINUE_NUDGE },
+        ];
+        const cont = await this.runStream(contMessages, toolSchemas, events);
+        assistant = {
+          role: "assistant",
+          content: (assistant.content ?? "") + (cont.assistant.content ?? ""),
+          ...(cont.assistant.toolCalls?.length
+            ? { toolCalls: cont.assistant.toolCalls }
+            : {}),
+        };
+        finishReason = cont.finishReason;
+        usage = cont.usage;
       }
 
       this.messages.push(assistant);
@@ -143,6 +184,10 @@ export class Agent {
         finishReason,
         ...(usage ? { usage } : {}),
       });
+      debug(
+        `iteration ${i}: finishReason=${finishReason}`,
+        `toolCalls=${assistant.toolCalls?.length ?? 0} contentLen=${assistant.content?.length ?? 0}`,
+      );
 
       if (finishReason !== "tool_calls" || !assistant.toolCalls?.length) {
         return assistant.content ?? "";
@@ -156,6 +201,9 @@ export class Agent {
           this.ctx,
         );
         events.onToolResult?.(idx, call.name, result);
+        if (this.tasksEnabled && call.name === "task_update") {
+          events.onTasksUpdated?.(this.taskStore.get());
+        }
         const toolMsg: ToolResultMessage = {
           role: "tool",
           toolCallId: call.id,
@@ -166,6 +214,68 @@ export class Agent {
       }
     }
 
+    debug(`✗ hit maxIterations cap (${this.maxIterations}) without final answer`);
+    events.onMaxIterations?.(this.maxIterations);
     return `(stopped after ${this.maxIterations} iterations without final answer)`;
+  }
+
+  /** Consume one chatStream call, forwarding events, returning the result. */
+  private async runStream(
+    messages: Message[],
+    toolSchemas: ReturnType<typeof toSchema>[],
+    events: AgentEvents,
+  ): Promise<{
+    assistant: AssistantMessage;
+    finishReason: FinishReason;
+    usage?: UsageStats;
+  }> {
+    let assistant: AssistantMessage | null = null;
+    let finishReason: FinishReason = "other";
+    let usage: UsageStats | undefined;
+
+    for await (const ev of this.provider.chatStream({
+      model: this.model,
+      messages,
+      tools: toolSchemas,
+    })) {
+      switch (ev.type) {
+        case "content":
+          events.onContent?.(ev.delta);
+          break;
+        case "tool_call_start":
+          events.onToolCallStart?.(ev.index, ev.name);
+          break;
+        case "tool_call_args":
+          events.onToolCallArgs?.(ev.index, ev.delta);
+          break;
+        case "done":
+          assistant = ev.message;
+          finishReason = ev.finishReason;
+          usage = ev.usage;
+          break;
+      }
+    }
+
+    if (!assistant) {
+      throw new Error("Provider stream ended without a final message");
+    }
+    return { assistant, finishReason, ...(usage ? { usage } : {}) };
+  }
+
+  /**
+   * Append the current task checklist to the leading system message so the
+   * model always sees authoritative task state. No-op when tasks are
+   * disabled or the list is empty.
+   */
+  private withTasks(messages: Message[]): Message[] {
+    if (!this.tasksEnabled || this.taskStore.size === 0) return messages;
+    const block = `\n\n# Active task list (maintain via task_update)\n${renderTaskList(this.taskStore.get())}`;
+    const result = [...messages];
+    if (result[0]?.role === "system") {
+      result[0] = { role: "system", content: result[0].content + block };
+    } else {
+      result.unshift({ role: "system", content: block.trimStart() });
+    }
+    return result;
   }
 }

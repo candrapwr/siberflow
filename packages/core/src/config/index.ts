@@ -10,6 +10,9 @@ export interface SiberflowConfig {
   baseUrl?: string;
   projectDir: string;
   contextOptimize: ContextOptimizeConfig;
+  tasksEnabled: boolean;
+  autoContinue: boolean;
+  maxIterations: number;
 }
 
 export function loadConfigFromEnv(
@@ -29,6 +32,9 @@ export function loadConfigFromEnv(
     apiKey,
     projectDir: resolveProjectDir(env),
     contextOptimize: resolveContextOptimize(env),
+    tasksEnabled: env.SIBERFLOW_TASKS === "true",
+    autoContinue: env.SIBERFLOW_AUTO_CONTINUE !== "false",
+    maxIterations: resolveMaxIterations(env),
     ...(env.SIBERFLOW_MODEL ? { model: env.SIBERFLOW_MODEL } : {}),
     ...(env.SIBERFLOW_BASE_URL ? { baseUrl: env.SIBERFLOW_BASE_URL } : {}),
   };
@@ -36,6 +42,12 @@ export function loadConfigFromEnv(
 
 function resolveContextOptimize(env: NodeJS.ProcessEnv): ContextOptimizeConfig {
   return { enabled: env.SIBERFLOW_CONTEXT_OPTIMIZE === "true" };
+}
+
+function resolveMaxIterations(env: NodeJS.ProcessEnv): number {
+  const raw = env.SIBERFLOW_MAX_ITERATIONS;
+  const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 50;
 }
 
 function resolveProjectDir(env: NodeJS.ProcessEnv): string {

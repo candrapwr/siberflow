@@ -22,7 +22,7 @@ async function main(): Promise<void> {
     apiKey: config.apiKey,
     ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
   });
-  const registry = createDefaultRegistry();
+  const registry = createDefaultRegistry({ tasks: config.tasksEnabled });
   const model = config.model ?? provider.defaultModel;
 
   await runRepl({
@@ -31,6 +31,9 @@ async function main(): Promise<void> {
     model,
     projectDir: config.projectDir,
     contextOptimize: config.contextOptimize,
+    tasksEnabled: config.tasksEnabled,
+    autoContinue: config.autoContinue,
+    maxIterations: config.maxIterations,
   });
 }
 

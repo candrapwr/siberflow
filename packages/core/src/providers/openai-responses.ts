@@ -10,6 +10,7 @@ import type {
 } from "../agent/types.js";
 import type { Provider, ProviderConfig } from "./base.js";
 import { parseSSE } from "./sse.js";
+import { debug } from "../debug.js";
 
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 
@@ -54,6 +55,11 @@ export class OpenAIResponsesProvider implements Provider {
       ...(req.maxTokens !== undefined ? { max_output_tokens: req.maxTokens } : {}),
     };
 
+    debug(
+      `→ openai-responses POST /responses model=${req.model}`,
+      `input=${input.length} tools=${req.tools?.length ?? 0}`,
+    );
+
     const res = await fetch(`${this.baseUrl}/responses`, {
       method: "POST",
       headers: {
@@ -63,8 +69,11 @@ export class OpenAIResponsesProvider implements Provider {
       body: JSON.stringify(body),
     });
 
+    debug(`← openai-responses HTTP ${res.status} ${res.statusText}`);
+
     if (!res.ok) {
       const text = await res.text();
+      debug(`✗ openai-responses error body:`, text);
       throw new Error(`openai-responses API error ${res.status}: ${text}`);
     }
     if (!res.body) {
@@ -164,6 +173,12 @@ export class OpenAIResponsesProvider implements Provider {
     const toolCalls: ToolCall[] = [...callsByItemId.values()]
       .sort((a, b) => a.index - b.index)
       .map((p) => ({ id: p.callId, name: p.name, arguments: p.arguments }));
+
+    debug(
+      `✓ openai-responses stream done: finishReason=${finishReason}`,
+      `contentLen=${content.length} toolCalls=${toolCalls.length}`,
+      usage ? `usage=${usage.promptTokens}/${usage.completionTokens}` : "usage=none",
+    );
 
     const message: AssistantMessage = {
       role: "assistant",
