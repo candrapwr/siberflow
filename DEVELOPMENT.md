@@ -190,19 +190,19 @@ Method tambahan:
 
 ### Context optimization (Layer 1)
 
-[optimize.ts](packages/core/src/agent/optimize.ts) → `optimizeContext(messages, config)` mengembalikan array baru di mana **dua sumber inflasi** di-replace:
+[optimize.ts](packages/core/src/agent/optimize.ts) → `optimizeContext(messages, config)` membuang seluruh jejak tool dari turn sebelumnya, menyisakan hanya **teks final assistant per turn**. Returns array baru; input tidak di-mutasi.
 
-1. **Tool result content** di pesan `role: "tool"`:
-   ```
-   [truncated tool result: read_file({"path":"src/foo.ts"}) — original 12,345 bytes]
-   ```
+Dibuang:
+- Setiap `tool` result message
+- Setiap assistant message yang punya `tool_calls` (pesan intermediate "let me check X" + tool call)
 
-2. **Tool call arguments** di `assistant.toolCalls[].arguments` (untuk `write_file`, `edit_file`, `exec`, dll yang punya payload besar):
-   ```
-   {"_truncated":"write_file args, 5,234 bytes"}
-   ```
+Disisakan: `system`, `user`, dan assistant content-only (jawaban final tiap turn).
 
-Truncation size-based: hanya replace kalau placeholder lebih pendek dari original. `read_file` args (`{"path":"foo.ts"}` ~17 byte) tidak disentuh; `write_file` content (KB++) langsung di-collapse. Tool baru otomatis tercover tanpa konfigurasi tambahan.
+**Tanpa breadcrumb.** Versi awal sempat menaruh note `[called read_file(...) — omitted]`, tapi ternyata bikin model bingung dan **mengulang** tool call. Jadi jejak tool dihapus total — teks final assistant ("Selesai, sudah saya tulis ulang ke out.ts") yang membawa konteks ke depan.
+
+Contoh nyata: 12 message → 6 message, history jadi alternasi bersih `system → user → assistant → user → ...`.
+
+**Merge defensif**: kalau suatu turn tidak menghasilkan teks final (mis. maxIterations habis), bisa muncul dua message role sama beruntun. Pass terakhir meng-merge consecutive `user`/`assistant` jadi satu, supaya request tetap valid untuk API yang strict.
 
 Penting — **scope per user turn**:
 - Optimasi dijalankan **sekali di awal `agent.send()`** (setelah user message baru di-push). Pada titik itu, semua `tool` message di history adalah dari turn-turn sebelumnya.
@@ -214,19 +214,18 @@ Alasannya: AI butuh tool result dari iterasi sebelumnya untuk merangkai task —
 Properti lain:
 - **Tidak mengubah `Agent.messages`** — hanya snapshot untuk request. Session JSON tetap menyimpan history lengkap.
 - Deterministik, tanpa LLM call.
-- Skip truncate kalau placeholder ≥ original size (small result).
-- Agent emit `onContextOptimized(stats)` saat ada truncation. REPL akumulasi ke `ctx.optStats`, tampil di `/usage`.
+- Agent emit `onContextOptimized(stats)` saat ada collapse. `stats = { collapsedCount, bytesSaved }`. REPL akumulasi ke `ctx.optStats`, tampil di `/usage`.
 - Config-nya cuma `{ enabled: boolean }` — tidak ada knob lain.
 
 **Monitoring file**: saat `SIBERFLOW_CONTEXT_OPTIMIZE=true`, tiap turn yang sukses juga menulis sibling file `~/.siberflow/sessions/<id>.optimized.json` di samping main session JSON. Bentuknya sama persis dengan `Session`, tapi `messages` di-replace dengan hasil `optimizeContext()` + metadata `_view: "optimized"` dan `_generatedAt`. Berguna untuk:
 
-- Diff: `diff <id>.json <id>.optimized.json` melihat persis apa yang di-truncate
-- Inspeksi: pastikan placeholder benar dan tool result yang seharusnya utuh memang utuh
+- Diff: `diff <id>.json <id>.optimized.json` melihat persis apa yang dibuang
+- Inspeksi: pastikan tool call/result turn lama terbuang dan current-turn tetap utuh
 - Audit: berapa banyak konteks yang sebenarnya dilihat LLM vs yang tersimpan
 
 File `.optimized.json` di-ignore oleh `listSessions()` (cek extension `.optimized.json`) dan di-cascade hapus saat `deleteSession()` / `clearSessions()`. Tidak ada fungsi load untuknya — ini hanya untuk dibaca manual.
 
-Untuk multi-turn percakapan dengan banyak tool history, `prompt_tokens` turun karena tool result dari turn-turn lama di-truncate saat user mulai turn baru. Storage tetap utuh — matikan optimasi → history lengkap tersedia kembali.
+Untuk multi-turn percakapan dengan banyak tool history, `prompt_tokens` turun karena tool call & result dari turn-turn lama dibuang saat user mulai turn baru. Storage tetap utuh — matikan optimasi → history lengkap tersedia kembali.
 
 Bisa diperluas ke Layer 2 (LLM summary on threshold) di masa depan tanpa mengubah API ini.
 
@@ -270,7 +269,7 @@ Semua via env. CLI loader (`packages/cli/src/env.ts`) walk-up dari cwd cari `.en
 | `SIBERFLOW_MODEL` | provider default | Override model string |
 | `SIBERFLOW_BASE_URL` | provider default | Override endpoint |
 | `SIBERFLOW_PROJECT_DIR` | `INIT_CWD` → `cwd()` | Sandbox root. Absolute / relative / `~/...`. Divalidasi exists. |
-| `SIBERFLOW_CONTEXT_OPTIMIZE` | `false` | Aktifkan Layer 1 — truncate semua tool result dari turn sebelumnya |
+| `SIBERFLOW_CONTEXT_OPTIMIZE` | `false` | Aktifkan Layer 1 — buang tool call & result dari turn sebelumnya, sisakan teks final assistant |
 | `DEEPSEEK_API_KEY` | — | wajib jika `provider=deepseek` |
 | `GEMINI_API_KEY` | — | wajib jika `provider=gemini` |
 | `OPENAI_API_KEY` | — | wajib jika `provider=openai` atau `openai-responses` |
