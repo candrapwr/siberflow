@@ -94,7 +94,7 @@ export class Agent {
       this.messages,
       this.contextOpt,
     );
-    if (this.contextOpt.enabled && optStats.truncatedCount > 0) {
+    if (this.contextOpt.enabled && optStats.collapsedCount > 0) {
       events.onContextOptimized?.(optStats);
     }
 

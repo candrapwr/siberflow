@@ -5,9 +5,9 @@ export interface ContextOptimizeConfig {
 }
 
 export interface OptimizationStats {
-  /** Number of items (tool results or tool-call argument strings) replaced. */
-  truncatedCount: number;
-  /** Total bytes saved by replacements (over the wire). */
+  /** Number of tool calls dropped from previous turns. */
+  collapsedCount: number;
+  /** Approximate bytes removed from the request. */
   bytesSaved: number;
 }
 
@@ -16,74 +16,73 @@ export const DEFAULT_OPTIMIZE_CONFIG: ContextOptimizeConfig = {
 };
 
 /**
- * Returns a new messages array with every `tool` result content AND every
- * assistant tool-call `arguments` string replaced by a short placeholder.
- * The original messages array is not mutated.
+ * Strips tool activity from previous turns, keeping only the assistant's
+ * final text answer per turn. Returns a NEW array; input is not mutated.
  *
- * Both directions of bloat are addressed:
- *   - Tool results (e.g. `read_file` returning 500 lines)
- *   - Tool call args (e.g. `write_file({content: "<huge>"})`, `edit_file`, `exec`)
+ * Dropped:
+ *   - every `tool` result message
+ *   - every assistant message that made tool calls (the intermediate
+ *     "let me check X" + tool_calls messages)
  *
- * Layer 1: deterministic, no LLM call.
+ * Kept: system, user, and content-only assistant messages (the final
+ * answers). No breadcrumbs — leaving "[called read_file ...]" notes was
+ * found to confuse the model into re-running tools, so the trace is
+ * removed entirely. The assistant's final summary text carries forward
+ * whatever matters.
  *
- * Called ONCE at the start of `agent.send()`. At that point every tool
- * call/result in the array belongs to previous user turns; current turn's
- * items are appended later and never see this function.
+ * Layer 1: deterministic, no LLM call. Called ONCE at the start of
+ * `agent.send()`, so it only ever sees completed previous turns; the
+ * current turn's messages are appended afterward and never pass through.
  */
 export function optimizeContext(
   messages: readonly Message[],
   config: ContextOptimizeConfig,
 ): { messages: Message[]; stats: OptimizationStats } {
-  const stats: OptimizationStats = { truncatedCount: 0, bytesSaved: 0 };
+  const stats: OptimizationStats = { collapsedCount: 0, bytesSaved: 0 };
 
   if (!config.enabled) {
     return { messages: [...messages], stats };
   }
 
-  // Snapshot ORIGINAL args before any replacement so the tool result
-  // placeholder can still describe what was called.
-  const originalArgsById = new Map<string, string>();
+  const kept: Message[] = [];
   for (const m of messages) {
-    if (m.role === "assistant" && m.toolCalls) {
-      for (const tc of m.toolCalls) originalArgsById.set(tc.id, tc.arguments);
+    if (m.role === "tool") {
+      stats.bytesSaved += m.content.length;
+      continue;
     }
+    if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
+      stats.collapsedCount += m.toolCalls.length;
+      stats.bytesSaved += m.content?.length ?? 0;
+      for (const tc of m.toolCalls) stats.bytesSaved += tc.arguments.length;
+      continue;
+    }
+    kept.push(m);
   }
 
-  const next = messages.map((m) => {
-    if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
-      let changed = false;
-      const newCalls = m.toolCalls.map((tc) => {
-        const orig = tc.arguments;
-        const placeholder = `{"_truncated":"${tc.name} args, ${orig.length} bytes"}`;
-        if (placeholder.length >= orig.length) return tc;
-        stats.truncatedCount += 1;
-        stats.bytesSaved += orig.length - placeholder.length;
-        changed = true;
-        return { ...tc, arguments: placeholder };
-      });
-      if (!changed) return m;
-      return { ...m, toolCalls: newCalls };
+  // Defensive: dropping a whole turn's tool activity can leave two
+  // same-role messages adjacent (e.g. a turn that produced no final text).
+  // Merge them so the request never has back-to-back same-role messages.
+  const result: Message[] = [];
+  for (const m of kept) {
+    const last = result[result.length - 1];
+    if (last && last.role === "user" && m.role === "user") {
+      result[result.length - 1] = {
+        role: "user",
+        content: `${last.content}\n${m.content}`,
+      };
+      continue;
     }
-
-    if (m.role === "tool") {
-      const original = m.content;
-      const argsSummary = shortenArgs(originalArgsById.get(m.toolCallId) ?? "");
-      const placeholder = `[truncated tool result: ${m.name}(${argsSummary}) — original ${original.length} bytes]`;
-      if (placeholder.length >= original.length) return m;
-      stats.truncatedCount += 1;
-      stats.bytesSaved += original.length - placeholder.length;
-      return { ...m, content: placeholder };
+    if (last && last.role === "assistant" && m.role === "assistant") {
+      const a = last.content ?? "";
+      const b = m.content ?? "";
+      result[result.length - 1] = {
+        role: "assistant",
+        content: a && b ? `${a}\n${b}` : a || b || null,
+      };
+      continue;
     }
+    result.push(m);
+  }
 
-    return m;
-  });
-
-  return { messages: next, stats };
-}
-
-function shortenArgs(json: string): string {
-  if (json.length === 0) return "";
-  const MAX = 60;
-  if (json.length <= MAX) return json;
-  return json.slice(0, MAX - 3) + "...";
+  return { messages: result, stats };
 }

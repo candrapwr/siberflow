@@ -55,7 +55,7 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
     model: opts.model,
     current: null,
     contextOptimize: opts.contextOptimize,
-    optStats: { truncatedCalls: 0, bytesSaved: 0 },
+    optStats: { collapsedTurns: 0, bytesSaved: 0 },
   };
 
   console.log(
@@ -108,7 +108,7 @@ interface SessionContext {
   current: Session | null;
   contextOptimize: ContextOptimizeConfig;
   /** Accumulated since this REPL process started (not persisted to session). */
-  optStats: { truncatedCalls: number; bytesSaved: number };
+  optStats: { collapsedTurns: number; bytesSaved: number };
 }
 
 function sessionLabel(s: Session | null): string {
@@ -396,7 +396,7 @@ async function runTurn(input: string, ctx: SessionContext): Promise<void> {
         renderers.get(index)?.result(result);
       },
       onContextOptimized: (stats) => {
-        ctx.optStats.truncatedCalls += 1;
+        ctx.optStats.collapsedTurns += 1;
         ctx.optStats.bytesSaved += stats.bytesSaved;
       },
     });
@@ -552,7 +552,7 @@ async function handleSlashCommand(
       if (ctx.contextOptimize.enabled) {
         const kb = (ctx.optStats.bytesSaved / 1024).toFixed(1);
         lines.push(
-          `optimization:  enabled — ${ctx.optStats.truncatedCalls} call(s) truncated, ~${kb} KB saved (this CLI run)`,
+          `optimization:  enabled — ${ctx.optStats.collapsedTurns} turn(s) collapsed, ~${kb} KB saved (this CLI run)`,
         );
       }
       console.log(ui.info(lines.join("\n")));
