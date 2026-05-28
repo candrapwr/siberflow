@@ -52,6 +52,7 @@ export interface ReplOptions {
   tasksEnabled: boolean;
   autoContinue: boolean;
   maxIterations: number;
+  hideTools: boolean;
 }
 
 export async function runRepl(opts: ReplOptions): Promise<void> {
@@ -75,6 +76,7 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
     current: null,
     contextOptimize: opts.contextOptimize,
     tasksEnabled: opts.tasksEnabled,
+    hideTools: opts.hideTools,
     optStats: { collapsedTurns: 0, bytesSaved: 0 },
   };
 
@@ -128,6 +130,7 @@ interface SessionContext {
   current: Session | null;
   contextOptimize: ContextOptimizeConfig;
   tasksEnabled: boolean;
+  hideTools: boolean;
   /** Accumulated since this REPL process started (not persisted to session). */
   optStats: { collapsedTurns: number; bytesSaved: number };
 }
@@ -413,15 +416,25 @@ async function runTurn(input: string, ctx: SessionContext): Promise<void> {
         for (const r of renderers.values()) r.finishArgs();
       },
       onToolCallStart: (index, name) => {
-        spinner.stop();
         if (currentLine.length > 0 || onFirstLine) flushCurrentLine(true);
-        renderers.set(index, new ToolCallRenderer(name));
+        if (ctx.hideTools) {
+          // Hidden mode: no header/args/result — just a spinner with the tool name.
+          spinner.setLabel(`${name}…`);
+          spinner.start();
+        } else {
+          spinner.stop();
+          renderers.set(index, new ToolCallRenderer(name));
+        }
       },
       onToolCallArgs: (index, delta) => {
-        renderers.get(index)?.feed(delta);
+        if (!ctx.hideTools) renderers.get(index)?.feed(delta);
       },
       onToolResult: (index, _name, result) => {
-        renderers.get(index)?.result(result);
+        if (ctx.hideTools) {
+          spinner.setLabel("thinking…");
+        } else {
+          renderers.get(index)?.result(result);
+        }
       },
       onContextOptimized: (stats) => {
         ctx.optStats.collapsedTurns += 1;

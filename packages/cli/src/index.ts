@@ -34,6 +34,7 @@ async function main(): Promise<void> {
     tasksEnabled: config.tasksEnabled,
     autoContinue: config.autoContinue,
     maxIterations: config.maxIterations,
+    hideTools: config.hideTools,
   });
 }
 
