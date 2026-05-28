@@ -312,6 +312,7 @@ Semua via env. CLI loader (`packages/cli/src/env.ts`) walk-up dari cwd cari `.en
 | `SIBERFLOW_AUTO_CONTINUE` | `true` | Sambung otomatis respons yang kepotong limit output token (set `false` untuk matikan) |
 | `SIBERFLOW_DEBUG` | `false` | Tracing verbose ke stderr (HTTP status, raw finish_reason, usage, error, stream lifecycle) |
 | `SIBERFLOW_MAX_ITERATIONS` | `50` | Batas tool-calling iterasi per turn. Naikkan untuk task besar (scaffolding modul, dll) |
+| `SIBERFLOW_HIDE_TOOLS` | `false` | Sembunyikan detail tool call di CLI — ganti dengan spinner berlabel nama tool |
 | `DEEPSEEK_API_KEY` | — | wajib jika `provider=deepseek` |
 | `GEMINI_API_KEY` | — | wajib jika `provider=gemini` |
 | `OPENAI_API_KEY` | — | wajib jika `provider=openai` atau `openai-responses` |
@@ -370,6 +371,8 @@ Pendekatan ini memberi streaming responsif + final formatting. Multi-row clear p
 - `onToolResult(result)` → print result (truncate 400 chars preview)
 
 Tidak ada parser JSON di sini sengaja — supaya forwarding instant tanpa scan-buffer.
+
+**Hide-tools mode** (`SIBERFLOW_HIDE_TOOLS=true`): `ToolCallRenderer` tidak dipakai. Sebagai gantinya `onToolCallStart` mengeset label spinner ke nama tool (`read_file…`) dan membiarkannya berputar selama eksekusi; args & result tidak ditampilkan. `onToolResult` mengembalikan label ke `thinking…`. Output jadi bersih — hanya teks assistant + spinner aktivitas.
 
 ### Slash commands
 

@@ -13,6 +13,7 @@ export interface SiberflowConfig {
   tasksEnabled: boolean;
   autoContinue: boolean;
   maxIterations: number;
+  hideTools: boolean;
 }
 
 export function loadConfigFromEnv(
@@ -35,6 +36,7 @@ export function loadConfigFromEnv(
     tasksEnabled: env.SIBERFLOW_TASKS === "true",
     autoContinue: env.SIBERFLOW_AUTO_CONTINUE !== "false",
     maxIterations: resolveMaxIterations(env),
+    hideTools: env.SIBERFLOW_HIDE_TOOLS === "true",
     ...(env.SIBERFLOW_MODEL ? { model: env.SIBERFLOW_MODEL } : {}),
     ...(env.SIBERFLOW_BASE_URL ? { baseUrl: env.SIBERFLOW_BASE_URL } : {}),
   };
