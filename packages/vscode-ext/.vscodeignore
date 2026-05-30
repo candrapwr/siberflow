@@ -1,0 +1,15 @@
+.vscode/**
+.vscode-test/**
+src/**
+webview/**
+**/tsconfig*.json
+**/esbuild.config.*
+**/*.map
+**/*.ts
+.env
+.env.*
+*.vsix
+node_modules/**
+!resources/**
+!node_modules/@siberflow/core/dist/**
+!node_modules/marked/**

@@ -47,16 +47,26 @@ siberflow/
     │       │   └── store.ts       # save/load/list/delete/clear/findByNameOrId
     │       ├── config/index.ts    # loadConfigFromEnv()
     │       └── index.ts           # re-exports
-    └── cli/                  # @siberflow/cli (references core)
-        ├── bin/siberflow.js  # shim → dist/index.js
-        └── src/
-            ├── index.ts           # entry: load env, build deps, runRepl()
-            ├── env.ts             # .env loader (walk-up, no deps)
-            ├── repl.ts            # session picker + main loop + slash commands
-            ├── markdown.ts        # MarkdownStreamer (renderLine for live reformat)
-            ├── tool-renderer.ts   # ToolCallRenderer (raw arg streaming)
-            ├── spinner.ts         # Spinner (loading animation, TTY-only)
-            └── ui.ts              # ANSI colors + splashBanner + helpers
+    ├── cli/                  # @siberflow/cli (references core)
+    │   ├── bin/siberflow.js  # shim → dist/index.js
+    │   └── src/
+    │       ├── index.ts           # entry: load env, build deps, runRepl()
+    │       ├── env.ts             # .env loader (walk-up, no deps)
+    │       ├── repl.ts            # session picker + main loop + slash commands
+    │       ├── markdown.ts        # MarkdownStreamer (renderLine for live reformat)
+    │       ├── tool-renderer.ts   # ToolCallRenderer (raw arg streaming)
+    │       ├── spinner.ts         # Spinner (loading animation, TTY-only)
+    │       └── ui.ts              # ANSI colors + splashBanner + helpers
+    └── vscode-ext/           # @siberflow/vscode (sidebar webview, bundled by esbuild)
+        ├── package.json      # manifest: viewsContainer, view, commands, settings
+        ├── resources/icon.svg          # activity bar icon
+        ├── esbuild.config.mjs          # bundles extension (cjs) + webview (iife)
+        ├── src/
+        │   ├── extension.ts            # activate(): register WebviewViewProvider + commands
+        │   ├── chat-panel.ts           # ChatViewProvider — agent + session + settings lifecycle
+        │   └── protocol.ts             # ExtToView / ViewToExt message types
+        └── webview/
+            └── main.ts                 # webview-side: topbar, popovers, messages, composer
 ```
 
 ## Inti
@@ -390,6 +400,107 @@ Di-handle di `handleSlashCommand()`:
 | `/delete <name\|id>` | hapus 1 session (kalau current → reset) |
 | `/clear-all` | hapus SEMUA session project ini (konfirmasi `yes`) |
 | `/exit`, `/quit` | keluar |
+
+## VSCode Extension
+
+Package `packages/vscode-ext` membungkus `@siberflow/core` jadi sidebar chat panel. Reuse semua logic agent, tools, session, optimize, tasks — interface beda saja.
+
+### Arsitektur
+
+- **WebviewViewProvider** terdaftar di activity bar via `viewsContainers` + `views` di [package.json](packages/vscode-ext/package.json). Icon SVG di `resources/icon.svg`.
+- **Extension host** ([chat-panel.ts](packages/vscode-ext/src/chat-panel.ts)) memegang state: `Agent`, `Session`, `Provider`, `Registry`, `Settings`. Lazy-init: agent dibangun setelah API key tersedia, bukan saat constructor.
+- **Webview side** ([webview/main.ts](packages/vscode-ext/webview/main.ts)) cuma UI + DOM. Tidak punya akses Node — terima event dari extension via `postMessage`.
+
+### Bundling
+
+[esbuild.config.mjs](packages/vscode-ext/esbuild.config.mjs) menghasilkan dua bundle:
+- `dist/extension.cjs` — extension host, platform=node, format=cjs, external `vscode`
+- `dist/webview.js` — webview script, platform=browser, format=iife (bundle `marked` di dalamnya)
+
+### Konfigurasi (TIDAK pakai `.env`)
+
+- **API key** → `vscode.SecretStorage` (encrypted, OS-keychain backed), key per provider: `siberflow.apiKey.<providerName>`
+- **Setting lainnya** → `vscode.workspace.getConfiguration("siberflow")` dengan `ConfigurationTarget.Global`:
+  `provider`, `model`, `tasks`, `contextOptimize`, `autoContinue`, `hideTools`, `maxIterations`, `debug`
+- **`projectDir`** → `workspaceFolders[0].uri.fsPath` (sandbox tools otomatis ke folder yang dibuka)
+
+Settings panel di webview menulis ke kedua tempat. Tidak ada fallback ke env var di extension.
+
+### Protokol Webview ↔ Extension
+
+[protocol.ts](packages/vscode-ext/src/protocol.ts) mendefinisikan dua union type tipped:
+- `ExtToView`: `ready`, `assistant_start`, `assistant_content`, `assistant_end`, `tool_call_start`, `tool_call_args`, `tool_result`, `tasks`, `context_optimized`, `max_iterations`, `error`, `info`, `session_changed`, `usage`, `settings`, `history`
+- `ViewToExt`: `init`, `send`, `command`, `save_settings`
+
+Lifecycle khas:
+1. Webview load → kirim `init`
+2. Extension cek SecretStorage. Kosong → kirim `settings` dengan `mustConfigure: true`. Webview tampilkan modal yang tidak bisa di-Cancel.
+3. Save settings → extension persist + rebuild Agent + jalankan session picker via `vscode.window.showQuickPick`
+4. Kirim `ready` (banner + session + flags), lalu `history` (recap user+assistant text untuk sesi yang di-load), lalu `tasks` (kalau ada)
+5. User kirim message → `send` → extension run `agent.send()` dengan event handler yang forward jadi `assistant_*`, `tool_*`, `tasks`, dll
+
+### UI components (webview)
+
+- **Topbar compact**: tombol session label (klik → popover info versi/provider/session) + tombol `⋯` (popover command menu: Settings, New, Load, Usage, Clear all)
+- **Messages area**: scrollable; tiap `msg` = user/assistant card; tool block & task card inline di antara messages
+- **Task card** inline di `#messages` — bukan panel fixed, scroll bareng chat. Update in-place tiap `task_update`.
+- **Composer**: textarea rounded + tombol Send bundar 28×28 dengan SVG arrow icon
+- **Pending indicator** (`◴ thinking…`) muncul saat submit, hilang saat event pertama
+- **Settings modal**: backdrop overlay; form provider/apiKey/model + toggle checkboxes
+- **Markdown**: `marked` lib di-bundle untuk render assistant message (text streaming dulu, parse markdown saat `assistant_end`)
+
+### Cross-compat dengan CLI
+
+Sesi tersimpan di `~/.siberflow/sessions/<id>.json` (lokasi sama). Sesi yang dibuat via CLI bisa di-load di VSCode dan sebaliknya — format dan API store identik. Tidak ada migrasi atau lock file.
+
+### Test/run (dev mode)
+
+```bash
+cd packages/vscode-ext
+code .       # buka folder di VSCode
+# tekan F5 (Run Extension) → Extension Development Host
+```
+
+Build manual: `npm run build:vscode` di root. Watch mode: `npm run watch:vscode`.
+
+### Build VSIX (untuk distribusi tanpa marketplace)
+
+```bash
+npm run package:vscode      # dari root
+# atau:
+cd packages/vscode-ext && npm run package
+```
+
+`vsce` (di-include sebagai devDep ekstensi, no global install needed) menjalankan `vsce package --no-dependencies` setelah build. Output: `packages/vscode-ext/siberflow-chat-<version>.vsix`, sekitar 40 KB.
+
+Yang ter-bundle di VSIX:
+```
+extension/
+├─ package.json
+├─ readme.md             # tampil di halaman info ekstensi
+├─ dist/
+│  ├─ extension.cjs      # ext host (inline @siberflow/core + marked)
+│  └─ webview.js         # webview UI
+└─ resources/icon.svg
+```
+
+Self-contained — `--no-dependencies` skip `npm install` step karena esbuild sudah inline semua runtime deps. `.vscodeignore` mengeksklusi `src/`, `webview/`, `node_modules/`, `.env*`, `*.vsix`, `*.map`, dll. Hanya `dist/` dan `resources/` yang ikut.
+
+Install di VSCode lain:
+- GUI: Cmd+Shift+P → **Extensions: Install from VSIX…**
+- CLI: `code --install-extension siberflow-chat-<version>.vsix`
+
+Update versi: edit `version` di `packages/vscode-ext/package.json` (SemVer), `npm run package:vscode`. VSCode otomatis prompt update kalau VSIX baru di-install ulang dengan versi lebih tinggi.
+
+### Publish ke marketplace (optional)
+
+Kalau nanti mau publish:
+1. Bikin publisher di https://marketplace.visualstudio.com/manage
+2. PAT dari Azure DevOps dengan scope **Marketplace > Manage**
+3. `vsce login <publisher-id>` → paste PAT
+4. `vsce publish` (atau `vsce publish patch`/`minor` untuk auto-bump)
+
+Perlu juga: marketplace icon PNG 128×128 (`resources/icon.png` + field `icon` di package.json) — saat ini hanya SVG untuk activity bar, marketplace tetap minta PNG terpisah.
 
 ## Build & Dev
 

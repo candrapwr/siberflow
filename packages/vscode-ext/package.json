@@ -1,0 +1,90 @@
+{
+  "name": "siberflow-chat",
+  "version": "0.1.0",
+  "displayName": "Siberflow",
+  "description": "AI chat sidebar with multi-provider, tool calling, sandboxed file ops, and task checklists.",
+  "publisher": "siberflow",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/candrapwr/siberflow"
+  },
+  "categories": ["Other", "Programming Languages"],
+  "keywords": ["ai", "chat", "agent", "deepseek", "gemini", "openai", "codex", "assistant"],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "main": "./dist/extension.cjs",
+  "activationEvents": [],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "siberflow",
+          "title": "Siberflow",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "siberflow": [
+        {
+          "id": "siberflow.chatView",
+          "name": "Chat",
+          "type": "webview",
+          "icon": "resources/icon.svg",
+          "contextualTitle": "Siberflow"
+        }
+      ]
+    },
+    "commands": [
+      { "command": "siberflow.openChat", "title": "Siberflow: Open Chat" },
+      { "command": "siberflow.newSession", "title": "Siberflow: New Session" },
+      { "command": "siberflow.loadSession", "title": "Siberflow: Load Session" },
+      { "command": "siberflow.deleteSession", "title": "Siberflow: Delete Session" },
+      { "command": "siberflow.clearAllSessions", "title": "Siberflow: Clear All Sessions" },
+      { "command": "siberflow.showUsage", "title": "Siberflow: Show Usage" },
+      { "command": "siberflow.showTools", "title": "Siberflow: List Tools" },
+      { "command": "siberflow.openSettings", "title": "Siberflow: Open Settings" }
+    ],
+    "configuration": {
+      "title": "Siberflow",
+      "properties": {
+        "siberflow.provider": {
+          "type": "string",
+          "enum": ["deepseek", "gemini", "openai", "openai-responses"],
+          "default": "deepseek",
+          "description": "Active LLM provider"
+        },
+        "siberflow.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model override (leave empty for provider default)"
+        },
+        "siberflow.contextOptimize": { "type": "boolean", "default": false },
+        "siberflow.tasks": { "type": "boolean", "default": false },
+        "siberflow.autoContinue": { "type": "boolean", "default": true },
+        "siberflow.hideTools": { "type": "boolean", "default": false },
+        "siberflow.maxIterations": { "type": "number", "default": 50 },
+        "siberflow.debug": { "type": "boolean", "default": false }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "watch": "node esbuild.config.mjs --watch",
+    "package": "npm run build && vsce package --no-dependencies",
+    "clean": "rm -rf dist *.vsix"
+  },
+  "dependencies": {
+    "@siberflow/core": "0.1.0",
+    "marked": "^14.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.1",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.3"
+  }
+}
