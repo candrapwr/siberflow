@@ -7,6 +7,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
+import { mkdirSync, writeFileSync } from "node:fs";
 import type { Message } from "../agent/types.js";
 import type { Session, SessionSummary, SessionUsage } from "./types.js";
 import { SESSION_FORMAT_VERSION } from "./types.js";
@@ -34,6 +35,20 @@ export function newSessionId(): string {
 export async function saveSession(session: Session): Promise<void> {
   await ensureDir();
   await writeFile(pathFor(session.id), JSON.stringify(session, null, 2), "utf8");
+}
+
+/**
+ * Synchronous variant — used for hot-path saves (e.g. after each task_update)
+ * where we need the disk write to complete before the process can exit (Ctrl+C
+ * scenarios). Blocking, but small file so latency is negligible.
+ */
+export function saveSessionSync(session: Session): void {
+  mkdirSync(SESSIONS_DIR, { recursive: true });
+  writeFileSync(
+    pathFor(session.id),
+    JSON.stringify(session, null, 2),
+    "utf8",
+  );
 }
 
 export async function loadSession(id: string): Promise<Session | null> {
