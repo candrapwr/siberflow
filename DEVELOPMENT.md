@@ -261,7 +261,7 @@ Mekanisme di Agent:
 1. Agent punya satu `TaskStore`. `task_update` mengisinya via `ctx.taskStore`.
 2. **Re-injeksi tiap iterasi**: `withTasks()` menambahkan checklist ke leading system message setiap LLM call. Jadi model selalu lihat state authoritative — baik setelah update mid-turn maupun lintas-turn (tidak mengandalkan chat history yang bisa di-optimize).
 3. Setelah `task_update` dipanggil, emit `onTasksUpdated(tasks)` → CLI render checklist.
-4. Persistensi: `Session.tasks` disimpan di JSON; saat `/load`, `agent.loadTasks()` me-restore.
+4. Persistensi: `Session.tasks` disimpan di JSON; saat `/load`, `agent.loadTasks()` me-restore. **Tiap `onTasksUpdated` di REPL juga langsung `saveSessionSync()`** — checkpoint tahan Ctrl+C / force-kill mid-task. Hanya `tasks` + `updatedAt` yang diupdate; `messages` tetap dari turn terakhir yang sukses (mencegah persist dangling tool_calls).
 
 Kenapa managed state, bukan tool result biasa? Kalau checklist cuma jadi tool result, dia ikut terbuang saat context optimize membersihkan turn lama. Dengan re-injeksi dari store, checklist selalu fresh dan utuh berapapun panjang percakapan.
 
@@ -286,7 +286,7 @@ interface Session {
 ```
 
 API di [session/store.ts](packages/core/src/session/store.ts):
-- `saveSession(s)`, `loadSession(id)`, `deleteSession(id)` — `deleteSession` cascade ke `.optimized.json` kalau ada
+- `saveSession(s)`, `saveSessionSync(s)`, `loadSession(id)`, `deleteSession(id)` — `deleteSession` cascade ke `.optimized.json` kalau ada. Sync variant dipakai untuk hot-path persistence (task_update) supaya disk write tuntas sebelum proses bisa exit (Ctrl+C safe)
 - `listSessions({ projectDir? })` — sorted descending `updatedAt`; skip file `.optimized.json`
 - `findByNameOrId(query, projectDir?)` — match prioritas: name exact → id exact → id prefix
 - `clearSessions({ projectDir? })` — batch delete; return count

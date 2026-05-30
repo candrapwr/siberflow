@@ -11,6 +11,7 @@ import {
   optimizeContext,
   saveOptimizedView,
   saveSession,
+  saveSessionSync,
   SESSION_FORMAT_VERSION,
   type ContextOptimizeConfig,
   type Session,
@@ -442,6 +443,21 @@ async function runTurn(input: string, ctx: SessionContext): Promise<void> {
       },
       onTasksUpdated: (tasks) => {
         process.stdout.write(ui.taskList(tasks) + "\n");
+        // Persist task progress to disk synchronously — survives Ctrl+C /
+        // force-kill mid-turn so the user can resume from the exact task
+        // checkpoint. We update only `tasks` + `updatedAt`; `messages` is
+        // left as the last successful turn's snapshot to avoid persisting
+        // a half-executed assistant message (dangling tool_calls would
+        // break the next request).
+        if (ctx.current) {
+          ctx.current.tasks = [...tasks];
+          ctx.current.updatedAt = new Date().toISOString();
+          try {
+            saveSessionSync(ctx.current);
+          } catch {
+            // best-effort
+          }
+        }
       },
       onMaxIterations: (limit) => {
         process.stdout.write(
