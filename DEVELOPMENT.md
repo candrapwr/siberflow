@@ -25,6 +25,7 @@ siberflow/
     │       │   ├── openai-compatible.ts  # base class untuk /chat/completions style
     │       │   ├── deepseek.ts    # extends OpenAICompatibleProvider
     │       │   ├── gemini.ts      # extends OpenAICompatibleProvider
+    │       │   ├── grok.ts        # extends OpenAICompatibleProvider (xAI)
     │       │   ├── openai.ts      # extends OpenAICompatibleProvider (/v1/chat/completions)
     │       │   ├── openai-responses.ts   # standalone — OpenAI /v1/responses API
     │       │   └── registry.ts    # createProvider(name, config)
@@ -313,7 +314,7 @@ Semua via env. CLI loader (`packages/cli/src/env.ts`) walk-up dari cwd cari `.en
 
 | Variabel | Default | Keterangan |
 |---|---|---|
-| `SIBERFLOW_PROVIDER` | `deepseek` | `deepseek` / `gemini` / `openai` / `openai-responses` |
+| `SIBERFLOW_PROVIDER` | `deepseek` | `deepseek` / `gemini` / `openai` / `openai-responses` / `grok` |
 | `SIBERFLOW_MODEL` | provider default | Override model string |
 | `SIBERFLOW_BASE_URL` | provider default | Override endpoint |
 | `SIBERFLOW_PROJECT_DIR` | `INIT_CWD` → `cwd()` | Sandbox root. Absolute / relative / `~/...`. Divalidasi exists. |
@@ -326,6 +327,7 @@ Semua via env. CLI loader (`packages/cli/src/env.ts`) walk-up dari cwd cari `.en
 | `DEEPSEEK_API_KEY` | — | wajib jika `provider=deepseek` |
 | `GEMINI_API_KEY` | — | wajib jika `provider=gemini` |
 | `OPENAI_API_KEY` | — | wajib jika `provider=openai` atau `openai-responses` |
+| `XAI_API_KEY` | — | wajib jika `provider=grok` |
 
 Mapping provider → env var nama API key di `config/index.ts` (`apiKeyEnvVar`). Saat tambah provider, tambah case di sana juga.
 
@@ -422,6 +424,7 @@ Package `packages/vscode-ext` membungkus `@siberflow/core` jadi sidebar chat pan
 - **API key** → `vscode.SecretStorage` (encrypted, OS-keychain backed), key per provider: `siberflow.apiKey.<providerName>`
 - **Setting lainnya** → `vscode.workspace.getConfiguration("siberflow")` dengan `ConfigurationTarget.Global`:
   `provider`, `model`, `tasks`, `contextOptimize`, `autoContinue`, `hideTools`, `maxIterations`, `debug`
+- **Defaults berbeda dari CLI**: di VSCode, `tasks`, `contextOptimize`, `autoContinue`, dan `hideTools` semuanya **default `true`** (di CLI sebagian default `false`) — UI desktop punya bandwidth lebih untuk fitur agentic, jadi diaktifkan out-of-the-box
 - **`projectDir`** → `workspaceFolders[0].uri.fsPath` (sandbox tools otomatis ke folder yang dibuka)
 
 Settings panel di webview menulis ke kedua tempat. Tidak ada fallback ke env var di extension.
