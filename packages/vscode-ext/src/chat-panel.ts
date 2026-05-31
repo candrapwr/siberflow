@@ -352,14 +352,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.post({ kind: "assistant_end" });
       return;
     }
-    this.post({ kind: "assistant_start" });
-
     let latestUsage: { promptTokens: number; completionTokens: number } | undefined;
     let turnAddPrompt = 0;
     let turnAddCompletion = 0;
 
     try {
       await this.agent.send(input, {
+        onAssistantStart: () => this.post({ kind: "assistant_start" }),
         onContent: (delta) => this.post({ kind: "assistant_content", delta }),
         onAssistantEnd: (_msg, meta) => {
           if (meta.usage) {
@@ -367,6 +366,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             turnAddPrompt += meta.usage.promptTokens;
             turnAddCompletion += meta.usage.completionTokens;
           }
+          // Close the current iteration's assistant DOM element so the next
+          // iteration creates a fresh one. Without this, tool calls from
+          // later iterations would stack BELOW text from earlier iterations
+          // in the same assistant div, flipping the natural order.
+          this.post({ kind: "iteration_end" });
         },
         onToolCallStart: (index, name) =>
           this.post({ kind: "tool_call_start", index, name }),
@@ -657,42 +661,63 @@ body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size
 .popover-info { padding: 10px 12px; font-size: 12px; line-height: 1.6; }
 .popover-info .row { display: flex; justify-content: space-between; gap: 14px; white-space: nowrap; }
 .popover-info .row .k { opacity: 0.65; }
-.task-card { background: var(--vscode-editorWidget-background); border-left: 2px solid var(--vscode-charts-blue);
-  border-radius: 2px; padding: 6px 10px; margin: 6px 0; font-size: 12px; line-height: 1.45; }
-.task-card .role { font-weight: 600; font-size: 10px; text-transform: uppercase; opacity: 0.6;
-  letter-spacing: 0.6px; margin-bottom: 4px; }
-.task-card ul { list-style: none; padding: 0; margin: 0; }
-.task-card li { padding: 1px 0; display: flex; gap: 8px; align-items: baseline; }
-.task-card .done { color: var(--vscode-charts-green); }
-.task-card .inprogress { font-weight: 600; color: var(--vscode-charts-yellow); }
-.task-card .pending { opacity: 0.55; }
+.task-panel { border-top: 1px solid var(--vscode-panel-border);
+  background: var(--vscode-sideBar-background, var(--vscode-editorWidget-background));
+  font-size: 12px; line-height: 1.45; flex: 0 0 auto; }
+.task-panel-header { display: flex; align-items: center; justify-content: space-between;
+  padding: 5px 8px; cursor: pointer; user-select: none; }
+.task-panel-header:hover { background: var(--vscode-list-hoverBackground); }
+.task-panel-title { display: flex; align-items: center; gap: 6px;
+  color: var(--vscode-descriptionForeground); font-size: 11px; }
+.task-panel-title b { color: var(--vscode-foreground); font-weight: 600; }
+.task-panel-chevron { font-size: 9px; opacity: 0.65; width: 10px; display: inline-block; text-align: center; }
+.task-panel-body { padding: 4px 10px 8px; max-height: 200px; overflow-y: auto;
+  border-top: 1px solid var(--vscode-panel-border); }
+.task-panel-body ul { list-style: none; padding: 0; margin: 0; }
+.task-panel-body li { padding: 1px 0; display: flex; gap: 8px; align-items: baseline; }
+.task-panel-body .done { color: var(--vscode-charts-green); }
+.task-panel-body .inprogress { font-weight: 600; color: var(--vscode-charts-yellow); }
+.task-panel-body .pending { opacity: 0.55; }
+.task-panel.collapsed .task-panel-body { display: none; }
 .messages { flex: 1; overflow-y: auto; padding: 8px 6px 12px; }
 .msg { margin-bottom: 10px; line-height: 1.5; }
 .msg .role { font-weight: 600; font-size: 10px; text-transform: uppercase; opacity: 0.55; letter-spacing: 0.6px; margin-bottom: 2px; }
 .msg.user .role { color: var(--vscode-charts-blue); }
 .msg.assistant .role { color: var(--vscode-charts-purple); }
+/* Iteration that produced no text (only tool_calls) → hide redundant "ai" label and tighten spacing. */
+.msg.assistant:not(:has(.seg)) .role { display: none; }
+.msg.assistant:not(:has(.seg)) { margin-bottom: 4px; }
+/* Spacing between interleaved text segments and tool blocks inside body */
+.msg .body .seg + .seg, .msg .body .seg + .tool, .msg .body .tool + .seg { margin-top: 6px; }
 .msg .body { word-wrap: break-word; }
 .msg.user .body { white-space: pre-wrap; }
-/* Markdown content gets its own block spacing — keep tight but readable */
-.msg .body > p { margin: 4px 0; }
-.msg .body > p:first-child { margin-top: 0; }
-.msg .body > p:last-child { margin-bottom: 0; }
-.msg .body > ul, .msg .body > ol { margin: 4px 0; padding-left: 22px; }
+/* Markdown content gets its own block spacing — keep tight but readable.
+   Selectors use descendant (not direct child) so they match inside .seg wrappers. */
+.msg .body p { margin: 4px 0; }
+.msg .body .seg > p:first-child { margin-top: 0; }
+.msg .body .seg > p:last-child { margin-bottom: 0; }
+.msg .body ul, .msg .body ol { margin: 4px 0; padding-left: 22px; }
 .msg .body li { margin: 1px 0; }
 .msg .body li > p { margin: 0; }
-.msg .body > h1, .msg .body > h2, .msg .body > h3, .msg .body > h4 { margin: 10px 0 4px; line-height: 1.3; font-weight: 600; }
-.msg .body > h1 { font-size: 1.15em; }
-.msg .body > h2 { font-size: 1.08em; }
-.msg .body > h3, .msg .body > h4 { font-size: 1em; }
-.msg .body > h1:first-child, .msg .body > h2:first-child, .msg .body > h3:first-child { margin-top: 0; }
-.msg .body > blockquote { margin: 6px 0; padding: 0 10px; border-left: 2px solid var(--vscode-textBlockQuote-border);
+.msg .body h1, .msg .body h2, .msg .body h3, .msg .body h4 { margin: 10px 0 4px; line-height: 1.3; font-weight: 600; }
+.msg .body h1 { font-size: 1.15em; }
+.msg .body h2 { font-size: 1.08em; }
+.msg .body h3, .msg .body h4 { font-size: 1em; }
+.msg .body .seg > h1:first-child, .msg .body .seg > h2:first-child, .msg .body .seg > h3:first-child { margin-top: 0; }
+.msg .body blockquote { margin: 6px 0; padding: 0 10px; border-left: 2px solid var(--vscode-textBlockQuote-border);
   background: var(--vscode-textBlockQuote-background); opacity: 0.9; }
-.msg .body > pre { background: var(--vscode-textBlockQuote-background);
+.msg .body pre { background: var(--vscode-textBlockQuote-background);
   padding: 8px 10px; margin: 6px 0; overflow-x: auto; border-radius: 3px; line-height: 1.4; }
 .msg .body code { background: var(--vscode-textBlockQuote-background); padding: 1px 4px; border-radius: 2px;
   font-family: var(--vscode-editor-font-family); font-size: 0.9em; }
 .msg .body pre code { background: transparent; padding: 0; font-size: 0.9em; }
-.msg .body > hr { border: none; border-top: 1px solid var(--vscode-panel-border); margin: 8px 0; }
+.msg .body hr { border: none; border-top: 1px solid var(--vscode-panel-border); margin: 8px 0; }
+/* Plain (un-finalized) text segment — keep linebreaks visible during streaming */
+.msg .body .seg { white-space: pre-wrap; }
+/* But once marked.parse runs, the resulting <p>/<ul>/etc handle their own spacing */
+.msg .body .seg:has(> p), .msg .body .seg:has(> ul), .msg .body .seg:has(> ol),
+.msg .body .seg:has(> h1), .msg .body .seg:has(> h2), .msg .body .seg:has(> h3),
+.msg .body .seg:has(> pre), .msg .body .seg:has(> blockquote) { white-space: normal; }
 .tool { font-size: 12px; padding: 6px 10px; margin: 6px 0; border-left: 2px solid var(--vscode-textLink-foreground);
   background: var(--vscode-editorWidget-background); border-radius: 2px; }
 .tool .head { color: var(--vscode-textLink-foreground); font-weight: 600; font-size: 11px; }

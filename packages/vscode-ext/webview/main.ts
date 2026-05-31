@@ -56,9 +56,12 @@ let mounted = false;
 let topbarSessionLabel: HTMLElement | null = null;
 let messagesEl: HTMLElement | null = null;
 let pendingEl: HTMLElement | null = null;
-// The task list lives inline inside #messages so it scrolls with the chat
-// and naturally moves out of view as the conversation progresses.
-let taskCardEl: HTMLElement | null = null;
+// Pinned task panel sits between messages and the composer. Collapsible.
+let taskPanelEl: HTMLElement | null = null;
+let taskPanelCollapsed = false;
+// The text segment we are currently streaming into. Reset to null whenever
+// a tool call interrupts so the next content stream gets its own segment.
+let currentTextEl: HTMLElement | null = null;
 
 function mount(): void {
   if (mounted) return;
@@ -69,9 +72,14 @@ function mount(): void {
   messagesEl.className = "messages";
   messagesEl.id = "messages";
   root.appendChild(messagesEl);
+  // Pinned panel above composer — hidden until tasks exist.
+  taskPanelEl = document.createElement("div");
+  taskPanelEl.className = "task-panel";
+  taskPanelEl.style.display = "none";
+  root.appendChild(taskPanelEl);
   root.appendChild(renderComposer());
-  // Seed the task card if we already have tasks (resumed session).
-  if (state.tasksEnabled && state.tasks.length > 0) updateTaskCard();
+  // Seed the panel if we already have tasks (resumed session).
+  if (state.tasksEnabled && state.tasks.length > 0) updateTaskPanel();
 }
 
 function updateTopbar(): void {
@@ -86,54 +94,55 @@ function sessionDisplay(): string {
 }
 
 /**
- * Render / update the inline task card inside #messages. The card is
- * appended at the current bottom on first creation, then mutates in
- * place on subsequent updates so it doesn't jump around. New sessions
- * (tasks = []) remove the card entirely.
+ * Render / update the pinned task panel between messages and composer.
+ * Hidden entirely when there are no tasks. Header click toggles collapsed
+ * state (body hidden, header still visible). Collapsed state persists
+ * across updates within this webview lifetime.
  */
-function updateTaskCard(): void {
-  if (!messagesEl) return;
+function updateTaskPanel(): void {
+  if (!taskPanelEl) return;
   if (state.tasks.length === 0) {
-    taskCardEl?.remove();
-    taskCardEl = null;
+    taskPanelEl.style.display = "none";
     return;
   }
-  if (!taskCardEl) {
-    taskCardEl = renderTaskCard(state.tasks);
-    messagesEl.appendChild(taskCardEl);
-    scrollToBottom();
-  } else {
-    const fresh = renderTaskCard(state.tasks);
-    taskCardEl.replaceWith(fresh);
-    taskCardEl = fresh;
-  }
-}
+  taskPanelEl.style.display = "";
+  taskPanelEl.classList.toggle("collapsed", taskPanelCollapsed);
 
-function renderTaskCard(tasks: Task[]): HTMLElement {
-  const card = document.createElement("div");
-  card.className = "task-card";
-  const done = tasks.filter((t) => t.status === "completed").length;
-  card.innerHTML = `<div class="role">tasks (${done}/${tasks.length})</div>`;
-  const ul = document.createElement("ul");
-  for (const t of tasks) {
-    const li = document.createElement("li");
-    const icon =
-      t.status === "completed"
-        ? "✔"
-        : t.status === "in_progress"
-          ? "▶"
-          : "○";
-    const cls =
-      t.status === "completed"
-        ? "done"
-        : t.status === "in_progress"
-          ? "inprogress"
-          : "pending";
-    li.innerHTML = `<span class="${cls}">${icon}</span><span class="${cls}">${escape(t.content)}</span>`;
-    ul.appendChild(li);
-  }
-  card.appendChild(ul);
-  return card;
+  const done = state.tasks.filter((t) => t.status === "completed").length;
+  const chevron = taskPanelCollapsed ? "▸" : "▾";
+
+  const items = state.tasks
+    .map((t) => {
+      const icon =
+        t.status === "completed"
+          ? "✔"
+          : t.status === "in_progress"
+            ? "▶"
+            : "○";
+      const cls =
+        t.status === "completed"
+          ? "done"
+          : t.status === "in_progress"
+            ? "inprogress"
+            : "pending";
+      return `<li><span class="${cls}">${icon}</span><span class="${cls}">${escape(t.content)}</span></li>`;
+    })
+    .join("");
+
+  taskPanelEl.innerHTML = `
+    <div class="task-panel-header" id="tp-header">
+      <div class="task-panel-title">
+        <span class="task-panel-chevron">${chevron}</span>
+        <span>tasks <b>${done}/${state.tasks.length}</b></span>
+      </div>
+    </div>
+    <div class="task-panel-body"><ul>${items}</ul></div>
+  `;
+
+  taskPanelEl.querySelector("#tp-header")?.addEventListener("click", () => {
+    taskPanelCollapsed = !taskPanelCollapsed;
+    updateTaskPanel();
+  });
 }
 
 function showPending(): void {
@@ -417,6 +426,13 @@ function submit(): void {
   ta.value = "";
   ta.style.height = "auto";
   appendUserMessage(text);
+  // Reset the task panel for the new turn. The previous turn's checklist
+  // is stale; the model will repopulate via task_update if it decides to
+  // maintain one this turn.
+  if (state.tasks.length > 0) {
+    state.tasks = [];
+    updateTaskPanel();
+  }
   showPending();
   setBusy(true);
   vscode.postMessage({ kind: "send", input: text });
@@ -457,7 +473,12 @@ function startAssistant(): void {
   state.currentAssistant = el;
   state.currentAssistantText = "";
   state.currentTools.clear();
+  currentTextEl = null;
   scrollToBottom();
+}
+
+function removeThinkingDot(body: HTMLElement): void {
+  body.querySelector(".thinking-dot")?.remove();
 }
 
 function appendAssistantContent(delta: string): void {
@@ -465,35 +486,46 @@ function appendAssistantContent(delta: string): void {
   if (!state.currentAssistant) startAssistant();
   state.currentAssistantText += delta;
   const body = state.currentAssistant!.querySelector(".body") as HTMLElement;
-  // Stream as plain text for responsiveness — re-render markdown at end.
-  body.textContent = state.currentAssistantText;
+  removeThinkingDot(body);
+  // Create a new text segment if there's no active one (i.e., we just
+  // came out of a tool call, or this is the first content).
+  if (!currentTextEl) {
+    currentTextEl = document.createElement("div");
+    currentTextEl.className = "seg";
+    body.appendChild(currentTextEl);
+  }
+  // Stream as plain text for responsiveness — markdown render at segment end.
+  currentTextEl.textContent = state.currentAssistantText;
   scrollToBottom();
+}
+
+function finalizeCurrentTextEl(): void {
+  if (currentTextEl && state.currentAssistantText.length > 0) {
+    currentTextEl.innerHTML = marked.parse(state.currentAssistantText) as string;
+  }
+  currentTextEl = null;
+  state.currentAssistantText = "";
 }
 
 function finalizeAssistant(): void {
   if (state.currentAssistant) {
     const body = state.currentAssistant.querySelector(".body") as HTMLElement;
-    if (state.currentAssistantText.length > 0) {
-      body.innerHTML = marked.parse(state.currentAssistantText) as string;
-    }
+    removeThinkingDot(body);
   }
+  finalizeCurrentTextEl();
   state.currentAssistant = null;
-  state.currentAssistantText = "";
 }
 
 function startToolCall(index: number, name: string): void {
   hidePending();
   if (!state.currentAssistant) startAssistant();
   const body = state.currentAssistant!.querySelector(".body") as HTMLElement;
+  removeThinkingDot(body);
 
-  // If there's pending text content, finalize it as markdown in place so the
-  // tool block appears AFTER it. Otherwise clear any thinking placeholder.
-  if (state.currentAssistantText.length > 0) {
-    body.innerHTML = marked.parse(state.currentAssistantText) as string;
-    state.currentAssistantText = "";
-  } else {
-    body.innerHTML = "";
-  }
+  // Lock in any in-progress text segment as final markdown so the tool
+  // block appears AFTER it (and the text stays put when the next iteration
+  // streams more text).
+  finalizeCurrentTextEl();
 
   const root = document.createElement("div");
   root.className = state.hideTools ? "tool hidden-mode" : "tool";
@@ -511,7 +543,8 @@ function startToolCall(index: number, name: string): void {
     root.appendChild(argsEl);
   }
 
-  state.currentAssistant!.appendChild(root);
+  // Append inside body so it interleaves naturally with .seg text segments.
+  body.appendChild(root);
   state.currentTools.set(index, {
     root,
     argsEl,
@@ -599,17 +632,23 @@ window.addEventListener("message", (ev) => {
       state.tasksEnabled = msg.tasksEnabled;
       if (mounted) {
         updateTopbar();
-        updateTaskCard();
+        updateTaskPanel();
       } else {
         mount();
       }
       break;
     case "assistant_start":
-      // Don't start a new assistant message yet — wait for first content/tool.
-      // The pending indicator already signals activity.
+      // Show pending indicator between iterations (each iteration starts
+      // with a brief wait for the model's first token).
+      showPending();
       break;
     case "assistant_content":
       appendAssistantContent(msg.delta);
+      break;
+    case "iteration_end":
+      // Close this iteration's assistant element so the next iteration
+      // creates a fresh one — keeps tool/text order chronological.
+      finalizeAssistant();
       break;
     case "assistant_end":
       hidePending();
@@ -627,7 +666,7 @@ window.addEventListener("message", (ev) => {
       break;
     case "tasks":
       state.tasks = msg.tasks;
-      updateTaskCard();
+      updateTaskPanel();
       break;
     case "context_optimized":
       break;
@@ -645,7 +684,6 @@ window.addEventListener("message", (ev) => {
       if (prevId !== nextId) {
         // Switched to a different session (or wiped) — clear the visible chat.
         if (messagesEl) messagesEl.innerHTML = "";
-        taskCardEl = null;
         pendingEl = null;
         state.currentAssistant = null;
         state.currentAssistantText = "";
