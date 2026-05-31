@@ -5,6 +5,7 @@ export type ExtToView =
   | { kind: "ready"; banner: BannerInfo; session: SessionInfo | null; hideTools: boolean; tasksEnabled: boolean }
   | { kind: "assistant_start" }
   | { kind: "assistant_content"; delta: string }
+  | { kind: "iteration_end" }
   | { kind: "assistant_end" }
   | { kind: "tool_call_start"; index: number; name: string }
   | { kind: "tool_call_args"; index: number; delta: string }
