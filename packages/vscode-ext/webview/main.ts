@@ -296,6 +296,7 @@ function showSettingsModal(
         <option value="gemini">gemini</option>
         <option value="openai">openai (chat completions)</option>
         <option value="openai-responses">openai-responses (/v1/responses)</option>
+        <option value="grok">grok (xAI)</option>
       </select>
     </div>
     <div class="form-row">

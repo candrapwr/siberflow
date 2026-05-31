@@ -1,5 +1,6 @@
 import { DeepSeekProvider } from "./deepseek.js";
 import { GeminiProvider } from "./gemini.js";
+import { GrokProvider } from "./grok.js";
 import { OpenAIProvider } from "./openai.js";
 import { OpenAIResponsesProvider } from "./openai-responses.js";
 import type { Provider, ProviderConfig } from "./base.js";
@@ -8,7 +9,8 @@ export type ProviderName =
   | "deepseek"
   | "gemini"
   | "openai"
-  | "openai-responses";
+  | "openai-responses"
+  | "grok";
 
 export function createProvider(
   name: ProviderName,
@@ -23,6 +25,8 @@ export function createProvider(
       return new OpenAIProvider(config);
     case "openai-responses":
       return new OpenAIResponsesProvider(config);
+    case "grok":
+      return new GrokProvider(config);
     default: {
       const _exhaustive: never = name;
       throw new Error(`Unknown provider: ${_exhaustive as string}`);

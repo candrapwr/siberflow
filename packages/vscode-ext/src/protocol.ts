@@ -32,7 +32,7 @@ export type ViewToExt =
   | { kind: "command"; command: "new" | "load" | "delete" | "clearAll" | "usage" | "tools" | "settings" }
   | { kind: "save_settings"; values: SettingsValues; apiKey: string | null };
 
-export type ProviderName = "deepseek" | "gemini" | "openai" | "openai-responses";
+export type ProviderName = "deepseek" | "gemini" | "openai" | "openai-responses" | "grok";
 
 export interface SettingsValues {
   provider: ProviderName;

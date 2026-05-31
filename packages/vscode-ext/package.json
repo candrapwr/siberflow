@@ -1,6 +1,6 @@
 {
   "name": "siberflow-chat",
-  "version": "0.1.1",
+  "version": "0.2.1",
   "displayName": "Siberflow",
   "description": "AI chat sidebar with multi-provider, tool calling, sandboxed file ops, and task checklists.",
   "publisher": "DatasiberLab",
@@ -10,8 +10,20 @@
     "type": "git",
     "url": "https://github.com/candrapwr/siberflow"
   },
-  "categories": ["Other", "Programming Languages"],
-  "keywords": ["ai", "chat", "agent", "deepseek", "gemini", "openai", "codex", "assistant"],
+  "categories": [
+    "Other",
+    "Programming Languages"
+  ],
+  "keywords": [
+    "ai",
+    "chat",
+    "agent",
+    "deepseek",
+    "gemini",
+    "openai",
+    "codex",
+    "assistant"
+  ],
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -39,21 +51,51 @@
       ]
     },
     "commands": [
-      { "command": "siberflow.openChat", "title": "Siberflow: Open Chat" },
-      { "command": "siberflow.newSession", "title": "Siberflow: New Session" },
-      { "command": "siberflow.loadSession", "title": "Siberflow: Load Session" },
-      { "command": "siberflow.deleteSession", "title": "Siberflow: Delete Session" },
-      { "command": "siberflow.clearAllSessions", "title": "Siberflow: Clear All Sessions" },
-      { "command": "siberflow.showUsage", "title": "Siberflow: Show Usage" },
-      { "command": "siberflow.showTools", "title": "Siberflow: List Tools" },
-      { "command": "siberflow.openSettings", "title": "Siberflow: Open Settings" }
+      {
+        "command": "siberflow.openChat",
+        "title": "Siberflow: Open Chat"
+      },
+      {
+        "command": "siberflow.newSession",
+        "title": "Siberflow: New Session"
+      },
+      {
+        "command": "siberflow.loadSession",
+        "title": "Siberflow: Load Session"
+      },
+      {
+        "command": "siberflow.deleteSession",
+        "title": "Siberflow: Delete Session"
+      },
+      {
+        "command": "siberflow.clearAllSessions",
+        "title": "Siberflow: Clear All Sessions"
+      },
+      {
+        "command": "siberflow.showUsage",
+        "title": "Siberflow: Show Usage"
+      },
+      {
+        "command": "siberflow.showTools",
+        "title": "Siberflow: List Tools"
+      },
+      {
+        "command": "siberflow.openSettings",
+        "title": "Siberflow: Open Settings"
+      }
     ],
     "configuration": {
       "title": "Siberflow",
       "properties": {
         "siberflow.provider": {
           "type": "string",
-          "enum": ["deepseek", "gemini", "openai", "openai-responses"],
+          "enum": [
+            "deepseek",
+            "gemini",
+            "openai",
+            "openai-responses",
+            "grok"
+          ],
           "default": "deepseek",
           "description": "Active LLM provider"
         },
@@ -62,12 +104,30 @@
           "default": "",
           "description": "Model override (leave empty for provider default)"
         },
-        "siberflow.contextOptimize": { "type": "boolean", "default": false },
-        "siberflow.tasks": { "type": "boolean", "default": false },
-        "siberflow.autoContinue": { "type": "boolean", "default": true },
-        "siberflow.hideTools": { "type": "boolean", "default": false },
-        "siberflow.maxIterations": { "type": "number", "default": 50 },
-        "siberflow.debug": { "type": "boolean", "default": false }
+        "siberflow.contextOptimize": {
+          "type": "boolean",
+          "default": true
+        },
+        "siberflow.tasks": {
+          "type": "boolean",
+          "default": true
+        },
+        "siberflow.autoContinue": {
+          "type": "boolean",
+          "default": true
+        },
+        "siberflow.hideTools": {
+          "type": "boolean",
+          "default": true
+        },
+        "siberflow.maxIterations": {
+          "type": "number",
+          "default": 50
+        },
+        "siberflow.debug": {
+          "type": "boolean",
+          "default": false
+        }
       }
     }
   },
