@@ -1,10 +1,11 @@
 {
   "name": "siberflow-chat",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "Siberflow",
   "description": "AI chat sidebar with multi-provider, tool calling, sandboxed file ops, and task checklists.",
-  "publisher": "siberflow",
+  "publisher": "DatasiberLab",
   "license": "MIT",
+  "icon": "resources/icon.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/candrapwr/siberflow"
@@ -73,7 +74,8 @@
   "scripts": {
     "build": "node esbuild.config.mjs",
     "watch": "node esbuild.config.mjs --watch",
-    "package": "npm run build && vsce package --no-dependencies",
+    "package": "npm run build && vsce package --no-dependencies --allow-package-all-secrets",
+    "publish": "npm run build && vsce publish --no-dependencies --allow-package-all-secrets",
     "clean": "rm -rf dist *.vsix"
   },
   "dependencies": {
