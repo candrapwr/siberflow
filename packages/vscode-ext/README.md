@@ -1,6 +1,6 @@
 # Siberflow
 
-AI chat sidebar untuk VSCode. Multi-provider (DeepSeek, Gemini, OpenAI), tool calling sandboxed, task checklist, session persistence.
+AI chat sidebar untuk VSCode. Multi-provider (DeepSeek, Gemini, OpenAI, xAI Grok), tool calling sandboxed, task checklist, session persistence.
 
 ## Fitur
 
@@ -24,14 +24,18 @@ AI chat sidebar untuk VSCode. Multi-provider (DeepSeek, Gemini, OpenAI), tool ca
 
 Buka panel settings via tombol ⚙ di topbar, atau VSCode preferences → cari "Siberflow":
 
-- `siberflow.provider` — `deepseek` / `gemini` / `openai` / `openai-responses`
-- `siberflow.model` — override model (kosong = default provider)
-- `siberflow.tasks` — aktifkan task checklist tool
-- `siberflow.contextOptimize` — buang tool history turn lama
-- `siberflow.autoContinue` — auto-sambung respons kepotong (default ON)
-- `siberflow.hideTools` — sembunyikan detail tool call (spinner only)
-- `siberflow.maxIterations` — batas tool loop per turn (default 50)
-- `siberflow.debug` — verbose logging ke stderr
+| Setting | Default | Keterangan |
+|---|---|---|
+| `siberflow.provider` | `deepseek` | `deepseek` / `gemini` / `openai` / `openai-responses` / `grok` |
+| `siberflow.model` | (provider default) | Override model — kosong = default tiap provider |
+| `siberflow.tasks` | **`true`** | Aktifkan task checklist tool |
+| `siberflow.contextOptimize` | **`true`** | Buang tool history turn lama |
+| `siberflow.autoContinue` | `true` | Auto-sambung respons kepotong |
+| `siberflow.hideTools` | **`true`** | Sembunyikan detail tool call (spinner only) |
+| `siberflow.maxIterations` | `50` | Batas tool loop per turn |
+| `siberflow.debug` | `false` | Verbose logging ke stderr |
+
+> Empat opsi default ON di VSCode (tasks, optimize, hideTools, autoContinue) untuk UX terbaik out-of-the-box. Bisa di-disable per kebutuhan via settings panel.
 
 ## Requirements
 
