@@ -11,5 +11,6 @@ webview/**
 *.vsix
 node_modules/**
 !resources/**
+!LICENSE
 !node_modules/@siberflow/core/dist/**
 !node_modules/marked/**
