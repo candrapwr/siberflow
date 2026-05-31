@@ -100,5 +100,7 @@ function apiKeyEnvVar(provider: ProviderName): string {
     case "openai":
     case "openai-responses":
       return "OPENAI_API_KEY";
+    case "grok":
+      return "XAI_API_KEY";
   }
 }

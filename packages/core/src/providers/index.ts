@@ -5,3 +5,4 @@ export { DeepSeekProvider } from "./deepseek.js";
 export { GeminiProvider } from "./gemini.js";
 export { OpenAIProvider } from "./openai.js";
 export { OpenAIResponsesProvider } from "./openai-responses.js";
+export { GrokProvider } from "./grok.js";
