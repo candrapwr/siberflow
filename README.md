@@ -1,6 +1,6 @@
 # Siberflow
 
-AI platform dengan dukungan multi-provider, tool calling streaming, sandbox file, persistensi multi-session, dan task checklist. Interface saat ini: **CLI** dan **VSCode extension** (sidebar panel). Web menyusul.
+AI platform dengan dukungan multi-provider, tool calling streaming, sandbox file, akses database, persistensi multi-session, dan task checklist. Interface saat ini: **CLI** dan **VSCode extension** (sidebar panel). Web menyusul.
 
 ## Provider yang didukung
 
@@ -14,7 +14,7 @@ AI platform dengan dukungan multi-provider, tool calling streaming, sandbox file
 
 npm workspaces monorepo.
 
-- `packages/core` — agent loop, provider adapter, tool registry, session store, context optimize, task store
+- `packages/core` — agent loop, provider adapter, tool registry, file/db tools, session store, context optimize, task store
 - `packages/cli` — REPL interaktif, slash commands, ASCII banner, streaming render
 - `packages/vscode-ext` — VSCode extension dengan sidebar chat panel, settings UI, markdown render
 
@@ -82,7 +82,8 @@ Update versi: edit `version` di `packages/vscode-ext/package.json`, lalu `npm ru
 ## Fitur ringkas
 
 - **Streaming response** — token muncul real-time, support markdown
-- **Tool calling sandbox** — `read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`, `exec` — semua sandboxed ke project dir
+- **File dan shell tools** — `read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`, `exec`
+- **Database query tool** — `db_query` mendukung `mysql`, `postgresql`, dan `sqlite`; query bebas, optional `params`, SQLite path tetap dibatasi ke project dir
 - **Task checklist** — opt-in via env / settings; AI maintain checklist multi-step yang bisa di-resume setelah Ctrl+C atau session restart
 - **Context optimization** — buang tool history dari turn lama (opt-in); current task tetap utuh
 - **Auto-continue** — sambung otomatis respons yang kepotong max_tokens
