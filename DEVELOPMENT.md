@@ -2,7 +2,12 @@
 
 Referensi teknis untuk developer yang akan memperluas atau memodifikasi siberflow.
 
-Stack: TypeScript (ESM, NodeNext), Node 20+, npm workspaces. Zero runtime dependency di `@siberflow/core`.
+Stack: TypeScript (ESM, NodeNext), Node 20+, npm workspaces.
+
+Runtime dependencies di `@siberflow/core` saat ini:
+- `mysql2` untuk MySQL
+- `pg` untuk PostgreSQL
+- `sqlite3` untuk SQLite
 
 ## Repository
 
@@ -156,6 +161,11 @@ interface ToolContext {
 
 Tool return string yang akan dikirim balik ke LLM sebagai `tool` message content. Throw `Error` untuk kegagalan — `ToolRegistry.execute()` yang menangkap & convert ke "Error: ..." string.
 
+Default registry saat ini memuat tiga kategori tool:
+- file tools: `read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`
+- cli tool: `exec`
+- database tool: `db_query`
+
 ### Database tool
 
 Tool `db_query` memberi akses query SQL langsung ke:
@@ -173,6 +183,32 @@ Catatan implementasi:
 - Output dikembalikan sebagai JSON string berisi ringkasan hasil (`rows`, `rowCount`, `command`, `changes`, `lastID`, dll sesuai engine)
 - Hasil row dibatasi preview `200` row agar context tidak meledak
 - SQLite path tetap lewat `resolveWithin()` sehingga file DB harus berada di dalam project directory
+- `sqlite3` di-load secara lazy via dynamic `import()` hanya saat `engine="sqlite"` dipakai. Ini mencegah startup crash pada host yang tidak kompatibel dengan native binary SQLite
+- Pada Linux dengan glibc lebih tua, MySQL/PostgreSQL tetap bisa dipakai walau SQLite gagal load. Error SQLite akan muncul saat tool dipanggil, bukan saat app boot
+- Jika deployment Linux gagal dengan error `GLIBC_x.y not found` dari `node_sqlite3.node`, rebuild di mesin target: `npm rebuild sqlite3 --build-from-source`
+
+Contoh argumen:
+
+```json
+{
+  "engine": "mysql",
+  "host": "127.0.0.1",
+  "user": "root",
+  "password": "secret",
+  "database": "app_db",
+  "query": "select id, email from users where status = ? limit 10",
+  "params": ["active"]
+}
+```
+
+```json
+{
+  "engine": "sqlite",
+  "path": "data/app.db",
+  "query": "update jobs set status = ? where id = ?",
+  "params": ["done", 42]
+}
+```
 
 ### Path sandbox
 
@@ -536,7 +572,7 @@ Perlu juga: marketplace icon PNG 128×128 (`resources/icon.png` + field `icon` d
 | Script | Aksi |
 |---|---|
 | `npm install` | resolve workspaces |
-| `npm run build` | core → cli (urutan eksplisit, bukan alphabetical) |
+| `npm run build` | core → cli → vscode-ext (urutan eksplisit, bukan alphabetical) |
 | `npm run dev:cli` | tsx (no rebuild) — paling cepat untuk iterasi |
 | `npm run cli` | run dari `dist/` (perlu build dulu) |
 | `npm run clean` | hapus semua `dist/` |
@@ -593,6 +629,11 @@ Setelah file provider dibuat:
 2. Tambah ke array di `<category>/index.ts` (atau buat kategori baru di `tools/index.ts`).
 
 **Wajib** sandbox semua path user-provided lewat `resolveWithin`.
+
+Contoh kategori baru yang sudah ada di repo:
+- `tools/file/*` untuk operasi filesystem
+- `tools/cli/*` untuk shell command
+- `tools/db/*` untuk akses database
 
 ### Interface baru (web/vscode)
 
