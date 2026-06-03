@@ -1,8 +1,8 @@
 import mysql from "mysql2/promise";
 import pg from "pg";
-import sqlite3 from "sqlite3";
 import type { Tool } from "../base.js";
 import { resolveWithin } from "../file/path-utils.js";
+import type sqlite3 from "sqlite3";
 
 type Engine = "mysql" | "postgresql" | "sqlite";
 
@@ -199,6 +199,7 @@ async function runPostgresQuery(args: PostgresArgs): Promise<string> {
 
 async function runSqliteQuery(args: SqliteArgs, projectDir: string): Promise<string> {
   const fullPath = await resolveWithin(projectDir, args.path);
+  const sqlite3 = await loadSqlite3();
   const database = new sqlite3.Database(fullPath);
 
   try {
@@ -315,4 +316,22 @@ function sqliteAll(
       resolve(rows);
     });
   });
+}
+
+async function loadSqlite3(): Promise<typeof sqlite3> {
+  try {
+    const mod = await import("sqlite3");
+    return mod.default;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes("GLIBC_")) {
+      throw new Error(
+        `failed to load sqlite3 native binding: ${message}. ` +
+          "This server's glibc is older than the sqlite3 binary that was installed. " +
+          "Rebuild sqlite3 on the target machine with `npm rebuild sqlite3 --build-from-source`, " +
+          "or install dependencies on that server so a compatible native binary is produced.",
+      );
+    }
+    throw err;
+  }
 }
