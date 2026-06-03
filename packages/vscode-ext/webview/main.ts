@@ -33,6 +33,16 @@ interface ToolElements {
   argsEl: HTMLElement | null;
   resultEl: HTMLElement | null;
   argsBuffer: string;
+  name?: string;
+  completed?: boolean;
+}
+
+interface HiddenToolSummary {
+  root: HTMLElement;
+  headEl: HTMLElement;
+  metaEl: HTMLElement;
+  names: string[];
+  completed: number;
 }
 
 const state: UIState = {
@@ -53,15 +63,16 @@ const root = document.getElementById("root")!;
 
 // Element references so updates can target panels without wiping #messages.
 let mounted = false;
-let topbarSessionLabel: HTMLElement | null = null;
 let messagesEl: HTMLElement | null = null;
 let pendingEl: HTMLElement | null = null;
+let emptyStateEl: HTMLElement | null = null;
 // Pinned task panel sits between messages and the composer. Collapsible.
 let taskPanelEl: HTMLElement | null = null;
 let taskPanelCollapsed = false;
 // The text segment we are currently streaming into. Reset to null whenever
 // a tool call interrupts so the next content stream gets its own segment.
 let currentTextEl: HTMLElement | null = null;
+let hiddenToolSummary: HiddenToolSummary | null = null;
 
 function mount(): void {
   if (mounted) return;
@@ -71,6 +82,8 @@ function mount(): void {
   messagesEl = document.createElement("div");
   messagesEl.className = "messages";
   messagesEl.id = "messages";
+  emptyStateEl = renderEmptyState();
+  messagesEl.appendChild(emptyStateEl);
   root.appendChild(messagesEl);
   // Pinned panel above composer — hidden until tasks exist.
   taskPanelEl = document.createElement("div");
@@ -83,14 +96,7 @@ function mount(): void {
 }
 
 function updateTopbar(): void {
-  if (!topbarSessionLabel) return;
-  topbarSessionLabel.textContent = sessionDisplay();
-}
-
-function sessionDisplay(): string {
-  if (!state.session) return "(no session)";
-  const name = state.session.name ?? "(unnamed)";
-  return `${name} · ${state.session.messageCount} msgs`;
+  // Topbar is visual-only now: brand + menu.
 }
 
 /**
@@ -163,22 +169,10 @@ function renderTopbar(): HTMLElement {
   const el = document.createElement("div");
   el.className = "topbar";
 
-  const sessionBtn = document.createElement("button");
-  sessionBtn.className = "topbar-btn topbar-session";
-  sessionBtn.title = "Session & connection info";
-  const labelSpan = document.createElement("b");
-  labelSpan.textContent = sessionDisplay();
-  topbarSessionLabel = labelSpan;
-  sessionBtn.appendChild(labelSpan);
-  const chev = document.createElement("span");
-  chev.textContent = "▾";
-  chev.style.opacity = "0.5";
-  sessionBtn.appendChild(chev);
-  sessionBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    openInfoPopover(sessionBtn);
-  });
-  el.appendChild(sessionBtn);
+  const brand = document.createElement("div");
+  brand.className = "topbar-brand";
+  brand.innerHTML = `<span class="brand-mark"></span><span class="brand-name">Siberflow</span>`;
+  el.appendChild(brand);
 
   const menuBtn = document.createElement("button");
   menuBtn.className = "topbar-btn topbar-menu";
@@ -227,23 +221,6 @@ function openCmdPopover(anchor: HTMLElement): void {
     pop.appendChild(btn);
   }
   positionAndShow(pop, anchor, "right");
-}
-
-function openInfoPopover(anchor: HTMLElement): void {
-  closePopovers();
-  if (!state.banner) return;
-  const pop = document.createElement("div");
-  pop.className = "popover popover-info";
-  pop.dataset.kind = "info";
-  const rows: Array<[string, string]> = [
-    ["version", `v${state.banner.version}`],
-    ["provider", `${state.banner.provider}/${state.banner.model}`],
-    ["session", sessionDisplay()],
-  ];
-  pop.innerHTML = rows
-    .map(([k, v]) => `<div class="row"><span class="k">${escape(k)}</span><span>${escape(v)}</span></div>`)
-    .join("");
-  positionAndShow(pop, anchor, "left");
 }
 
 function positionAndShow(pop: HTMLElement, anchor: HTMLElement, align: "left" | "right"): void {
@@ -393,6 +370,8 @@ function showSettingsModal(
 function renderComposer(): HTMLElement {
   const el = document.createElement("div");
   el.className = "composer";
+  const shell = document.createElement("div");
+  shell.className = "composer-shell";
   const ta = document.createElement("textarea");
   ta.placeholder = "Message…";
   ta.title = "Enter to send · Shift+Enter for newline";
@@ -413,8 +392,13 @@ function renderComposer(): HTMLElement {
   btn.title = "Send (Enter)";
   btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>`;
   btn.onclick = submit;
-  el.appendChild(ta);
-  el.appendChild(btn);
+  shell.appendChild(ta);
+  shell.appendChild(btn);
+  el.appendChild(shell);
+  const hint = document.createElement("div");
+  hint.className = "composer-hint";
+  hint.textContent = "Enter to send  •  Shift+Enter for newline";
+  el.appendChild(hint);
   return el;
 }
 
@@ -448,6 +432,7 @@ function setBusy(b: boolean): void {
 function appendUserMessage(text: string): void {
   const messages = document.getElementById("messages");
   if (!messages) return;
+  syncEmptyState(false);
   const el = document.createElement("div");
   el.className = "msg user";
   el.innerHTML = `<div class="role">you</div><div class="body"></div>`;
@@ -459,6 +444,7 @@ function appendUserMessage(text: string): void {
 /** Render a completed assistant message from session history (already final, no streaming). */
 function appendAssistantHistory(text: string): void {
   if (!messagesEl) return;
+  syncEmptyState(false);
   const el = document.createElement("div");
   el.className = "msg assistant";
   el.innerHTML = `<div class="role">ai</div><div class="body">${marked.parse(text)}</div>`;
@@ -467,6 +453,7 @@ function appendAssistantHistory(text: string): void {
 
 function startAssistant(): void {
   if (!messagesEl) return;
+  syncEmptyState(false);
   const el = document.createElement("div");
   el.className = "msg assistant";
   el.innerHTML = `<div class="role">ai</div><div class="body"><span class="thinking-dot"></span></div>`;
@@ -474,6 +461,7 @@ function startAssistant(): void {
   state.currentAssistant = el;
   state.currentAssistantText = "";
   state.currentTools.clear();
+  hiddenToolSummary = null;
   currentTextEl = null;
   scrollToBottom();
 }
@@ -529,16 +517,28 @@ function startToolCall(index: number, name: string): void {
   finalizeCurrentTextEl();
 
   const root = document.createElement("div");
-  root.className = state.hideTools ? "tool hidden-mode" : "tool";
+  root.className = state.hideTools ? "tool hidden-mode hidden-summary" : "tool";
   const head = document.createElement("div");
   head.className = "head";
-  head.innerHTML = state.hideTools
-    ? `<span class="spin">◴</span> ${escape(name)}…`
-    : `↳ tool ${escape(name)}`;
-  root.appendChild(head);
 
   let argsEl: HTMLElement | null = null;
-  if (!state.hideTools) {
+  if (state.hideTools) {
+    const summary = ensureHiddenToolSummary(body);
+    summary.names.push(name);
+    renderHiddenToolSummary();
+    state.currentTools.set(index, {
+      root: summary.root,
+      argsEl: null,
+      resultEl: null,
+      argsBuffer: "",
+      name,
+      completed: false,
+    });
+    scrollToBottom();
+    return;
+  } else {
+    head.innerHTML = `↳ tool ${escape(name)}`;
+    root.appendChild(head);
     argsEl = document.createElement("div");
     argsEl.className = "args";
     root.appendChild(argsEl);
@@ -551,6 +551,8 @@ function startToolCall(index: number, name: string): void {
     argsEl,
     resultEl: null,
     argsBuffer: "",
+    name,
+    completed: false,
   });
   scrollToBottom();
 }
@@ -566,16 +568,18 @@ function showToolResult(index: number, name: string, result: string): void {
   const t = state.currentTools.get(index);
   if (!t) return;
   if (state.hideTools) {
-    const head = t.root.querySelector(".head") as HTMLElement;
-    head.textContent = `✓ ${name}`;
+    if (!t.completed) {
+      t.completed = true;
+      if (hiddenToolSummary) {
+        hiddenToolSummary.completed += 1;
+        renderHiddenToolSummary();
+      }
+    }
     return;
   }
   const r = document.createElement("div");
   r.className = "result";
-  const preview =
-    result.length > 800
-      ? result.slice(0, 800) + `\n…[+${result.length - 800} bytes]`
-      : result;
+  const preview = formatToolResultPreview(name, t.argsBuffer, result);
   r.textContent = preview;
   t.root.appendChild(r);
   t.resultEl = r;
@@ -585,6 +589,7 @@ function showToolResult(index: number, name: string, result: string): void {
 function showNotice(level: "info" | "error" | "warn", message: string): void {
   const messages = document.getElementById("messages");
   if (!messages) return;
+  syncEmptyState(false);
   const el = document.createElement("div");
   el.className = `notice ${level}`;
   el.textContent = message;
@@ -619,6 +624,100 @@ function shortenPath(p: string): string {
   const parts = p.split("/").filter(Boolean);
   if (parts.length <= 2) return p;
   return ".../" + parts.slice(-2).join("/");
+}
+
+function renderEmptyState(): HTMLElement {
+  const el = document.createElement("div");
+  el.className = "empty-state";
+  el.innerHTML = `
+    <div class="empty-title">Ask for code edits, file inspection, shell commands, or database queries.</div>
+    <div class="empty-copy">Tools: file ops, <code>exec</code>, and <code>db_query</code>.</div>
+  `;
+  return el;
+}
+
+function syncEmptyState(forceVisible?: boolean): void {
+  if (!messagesEl || !emptyStateEl) return;
+  if (forceVisible === true) {
+    if (!messagesEl.contains(emptyStateEl)) messagesEl.prepend(emptyStateEl);
+    emptyStateEl.style.display = "";
+    return;
+  }
+
+  const hasContent = !!messagesEl.querySelector(".msg, .notice, .pending");
+  if (hasContent) {
+    emptyStateEl.style.display = "none";
+  } else {
+    if (!messagesEl.contains(emptyStateEl)) messagesEl.prepend(emptyStateEl);
+    emptyStateEl.style.display = "";
+  }
+}
+
+function ensureHiddenToolSummary(body: HTMLElement): HiddenToolSummary {
+  if (hiddenToolSummary) return hiddenToolSummary;
+
+  const root = document.createElement("div");
+  root.className = "tool hidden-mode hidden-summary";
+  const headEl = document.createElement("div");
+  headEl.className = "head";
+  const metaEl = document.createElement("div");
+  metaEl.className = "summary-meta";
+  root.appendChild(headEl);
+  root.appendChild(metaEl);
+  body.appendChild(root);
+
+  hiddenToolSummary = {
+    root,
+    headEl,
+    metaEl,
+    names: [],
+    completed: 0,
+  };
+  return hiddenToolSummary;
+}
+
+function renderHiddenToolSummary(): void {
+  if (!hiddenToolSummary) return;
+  const total = hiddenToolSummary.names.length;
+  const remaining = total - hiddenToolSummary.completed;
+  const recent = summarizeToolNames(hiddenToolSummary.names);
+
+  hiddenToolSummary.headEl.innerHTML =
+    remaining > 0
+      ? `<span class="spin">◴</span> tools ${hiddenToolSummary.completed}/${total}`
+      : `✓ tools ${total}`;
+  hiddenToolSummary.metaEl.textContent =
+    total === 0
+      ? ""
+      : remaining > 0
+        ? `${recent} • running ${remaining} more step${remaining > 1 ? "s" : ""}`
+        : recent;
+}
+
+function summarizeToolNames(names: string[]): string {
+  const unique = names.filter((name, idx) => names.indexOf(name) === idx);
+  if (unique.length <= 3) return unique.join(" • ");
+  return `${unique.slice(0, 3).join(" • ")} • +${unique.length - 3}`;
+}
+
+function formatToolResultPreview(name: string, rawArgs: string, result: string): string {
+  if (name === "read_file") {
+    const path = extractPathFromToolArgs(rawArgs);
+    return path ? `read ${path}` : "read file";
+  }
+
+  return result.length > 800
+    ? result.slice(0, 800) + `\n…[+${result.length - 800} bytes]`
+    : result;
+}
+
+function extractPathFromToolArgs(rawArgs: string): string | null {
+  try {
+    const parsed = JSON.parse(rawArgs) as { path?: unknown };
+    return typeof parsed.path === "string" && parsed.path.length > 0 ? parsed.path : null;
+  } catch {
+    return null;
+  }
 }
 
 // ----- message dispatch from extension -----
@@ -685,6 +784,10 @@ window.addEventListener("message", (ev) => {
       if (prevId !== nextId) {
         // Switched to a different session (or wiped) — clear the visible chat.
         if (messagesEl) messagesEl.innerHTML = "";
+        if (messagesEl && emptyStateEl) {
+          messagesEl.appendChild(emptyStateEl);
+          syncEmptyState(true);
+        }
         pendingEl = null;
         state.currentAssistant = null;
         state.currentAssistantText = "";
