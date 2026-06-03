@@ -474,6 +474,11 @@ npm run package:vscode      # dari root
 cd packages/vscode-ext && npm run package
 ```
 
+```bash
+cd packages/vscode-ext
+npx vsce publish patch --no-dependencies --allow-package-all-secrets
+```
+
 `vsce` (di-include sebagai devDep ekstensi, no global install needed) menjalankan `vsce package --no-dependencies` setelah build. Output: `packages/vscode-ext/siberflow-chat-<version>.vsix`, sekitar 40 KB.
 
 Yang ter-bundle di VSIX:
