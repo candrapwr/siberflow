@@ -36,6 +36,9 @@ siberflow/
     │       │   │   ├── path-utils.ts # resolveWithin() — sandbox resolver
     │       │   │   ├── read.ts | write.ts | edit.ts | copy.ts | list.ts
     │       │   │   └── index.ts   # fileTools[]
+    │       │   ├── db/
+    │       │   │   ├── query.ts   # db_query — MySQL / PostgreSQL / SQLite
+    │       │   │   └── index.ts   # dbTools[]
     │       │   ├── cli/
     │       │   │   ├── exec.ts    # shell exec, cwd=projectDir
     │       │   │   └── index.ts
@@ -152,6 +155,24 @@ interface ToolContext {
 ```
 
 Tool return string yang akan dikirim balik ke LLM sebagai `tool` message content. Throw `Error` untuk kegagalan — `ToolRegistry.execute()` yang menangkap & convert ke "Error: ..." string.
+
+### Database tool
+
+Tool `db_query` memberi akses query SQL langsung ke:
+- `mysql`
+- `postgresql`
+- `sqlite`
+
+Schema argumen:
+- Common: `engine`, `query`, optional `params`
+- MySQL/PostgreSQL: `host`, `user`, `password`, `database`, optional `port`
+- SQLite: `path`
+
+Catatan implementasi:
+- Tidak ada pembatasan jenis query; `SELECT`, `INSERT`, `UPDATE`, `DELETE`, DDL, dan syntax engine-specific tetap diteruskan ke driver masing-masing
+- Output dikembalikan sebagai JSON string berisi ringkasan hasil (`rows`, `rowCount`, `command`, `changes`, `lastID`, dll sesuai engine)
+- Hasil row dibatasi preview `200` row agar context tidak meledak
+- SQLite path tetap lewat `resolveWithin()` sehingga file DB harus berada di dalam project directory
 
 ### Path sandbox
 
