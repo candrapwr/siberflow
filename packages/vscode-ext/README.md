@@ -1,48 +1,49 @@
-# Siberflow
+# Siberflow for VSCode
 
-AI chat sidebar untuk VSCode. Multi-provider (DeepSeek, Gemini, OpenAI, xAI Grok), tool calling sandboxed, task checklist, session persistence.
+Siberflow adalah extension chat AI untuk VSCode yang dirancang untuk membantu pekerjaan langsung dari dalam workspace. Extension ini bisa dipakai untuk membaca struktur project, membantu perubahan kode, menjalankan perintah shell, dan menangani pekerjaan bertahap tanpa perlu pindah ke tool lain.
 
-## Fitur
+## Apa yang bisa dilakukan
 
-- **Sidebar chat panel** — icon Siberflow di activity bar, klik untuk buka
-- **Streaming response** dengan markdown rendering
-- **Tool calling** — `read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`, `exec` — semua sandboxed ke workspace folder
-- **Task checklist** opt-in — AI maintain progress checklist multi-step yang survive Ctrl+C dan restart
-- **Context optimization** — buang tool noise turn lama
-- **Auto-continue** — sambung otomatis respons yang kepotong max_tokens
-- **Multi-session** — sesi tersimpan di `~/.siberflow/sessions/` per project
-- **API key** encrypted via VSCode SecretStorage — tidak perlu `.env`
-- **Cross-compat** dengan CLI Siberflow — sesi yang dibuat di CLI bisa di-load di VSCode dan sebaliknya
+- Chat AI langsung dari sidebar VSCode
+- Membantu baca, ubah, dan menulis file di project
+- Menjalankan perintah shell dari konteks workspace
+- Membantu query database saat dibutuhkan
+- Menyimpan histori session per project
+- Melanjutkan percakapan lama tanpa mulai dari nol
 
-## Penggunaan
+## Cocok dipakai untuk
 
-1. Klik icon Siberflow di activity bar kiri
-2. Pertama kali: settings panel auto-muncul minta API key + provider
-3. Pilih atau buat sesi → mulai chat
+- Menjelaskan file atau bagian kode tertentu
+- Membantu refactor kecil sampai menengah
+- Membuat atau merapikan file konfigurasi
+- Membantu debugging dari output command
+- Membantu langkah kerja yang butuh beberapa tahap
 
-## Konfigurasi
+## Cara pakai
 
-Buka panel settings via tombol ⚙ di topbar, atau VSCode preferences → cari "Siberflow":
+1. Buka folder project di VSCode.
+2. Klik icon Siberflow di sidebar kiri.
+3. Saat pertama kali dipakai, isi provider dan API key.
+4. Mulai chat seperti biasa dari panel extension.
 
-| Setting | Default | Keterangan |
-|---|---|---|
-| `siberflow.provider` | `deepseek` | `deepseek` / `gemini` / `openai` / `openai-responses` / `grok` |
-| `siberflow.model` | (provider default) | Override model — kosong = default tiap provider |
-| `siberflow.tasks` | **`true`** | Aktifkan task checklist tool |
-| `siberflow.contextOptimize` | **`true`** | Buang tool history turn lama |
-| `siberflow.autoContinue` | `true` | Auto-sambung respons kepotong |
-| `siberflow.hideTools` | **`true`** | Sembunyikan detail tool call (spinner only) |
-| `siberflow.maxIterations` | `50` | Batas tool loop per turn |
-| `siberflow.debug` | `false` | Verbose logging ke stderr |
+## Ringkas fitur utama
 
-> Empat opsi default ON di VSCode (tasks, optimize, hideTools, autoContinue) untuk UX terbaik out-of-the-box. Bisa di-disable per kebutuhan via settings panel.
+- Mendukung beberapa provider AI
+- Response tampil streaming di panel chat
+- Punya tool untuk file, shell, dan database
+- Session tersimpan per project
+- Bisa dipakai untuk pekerjaan coding yang berulang atau bertahap
 
-## Requirements
+## Catatan
 
-- VSCode 1.85+
-- Workspace folder terbuka (untuk sandbox tools)
-- API key dari provider yang dipakai
+- Extension ini bekerja dari konteks folder workspace yang sedang dibuka
+- Beberapa fitur bergantung pada provider/model yang Anda pilih
+- Untuk penggunaan yang lebih lanjut, Anda bisa menyesuaikan setting langsung dari panel extension atau Settings VSCode
 
-## Repository
+## Detail lebih lanjut
 
-[github.com/candrapwr/siberflow](https://github.com/candrapwr/siberflow)
+Untuk dokumentasi teknis, struktur project, build, packaging, dan detail implementasi:
+
+- GitHub / repository utama: [Siberflow](https://github.com/candrapwr/siberflow)
+- README root repo: [../../README.md](../../README.md)
+- Developer reference: [../../DEVELOPMENT.md](../../DEVELOPMENT.md)

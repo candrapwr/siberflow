@@ -1,11 +1,11 @@
 {
   "name": "siberflow-chat",
-  "version": "0.2.1",
+  "version": "0.3.1",
   "displayName": "Siberflow",
   "description": "AI chat sidebar with multi-provider, tool calling, sandboxed file ops, and task checklists.",
   "publisher": "DatasiberLab",
   "license": "MIT",
-  "icon": "resources/icon.png",
+  "icon": "resources/siberflow.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/candrapwr/siberflow"
@@ -118,7 +118,7 @@
         },
         "siberflow.hideTools": {
           "type": "boolean",
-          "default": true
+          "default": false
         },
         "siberflow.maxIterations": {
           "type": "number",
