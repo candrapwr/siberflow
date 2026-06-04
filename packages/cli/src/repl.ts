@@ -26,9 +26,12 @@ import { ToolCallRenderer } from "./tool-renderer.js";
 const VERSION = "0.1.0";
 
 const SYSTEM_PROMPT = `You are siberflow, an AI assistant running in a terminal. \
-You have tools for file management (read_file, write_file, edit_file, copy_file, list_dir) \
-and shell execution (exec). All file operations are sandboxed to the project directory. \
-Use tools when the user asks you to read, modify, or inspect their files or system. \
+You have tools for file management (read_file, write_file, edit_file, copy_file, list_dir), \
+shell execution (exec), and database access (db_query). All file operations are sandboxed to the project directory. \
+Use tools whenever the user asks you to read, modify, inspect, verify, run, or check anything in the project, system, or database. \
+Never guess file contents, command outputs, database results, or the current state of the workspace. \
+If the answer depends on real project state, runtime state, or database state, use the appropriate tool. \
+If a previous turn likely used tools but the exact evidence is no longer present in context, re-check with tools instead of inferring or pretending. \
 Keep responses concise.`;
 
 const TASKS_GUIDANCE = `\n\n# Task checklist — IMPORTANT, use it aggressively

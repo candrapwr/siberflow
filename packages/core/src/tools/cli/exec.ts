@@ -6,7 +6,8 @@ interface Args {
   timeout_ms?: number;
 }
 
-const DEFAULT_TIMEOUT = 120_000;
+const DEFAULT_TIMEOUT = 30_000;
+const FORCE_KILL_GRACE_MS = 5_000;
 const MAX_OUTPUT = 200_000;
 
 export const execTool: Tool = {
@@ -29,7 +30,7 @@ export const execTool: Tool = {
   },
   async execute(args, ctx) {
     const { command, timeout_ms } = args as Args;
-    const timeout = timeout_ms ?? DEFAULT_TIMEOUT;
+    const timeout = Math.min(timeout_ms ?? DEFAULT_TIMEOUT, 600_000);
 
     return await new Promise<string>((resolvePromise) => {
       const child = spawn("/bin/sh", ["-c", command], {
@@ -40,10 +41,18 @@ export const execTool: Tool = {
       let stdout = "";
       let stderr = "";
       let killed = false;
+      let forceKilled = false;
+      let forceKillTimer: NodeJS.Timeout | null = null;
 
       const timer = setTimeout(() => {
         killed = true;
         child.kill("SIGTERM");
+        forceKillTimer = setTimeout(() => {
+          if (child.exitCode === null && child.signalCode === null) {
+            forceKilled = true;
+            child.kill("SIGKILL");
+          }
+        }, FORCE_KILL_GRACE_MS);
       }, timeout);
 
       child.stdout.on("data", (chunk: Buffer) => {
@@ -55,8 +64,14 @@ export const execTool: Tool = {
 
       child.on("close", (code) => {
         clearTimeout(timer);
+        if (forceKillTimer) clearTimeout(forceKillTimer);
         const parts: string[] = [];
         if (killed) parts.push(`(killed after ${timeout}ms timeout)`);
+        if (forceKilled) {
+          parts.push(
+            `(force-killed with SIGKILL after ${FORCE_KILL_GRACE_MS}ms grace period)`,
+          );
+        }
         parts.push(`exit code: ${code ?? "null"}`);
         if (stdout) parts.push(`--- stdout ---\n${truncate(stdout)}`);
         if (stderr) parts.push(`--- stderr ---\n${truncate(stderr)}`);
