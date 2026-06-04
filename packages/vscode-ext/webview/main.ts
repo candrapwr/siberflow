@@ -320,8 +320,10 @@ function showSettingsModal(
   document.body.appendChild(backdrop);
 
   // Populate
-  (modal.querySelector("#cfg-provider") as HTMLSelectElement).value = values.provider;
-  (modal.querySelector("#cfg-model") as HTMLInputElement).value = values.model;
+  const providerSelect = modal.querySelector("#cfg-provider") as HTMLSelectElement;
+  const modelInput = modal.querySelector("#cfg-model") as HTMLInputElement;
+  providerSelect.value = values.provider;
+  modelInput.value = values.model;
   (modal.querySelector("#cfg-tasks") as HTMLInputElement).checked = values.tasks;
   (modal.querySelector("#cfg-optimize") as HTMLInputElement).checked = values.contextOptimize;
   (modal.querySelector("#cfg-autocontinue") as HTMLInputElement).checked = values.autoContinue;
@@ -329,11 +331,15 @@ function showSettingsModal(
   (modal.querySelector("#cfg-debug") as HTMLInputElement).checked = values.debug;
   (modal.querySelector("#cfg-max") as HTMLInputElement).value = String(values.maxIterations);
 
+  providerSelect.addEventListener("change", () => {
+    modelInput.value = "";
+  });
+
   modal.querySelector("#cfg-cancel")?.addEventListener("click", closeIfAllowed);
   modal.querySelector("#cfg-save")?.addEventListener("click", () => {
-    const provider = (modal.querySelector("#cfg-provider") as HTMLSelectElement).value as SettingsValues["provider"];
+    const provider = providerSelect.value as SettingsValues["provider"];
     const apiKeyRaw = (modal.querySelector("#cfg-apikey") as HTMLInputElement).value;
-    const model = (modal.querySelector("#cfg-model") as HTMLInputElement).value;
+    const model = modelInput.value;
     const tasks = (modal.querySelector("#cfg-tasks") as HTMLInputElement).checked;
     const contextOptimize = (modal.querySelector("#cfg-optimize") as HTMLInputElement).checked;
     const autoContinue = (modal.querySelector("#cfg-autocontinue") as HTMLInputElement).checked;
@@ -818,10 +824,21 @@ window.addEventListener("message", (ev) => {
       showSettingsModal(msg.values, msg.hasApiKey, msg.mustConfigure);
       break;
     case "history":
+      if (messagesEl) messagesEl.innerHTML = "";
+      if (messagesEl && emptyStateEl) {
+        messagesEl.appendChild(emptyStateEl);
+        syncEmptyState(true);
+      }
+      pendingEl = null;
+      state.currentAssistant = null;
+      state.currentAssistantText = "";
+      state.currentTools.clear();
+      hiddenToolSummary = null;
       for (const m of msg.messages) {
         if (m.role === "user") appendUserMessage(m.content);
         else appendAssistantHistory(m.content);
       }
+      syncEmptyState();
       scrollToBottom();
       break;
   }

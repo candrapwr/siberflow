@@ -188,6 +188,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     values: SettingsValues,
     apiKey: string | null,
   ): Promise<void> {
+    const prevSettings = this.settings;
     const cfg = vscode.workspace.getConfiguration("siberflow");
     const target = vscode.ConfigurationTarget.Global;
     await Promise.all([
@@ -218,6 +219,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     else delete process.env.SIBERFLOW_DEBUG;
 
     if (!this.apiKey) {
+      this.readyForChat = false;
+      this.provider = null;
+      this.registry = null;
+      this.agent = null;
       this.post({
         kind: "settings",
         values,
@@ -226,6 +231,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       });
       this.post({ kind: "error", message: `API key for ${values.provider} required.` });
       return;
+    }
+
+    if (this.current) {
+      this.current.provider = values.provider;
+      this.current.model =
+        values.model.trim().length > 0
+          ? values.model.trim()
+          : createProvider(values.provider, { apiKey: this.apiKey }).defaultModel;
+      this.current.updatedAt = new Date().toISOString();
+      if (!values.tasks) {
+        delete this.current.tasks;
+      } else if (prevSettings.tasks && this.agent) {
+        this.current.tasks = [...this.agent.getTasks()];
+      }
+      saveSessionSync(this.current);
     }
 
     this.rebuildAgent();
@@ -249,6 +269,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
     this.registry = createDefaultRegistry({ tasks: this.settings.tasks });
     this.agent = this.buildAgent();
+    if (this.current) {
+      this.agent.loadHistory(this.current.messages);
+      if (this.settings.tasks && this.current.tasks?.length) {
+        this.agent.loadTasks(this.current.tasks);
+      }
+    }
   }
 
   private buildAgent(): Agent {
@@ -330,21 +356,29 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!this.provider) return;
     this.agent = this.buildAgent();
     const now = new Date().toISOString();
+    const model =
+      this.settings.model.trim().length > 0
+        ? this.settings.model.trim()
+        : this.provider.defaultModel;
     this.current = {
       version: SESSION_FORMAT_VERSION,
       id: newSessionId(),
       name,
       projectDir: this.projectDir,
       provider: this.provider.name,
-      model:
-        this.settings.model.trim().length > 0
-          ? this.settings.model.trim()
-          : this.provider.defaultModel,
+      model,
       createdAt: now,
       updatedAt: now,
       messages: [...this.agent.history()],
       usage: emptyUsage(),
     };
+    saveSessionSync(this.current);
+    if (this.settings.contextOptimize) {
+      const { messages: optimized } = optimizeContext(this.current.messages, {
+        enabled: true,
+      });
+      void saveOptimizedView(this.current, optimized);
+    }
   }
 
   // -------- turn runner --------
@@ -413,12 +447,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private async persistAfterTurn(): Promise<void> {
     if (!this.current || !this.agent) return;
+    const model =
+      this.settings.model.trim().length > 0
+        ? this.settings.model.trim()
+        : this.provider?.defaultModel ?? this.current.model;
     const session: Session = {
       ...this.current,
+      provider: this.provider?.name ?? this.current.provider,
+      model,
       updatedAt: new Date().toISOString(),
       messages: [...this.agent.history()],
       ...(this.settings.tasks ? { tasks: [...this.agent.getTasks()] } : {}),
     };
+    if (!this.settings.tasks) {
+      delete session.tasks;
+    }
     await saveSession(session);
     this.current = session;
     if (this.settings.contextOptimize) {
