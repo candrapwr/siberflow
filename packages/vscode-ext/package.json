@@ -94,7 +94,8 @@
             "gemini",
             "openai",
             "openai-responses",
-            "grok"
+            "grok",
+            "qwen"
           ],
           "default": "deepseek",
           "description": "Active LLM provider"

@@ -33,6 +33,7 @@ siberflow/
     │       │   ├── grok.ts        # extends OpenAICompatibleProvider (xAI)
     │       │   ├── openai.ts      # extends OpenAICompatibleProvider (/v1/chat/completions)
     │       │   ├── openai-responses.ts   # standalone — OpenAI /v1/responses API
+    │       │   ├── qwen.ts        # extends OpenAICompatibleProvider (Alibaba DashScope/MaaS)
     │       │   └── registry.ts    # createProvider(name, config)
     │       ├── tools/
     │       │   ├── base.ts        # interface Tool, ToolContext { projectDir }
@@ -371,7 +372,7 @@ Semua via env. CLI loader (`packages/cli/src/env.ts`) walk-up dari cwd cari `.en
 
 | Variabel | Default | Keterangan |
 |---|---|---|
-| `SIBERFLOW_PROVIDER` | `deepseek` | `deepseek` / `gemini` / `openai` / `openai-responses` / `grok` |
+| `SIBERFLOW_PROVIDER` | `deepseek` | `deepseek` / `gemini` / `openai` / `openai-responses` / `grok` / `qwen` |
 | `SIBERFLOW_MODEL` | provider default | Override model string |
 | `SIBERFLOW_BASE_URL` | provider default | Override endpoint |
 | `SIBERFLOW_PROJECT_DIR` | `INIT_CWD` → `cwd()` | Sandbox root. Absolute / relative / `~/...`. Divalidasi exists. |
@@ -385,6 +386,7 @@ Semua via env. CLI loader (`packages/cli/src/env.ts`) walk-up dari cwd cari `.en
 | `GEMINI_API_KEY` | — | wajib jika `provider=gemini` |
 | `OPENAI_API_KEY` | — | wajib jika `provider=openai` atau `openai-responses` |
 | `XAI_API_KEY` | — | wajib jika `provider=grok` |
+| `DASHSCOPE_API_KEY` | — | wajib jika `provider=qwen` (Alibaba) |
 
 Mapping provider → env var nama API key di `config/index.ts` (`apiKeyEnvVar`). Saat tambah provider, tambah case di sana juga.
 

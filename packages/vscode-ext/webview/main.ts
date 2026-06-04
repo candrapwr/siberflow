@@ -274,6 +274,7 @@ function showSettingsModal(
         <option value="openai">openai (chat completions)</option>
         <option value="openai-responses">openai-responses (/v1/responses)</option>
         <option value="grok">grok (xAI)</option>
+        <option value="qwen">qwen (Alibaba)</option>
       </select>
     </div>
     <div class="form-row">
