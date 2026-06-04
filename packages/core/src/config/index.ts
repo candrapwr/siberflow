@@ -102,5 +102,7 @@ function apiKeyEnvVar(provider: ProviderName): string {
       return "OPENAI_API_KEY";
     case "grok":
       return "XAI_API_KEY";
+    case "qwen":
+      return "DASHSCOPE_API_KEY";
   }
 }
