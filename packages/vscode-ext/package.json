@@ -1,6 +1,6 @@
 {
   "name": "siberflow-chat",
-  "version": "0.4.1",
+  "version": "0.4.7",
   "displayName": "Siberflow",
   "description": "AI chat sidebar with multi-provider, tool calling, sandboxed file ops, and task checklists.",
   "publisher": "DatasiberLab",
