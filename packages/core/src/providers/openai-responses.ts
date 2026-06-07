@@ -67,6 +67,7 @@ export class OpenAIResponsesProvider implements Provider {
         Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify(body),
+      signal: req.signal,
     });
 
     debug(`← openai-responses HTTP ${res.status} ${res.statusText}`);

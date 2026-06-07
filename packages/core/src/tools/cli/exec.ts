@@ -36,6 +36,7 @@ export const execTool: Tool = {
       const child = spawn("/bin/sh", ["-c", command], {
         cwd: ctx.projectDir,
         env: process.env,
+        detached: true,
       });
 
       let stdout = "";
@@ -46,11 +47,11 @@ export const execTool: Tool = {
 
       const timer = setTimeout(() => {
         killed = true;
-        child.kill("SIGTERM");
+        killProcessGroup(child.pid, "SIGTERM");
         forceKillTimer = setTimeout(() => {
           if (child.exitCode === null && child.signalCode === null) {
             forceKilled = true;
-            child.kill("SIGKILL");
+            killProcessGroup(child.pid, "SIGKILL");
           }
         }, FORCE_KILL_GRACE_MS);
       }, timeout);
@@ -85,6 +86,21 @@ export const execTool: Tool = {
     });
   },
 };
+
+function killProcessGroup(pid: number | undefined, signal: NodeJS.Signals): void {
+  if (!pid) return;
+  try {
+    process.kill(-pid, signal);
+    return;
+  } catch {
+    // Fall back to the direct child if process-group kill is unavailable.
+  }
+  try {
+    process.kill(pid, signal);
+  } catch {
+    // best-effort
+  }
+}
 
 function truncate(s: string): string {
   if (s.length <= MAX_OUTPUT) return s;

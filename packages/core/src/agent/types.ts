@@ -38,6 +38,7 @@ export interface ChatRequest {
   tools?: ToolSchema[];
   temperature?: number;
   maxTokens?: number;
+  signal?: AbortSignal;
 }
 
 export type FinishReason = "stop" | "tool_calls" | "length" | "other";
