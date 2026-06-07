@@ -26,6 +26,7 @@ interface UIState {
   /** Tool call elements by index for the current assistant turn. */
   currentTools: Map<number, ToolElements>;
   busy: boolean;
+  stopping: boolean;
 }
 
 interface ToolElements {
@@ -55,6 +56,7 @@ const state: UIState = {
   currentAssistantText: "",
   currentTools: new Map(),
   busy: false,
+  stopping: false,
 };
 
 marked.setOptions({ gfm: true, breaks: true });
@@ -391,21 +393,23 @@ function renderComposer(): HTMLElement {
   ta.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      submit();
+      if (!state.busy) submit();
     }
   });
   const btn = document.createElement("button");
   btn.id = "send-btn";
-  btn.title = "Send (Enter)";
-  btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>`;
-  btn.onclick = submit;
+  btn.onclick = () => {
+    if (state.busy) requestStop();
+    else submit();
+  };
   shell.appendChild(ta);
   shell.appendChild(btn);
   el.appendChild(shell);
   const hint = document.createElement("div");
   hint.className = "composer-hint";
-  hint.textContent = "Enter to send  •  Shift+Enter for newline";
+  hint.id = "composer-hint";
   el.appendChild(hint);
+  updateComposerState();
   return el;
 }
 
@@ -432,8 +436,40 @@ function submit(): void {
 
 function setBusy(b: boolean): void {
   state.busy = b;
+  if (!b) state.stopping = false;
+  updateComposerState();
+}
+
+function requestStop(): void {
+  if (!state.busy || state.stopping) return;
+  state.stopping = true;
+  updateComposerState();
+  vscode.postMessage({ kind: "stop" });
+}
+
+function updateComposerState(): void {
   const btn = document.getElementById("send-btn") as HTMLButtonElement | null;
-  if (btn) btn.disabled = b;
+  const ta = document.getElementById("input") as HTMLTextAreaElement | null;
+  const hint = document.getElementById("composer-hint") as HTMLDivElement | null;
+  if (btn) {
+    btn.disabled = false;
+    btn.classList.toggle("stop", state.busy);
+    if (state.busy) {
+      btn.title = state.stopping ? "Stopping..." : "Stop generation";
+      btn.textContent = state.stopping ? "..." : "Stop";
+    } else {
+      btn.title = "Send (Enter)";
+      btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>`;
+    }
+  }
+  if (ta) ta.disabled = state.busy;
+  if (hint) {
+    hint.textContent = state.busy
+      ? state.stopping
+        ? "Stopping generation..."
+        : "Generating... click Stop to cancel"
+      : "Enter to send  •  Shift+Enter for newline";
+  }
 }
 
 function appendUserMessage(text: string): void {
@@ -811,6 +847,7 @@ window.addEventListener("message", (ev) => {
     case "error":
       hidePending();
       showNotice("error", msg.message);
+      state.stopping = false;
       setBusy(false);
       break;
     case "settings":

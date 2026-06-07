@@ -29,6 +29,7 @@ export interface HistoryMessage {
 export type ViewToExt =
   | { kind: "init" }
   | { kind: "send"; input: string }
+  | { kind: "stop" }
   | { kind: "command"; command: "new" | "load" | "delete" | "clearAll" | "usage" | "tools" | "settings" }
   | { kind: "save_settings"; values: SettingsValues; apiKey: string | null };
 

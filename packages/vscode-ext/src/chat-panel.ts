@@ -73,6 +73,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private current: Session | null = null;
   private optSavedBytes = 0;
   private readyForChat = false;
+  private turnAbort: AbortController | null = null;
 
   constructor(private readonly ctx: vscode.ExtensionContext) {
     const folder = vscode.workspace.workspaceFolders?.[0];
@@ -150,6 +151,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       case "send":
         await this.runTurn(msg.input);
+        break;
+      case "stop":
+        this.stopTurn();
         break;
       case "command":
         await this.runCommand(msg.command);
@@ -389,17 +393,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   // -------- turn runner --------
 
   private async runTurn(input: string): Promise<void> {
+    if (this.turnAbort) {
+      this.post({ kind: "info", message: "A turn is already running." });
+      return;
+    }
     if (!this.agent) {
       this.post({ kind: "error", message: "Configure settings first." });
       this.post({ kind: "assistant_end" });
       return;
     }
+    const abort = new AbortController();
+    this.turnAbort = abort;
     let latestUsage: { promptTokens: number; completionTokens: number } | undefined;
     let turnAddPrompt = 0;
     let turnAddCompletion = 0;
 
     try {
       await this.agent.send(input, {
+        signal: abort.signal,
         onAssistantStart: () => this.post({ kind: "assistant_start" }),
         onContent: (delta) => this.post({ kind: "assistant_content", delta }),
         onAssistantEnd: (_msg, meta) => {
@@ -444,10 +455,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
       await this.persistAfterTurn();
     } catch (err) {
-      this.post({ kind: "error", message: (err as Error).message });
+      if (isAbortError(err)) {
+        this.post({ kind: "tasks", tasks: this.agent.getTasks() as Task[] });
+        this.post({ kind: "info", message: "generation stopped" });
+      } else {
+        this.post({ kind: "error", message: (err as Error).message });
+      }
     } finally {
+      if (this.turnAbort === abort) this.turnAbort = null;
       this.post({ kind: "assistant_end" });
     }
+  }
+
+  private stopTurn(): void {
+    this.turnAbort?.abort();
   }
 
   private async persistAfterTurn(): Promise<void> {
@@ -682,6 +703,10 @@ function emptyUsage() {
     last: { promptTokens: 0, completionTokens: 0 },
     total: { promptTokens: 0, completionTokens: 0 },
   };
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === "AbortError";
 }
 
 const INLINE_CSS = `
@@ -1032,15 +1057,21 @@ body {
   color: var(--vscode-button-foreground);
   border: none;
   border-radius: 6px;
-  width: 26px;
+  min-width: 26px;
   height: 26px;
-  padding: 0;
+  padding: 0 8px;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
   transition: opacity 0.15s ease, filter 0.15s ease;
+}
+.composer button.stop {
+  background: var(--vscode-inputValidation-warningBackground, var(--vscode-button-background));
+  color: var(--vscode-inputValidation-warningForeground, var(--vscode-button-foreground));
 }
 .composer button:hover:not(:disabled) { filter: brightness(1.06); }
 .composer button:disabled { opacity: 0.35; cursor: default; filter: none; }

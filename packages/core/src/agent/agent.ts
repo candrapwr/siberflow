@@ -38,6 +38,7 @@ export interface AgentOptions {
 }
 
 export interface AgentEvents {
+  signal?: AbortSignal;
   onAssistantStart?: () => void;
   onContent?: (delta: string) => void;
   onAssistantEnd?: (
@@ -112,111 +113,128 @@ export class Agent {
   }
 
   async send(userInput: string, events: AgentEvents = {}): Promise<string> {
+    const baseMessageCount = this.messages.length;
+    const baseTasks = this.taskStore.get().map((t) => ({ ...t }));
     this.messages.push({ role: "user", content: userInput });
 
-    const toolSchemas = this.registry.list().map(toSchema);
+    try {
+      throwIfAborted(events.signal);
 
-    // Optimize ONCE per user turn — snapshot includes the new user message
-    // but excludes tool results produced during this turn's loop below.
-    // That keeps the in-progress task's context intact while still
-    // truncating older turns' tool results.
-    const snapshotEndIndex = this.messages.length;
-    const { messages: optimizedBase, stats: optStats } = optimizeContext(
-      this.messages,
-      this.contextOpt,
-    );
-    if (this.contextOpt.enabled && optStats.collapsedCount > 0) {
-      events.onContextOptimized?.(optStats);
-    }
+      const toolSchemas = this.registry.list().map(toSchema);
 
-    for (let i = 0; i < this.maxIterations; i++) {
-      events.onAssistantStart?.();
-
-      // Per-iteration request = locked snapshot + anything appended during
-      // this turn (current-turn assistant messages and tool results).
-      const extras = this.messages.slice(snapshotEndIndex);
-      const base =
-        extras.length === 0 ? optimizedBase : [...optimizedBase, ...extras];
-      // Re-inject current task list each iteration so the model always sees
-      // authoritative state (survives context optimization, reflects updates
-      // the model just made via task_update mid-turn).
-      const requestMessages = this.withTasks(base);
-
-      let { assistant, finishReason, usage } = await this.runStream(
-        requestMessages,
-        toolSchemas,
-        events,
+      // Optimize ONCE per user turn — snapshot includes the new user message
+      // but excludes tool results produced during this turn's loop below.
+      // That keeps the in-progress task's context intact while still
+      // truncating older turns' tool results.
+      const snapshotEndIndex = this.messages.length;
+      const { messages: optimizedBase, stats: optStats } = optimizeContext(
+        this.messages,
+        this.contextOpt,
       );
-
-      // Auto-continue a text response that was cut off by max output tokens.
-      // The continuation request is ephemeral (partial + nudge); only the
-      // merged assistant message is kept in history.
-      let continues = 0;
-      while (
-        this.autoContinue &&
-        finishReason === "length" &&
-        !assistant.toolCalls?.length &&
-        continues < MAX_AUTO_CONTINUES
-      ) {
-        continues++;
-        debug(
-          `↻ auto-continue ${continues}/${MAX_AUTO_CONTINUES} (output cut off at length)`,
-        );
-        const contMessages: Message[] = [
-          ...requestMessages,
-          { role: "assistant", content: assistant.content ?? "" },
-          { role: "user", content: CONTINUE_NUDGE },
-        ];
-        const cont = await this.runStream(contMessages, toolSchemas, events);
-        assistant = {
-          role: "assistant",
-          content: (assistant.content ?? "") + (cont.assistant.content ?? ""),
-          ...(cont.assistant.toolCalls?.length
-            ? { toolCalls: cont.assistant.toolCalls }
-            : {}),
-        };
-        finishReason = cont.finishReason;
-        usage = cont.usage;
+      if (this.contextOpt.enabled && optStats.collapsedCount > 0) {
+        events.onContextOptimized?.(optStats);
       }
 
-      this.messages.push(assistant);
-      events.onAssistantEnd?.(assistant, {
-        finishReason,
-        ...(usage ? { usage } : {}),
-      });
-      debug(
-        `iteration ${i}: finishReason=${finishReason}`,
-        `toolCalls=${assistant.toolCalls?.length ?? 0} contentLen=${assistant.content?.length ?? 0}`,
-      );
+      for (let i = 0; i < this.maxIterations; i++) {
+        throwIfAborted(events.signal);
+        events.onAssistantStart?.();
 
-      if (finishReason !== "tool_calls" || !assistant.toolCalls?.length) {
-        return assistant.content ?? "";
-      }
+        // Per-iteration request = locked snapshot + anything appended during
+        // this turn (current-turn assistant messages and tool results).
+        const extras = this.messages.slice(snapshotEndIndex);
+        const base =
+          extras.length === 0 ? optimizedBase : [...optimizedBase, ...extras];
+        // Re-inject current task list each iteration so the model always sees
+        // authoritative state (survives context optimization, reflects updates
+        // the model just made via task_update mid-turn).
+        const requestMessages = this.withTasks(base);
 
-      for (let idx = 0; idx < assistant.toolCalls.length; idx++) {
-        const call = assistant.toolCalls[idx]!;
-        const result = await this.registry.execute(
-          call.name,
-          call.arguments,
-          this.ctx,
+        let { assistant, finishReason, usage } = await this.runStream(
+          requestMessages,
+          toolSchemas,
+          events,
         );
-        events.onToolResult?.(idx, call.name, result);
-        if (this.tasksEnabled && call.name === "task_update") {
-          events.onTasksUpdated?.(this.taskStore.get());
+
+        // Auto-continue a text response that was cut off by max output tokens.
+        // The continuation request is ephemeral (partial + nudge); only the
+        // merged assistant message is kept in history.
+        let continues = 0;
+        while (
+          this.autoContinue &&
+          finishReason === "length" &&
+          !assistant.toolCalls?.length &&
+          continues < MAX_AUTO_CONTINUES
+        ) {
+          throwIfAborted(events.signal);
+          continues++;
+          debug(
+            `↻ auto-continue ${continues}/${MAX_AUTO_CONTINUES} (output cut off at length)`,
+          );
+          const contMessages: Message[] = [
+            ...requestMessages,
+            { role: "assistant", content: assistant.content ?? "" },
+            { role: "user", content: CONTINUE_NUDGE },
+          ];
+          const cont = await this.runStream(contMessages, toolSchemas, events);
+          assistant = {
+            role: "assistant",
+            content: (assistant.content ?? "") + (cont.assistant.content ?? ""),
+            ...(cont.assistant.toolCalls?.length
+              ? { toolCalls: cont.assistant.toolCalls }
+              : {}),
+          };
+          finishReason = cont.finishReason;
+          usage = cont.usage;
         }
-        const toolMsg: ToolResultMessage = {
-          role: "tool",
-          toolCallId: call.id,
-          name: call.name,
-          content: result,
-        };
-        this.messages.push(toolMsg);
-      }
-    }
 
-    debug(`✗ hit maxIterations cap (${this.maxIterations}) without final answer`);
-    events.onMaxIterations?.(this.maxIterations);
-    return `(stopped after ${this.maxIterations} iterations without final answer)`;
+        throwIfAborted(events.signal);
+        this.messages.push(assistant);
+        events.onAssistantEnd?.(assistant, {
+          finishReason,
+          ...(usage ? { usage } : {}),
+        });
+        debug(
+          `iteration ${i}: finishReason=${finishReason}`,
+          `toolCalls=${assistant.toolCalls?.length ?? 0} contentLen=${assistant.content?.length ?? 0}`,
+        );
+
+        if (finishReason !== "tool_calls" || !assistant.toolCalls?.length) {
+          return assistant.content ?? "";
+        }
+
+        for (let idx = 0; idx < assistant.toolCalls.length; idx++) {
+          throwIfAborted(events.signal);
+          const call = assistant.toolCalls[idx]!;
+          const result = await this.registry.execute(
+            call.name,
+            call.arguments,
+            this.ctx,
+          );
+          events.onToolResult?.(idx, call.name, result);
+          if (this.tasksEnabled && call.name === "task_update") {
+            events.onTasksUpdated?.(this.taskStore.get());
+          }
+          const toolMsg: ToolResultMessage = {
+            role: "tool",
+            toolCallId: call.id,
+            name: call.name,
+            content: result,
+          };
+          this.messages.push(toolMsg);
+        }
+      }
+
+      debug(`✗ hit maxIterations cap (${this.maxIterations}) without final answer`);
+      events.onMaxIterations?.(this.maxIterations);
+      return `(stopped after ${this.maxIterations} iterations without final answer)`;
+    } catch (err) {
+      if (isAbortError(err)) {
+        this.messages.length = baseMessageCount;
+        this.taskStore.set(baseTasks);
+        throw createAbortError();
+      }
+      throw err;
+    }
   }
 
   /** Consume one chatStream call, forwarding events, returning the result. */
@@ -229,31 +247,42 @@ export class Agent {
     finishReason: FinishReason;
     usage?: UsageStats;
   }> {
+    throwIfAborted(events.signal);
+
     let assistant: AssistantMessage | null = null;
     let finishReason: FinishReason = "other";
     let usage: UsageStats | undefined;
 
-    for await (const ev of this.provider.chatStream({
-      model: this.model,
-      messages,
-      tools: toolSchemas,
-    })) {
-      switch (ev.type) {
-        case "content":
-          events.onContent?.(ev.delta);
-          break;
-        case "tool_call_start":
-          events.onToolCallStart?.(ev.index, ev.name);
-          break;
-        case "tool_call_args":
-          events.onToolCallArgs?.(ev.index, ev.delta);
-          break;
-        case "done":
-          assistant = ev.message;
-          finishReason = ev.finishReason;
-          usage = ev.usage;
-          break;
+    try {
+      for await (const ev of this.provider.chatStream({
+        model: this.model,
+        messages,
+        tools: toolSchemas,
+        signal: events.signal,
+      })) {
+        throwIfAborted(events.signal);
+        switch (ev.type) {
+          case "content":
+            events.onContent?.(ev.delta);
+            break;
+          case "tool_call_start":
+            events.onToolCallStart?.(ev.index, ev.name);
+            break;
+          case "tool_call_args":
+            events.onToolCallArgs?.(ev.index, ev.delta);
+            break;
+          case "done":
+            assistant = ev.message;
+            finishReason = ev.finishReason;
+            usage = ev.usage;
+            break;
+        }
       }
+    } catch (err) {
+      if (isAbortError(err) || events.signal?.aborted) {
+        throw createAbortError();
+      }
+      throw err;
     }
 
     if (!assistant) {
@@ -278,4 +307,20 @@ export class Agent {
     }
     return result;
   }
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw createAbortError();
+  }
+}
+
+function createAbortError(): Error {
+  const err = new Error("Request aborted");
+  err.name = "AbortError";
+  return err;
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === "AbortError";
 }
