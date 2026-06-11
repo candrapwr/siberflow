@@ -49,6 +49,8 @@ Uninstall: `npm unlink -w @siberflow/cli`.
 
 **Catatan**: `npm link` membuat symlink ke folder repo — jangan pindah/hapus repo setelah link.
 
+![Siberflow CLI](./ss_cli.png)
+
 ## VSCode Extension
 
 ### Mode dev (F5)
@@ -62,6 +64,8 @@ code .       # buka di VSCode, lalu tekan F5
 Extension Development Host terbuka. Icon Siberflow muncul di activity bar kiri.
 
 Pertama kali pakai, settings panel auto-muncul minta API key + pilihan provider. Tersimpan di **VSCode SecretStorage** (encrypted) — tidak perlu `.env`.
+
+![Siberflow VSCode Extension](./ss_vscode.png)
 
 ### Build VSIX untuk install permanen / di-share
 
