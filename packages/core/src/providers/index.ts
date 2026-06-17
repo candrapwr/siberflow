@@ -8,3 +8,4 @@ export { OpenAIResponsesProvider } from "./openai-responses.js";
 export { GrokProvider } from "./grok.js";
 export { QwenProvider } from "./qwen.js";
 export { ZaiProvider } from "./zai.js";
+export { ClaudeProvider } from "./claude.js";
