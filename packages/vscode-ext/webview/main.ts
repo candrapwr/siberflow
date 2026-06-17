@@ -277,6 +277,7 @@ function showSettingsModal(
         <option value="openai-responses">openai-responses (/v1/responses)</option>
         <option value="grok">grok (xAI)</option>
         <option value="qwen">qwen (Alibaba)</option>
+        <option value="zai">zai (GLM / Z.AI)</option>
       </select>
     </div>
     <div class="form-row">

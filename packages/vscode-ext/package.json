@@ -22,7 +22,9 @@
     "gemini",
     "openai",
     "codex",
-    "assistant"
+    "assistant",
+    "glm",
+    "zai"
   ],
   "engines": {
     "vscode": "^1.85.0"
@@ -95,7 +97,8 @@
             "openai",
             "openai-responses",
             "grok",
-            "qwen"
+            "qwen",
+            "zai"
           ],
           "default": "deepseek",
           "description": "Active LLM provider"
