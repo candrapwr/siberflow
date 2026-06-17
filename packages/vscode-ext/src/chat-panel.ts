@@ -166,6 +166,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "send":
         await this.runTurn(msg.input);
         break;
+      case "regenerate":
+        await this.regenerate();
+        break;
+      case "edit_last":
+        await this.editLast(msg.input);
+        break;
       case "stop":
         this.stopTurn();
         break;
@@ -512,6 +518,53 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private stopTurn(): void {
     this.turnAbort?.abort();
+  }
+
+  /**
+   * Re-run the last user turn: rewind history to that user message (dropping
+   * its response + any tool calls) and re-send the same prompt. The webview
+   * also rewinds its DOM so the new response streams into a clean view.
+   */
+  private async regenerate(): Promise<void> {
+    if (this.turnAbort) {
+      this.post({ kind: "info", message: "A turn is already running." });
+      return;
+    }
+    if (!this.agent) {
+      this.post({ kind: "error", message: "Configure settings first." });
+      this.post({ kind: "assistant_end" });
+      return;
+    }
+    const last = this.agent.rewindToLastUserMessage();
+    if (last === null) {
+      this.post({ kind: "info", message: "Nothing to regenerate." });
+      this.post({ kind: "assistant_end" });
+      return;
+    }
+    await this.runTurn(last);
+  }
+
+  /**
+   * Replace the last user message with `input` and re-run. Like regenerate
+   * but swaps the prompt text first. Rewind cleans any dangling tool_calls.
+   */
+  private async editLast(input: string): Promise<void> {
+    if (this.turnAbort) {
+      this.post({ kind: "info", message: "A turn is already running." });
+      return;
+    }
+    if (!this.agent) {
+      this.post({ kind: "error", message: "Configure settings first." });
+      this.post({ kind: "assistant_end" });
+      return;
+    }
+    const last = this.agent.rewindToLastUserMessage();
+    if (last === null) {
+      this.post({ kind: "info", message: "Nothing to edit." });
+      this.post({ kind: "assistant_end" });
+      return;
+    }
+    await this.runTurn(input);
   }
 
   private async persistAfterTurn(): Promise<void> {
@@ -1060,13 +1113,14 @@ body {
   overflow-y: auto;
   border-top: 1px solid var(--sf-border);
   background: color-mix(in srgb, var(--sf-surface) 72%, transparent);
+  transition: max-height 0.18s ease, opacity 0.18s ease, padding 0.18s ease;
 }
 .task-panel-body ul { list-style: none; padding: 6px 0 0; margin: 0; }
 .task-panel-body li { padding: 2px 0; display: flex; gap: 6px; align-items: baseline; }
 .task-panel-body .done { color: var(--vscode-charts-green); }
 .task-panel-body .inprogress { font-weight: 700; color: var(--vscode-charts-yellow); }
 .task-panel-body .pending { opacity: 0.58; }
-.task-panel.collapsed .task-panel-body { display: none; }
+.task-panel.collapsed .task-panel-body { max-height: 0; opacity: 0; padding-top: 0; padding-bottom: 0; overflow: hidden; }
 .composer {
   padding: 8px;
   border-top: 1px solid var(--sf-border);
@@ -1203,4 +1257,124 @@ body {
 @keyframes sp-rotate { to { transform: rotate(360deg); } }
 .thinking-dot::before { content: "◴"; display: inline-block; animation: sp-rotate 0.9s linear infinite; }
 .msg .body .thinking-dot { display: inline-block; opacity: 0.6; }
+
+/* Entrance animation: messages, tool blocks, pending, notices fade+slide in. */
+.msg, .tool, .pending, .notice {
+  animation: sf-enter 180ms ease-out;
+}
+@keyframes sf-enter {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+/* Pending fades out gracefully before being removed from the DOM. */
+.pending.leaving { animation: sf-leave 160ms ease-in forwards; }
+@keyframes sf-leave {
+  from { opacity: 1; }
+  to   { opacity: 0; transform: translateY(-2px); }
+}
+
+/* Collapsible tool blocks: header is a toggle, body collapses. */
+.tool .head { display: flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
+.tool .head:hover { opacity: 0.82; }
+.tool .tool-chevron { font-size: 9px; opacity: 0.7; width: 10px; display: inline-block; text-align: center; }
+.tool .tool-body { transition: opacity 0.15s ease; }
+.tool.collapsed .tool-body { display: none; }
+
+/* Copy button on code blocks. */
+.msg .body pre { position: relative; }
+.msg .body pre .code-copy {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--vscode-editorWidget-background) 80%, transparent);
+  border: 1px solid var(--sf-border);
+  border-radius: 5px;
+  color: var(--vscode-foreground);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+.msg .body pre:hover .code-copy { opacity: 0.85; }
+.msg .body pre .code-copy:hover { opacity: 1; background: var(--vscode-list-hoverBackground); }
+.msg .body pre .code-copy.copied { color: var(--vscode-charts-green); opacity: 1; }
+
+/* Stop button press feedback: brief pulse so the click registers. */
+.composer button.stop.pressed { animation: sf-press 0.42s ease-out; }
+@keyframes sf-press {
+  0%   { transform: scale(1); }
+  30%  { transform: scale(0.94); }
+  100% { transform: scale(1); }
+}
+
+/* Action bar under the last assistant message (regenerate / edit). */
+.msg .actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 0 2px;
+  animation: sf-enter 160ms ease-out;
+}
+.action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  color: var(--sf-muted);
+  border: 1px solid var(--sf-border);
+  border-radius: 5px;
+  padding: 2px 7px;
+  font-size: 10px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.action-btn:hover {
+  background: var(--vscode-list-hoverBackground);
+  color: var(--vscode-foreground);
+  border-color: var(--sf-border-strong);
+}
+.action-btn svg { opacity: 0.85; }
+
+/* Jump-to-bottom button: hidden until the user scrolls up. */
+#jump-bottom {
+  position: absolute;
+  right: 14px;
+  bottom: 96px;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--vscode-editorWidget-background);
+  border: 1px solid var(--sf-border-strong);
+  border-radius: 50%;
+  color: var(--vscode-foreground);
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(6px);
+  pointer-events: none;
+  transition: opacity 0.16s ease, transform 0.16s ease;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.22);
+  z-index: 40;
+}
+#jump-bottom.visible {
+  opacity: 0.9;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+#jump-bottom:hover { opacity: 1; background: var(--vscode-list-hoverBackground); }
+
+/* Respect reduced-motion preferences — disable entrance/leave animations. */
+@media (prefers-reduced-motion: reduce) {
+  .msg, .tool, .pending, .notice, .pending.leaving,
+  .composer button.stop.pressed, .tool .tool-body, .task-panel-body {
+    animation: none !important;
+    transition: none !important;
+  }
+}
 `;

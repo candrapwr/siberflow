@@ -112,6 +112,32 @@ export class Agent {
     if (system) this.messages.push(system);
   }
 
+  /**
+   * Rewind history back to (and including) the last user message, returning
+   * that user message's text. Everything AFTER the last user message is
+   * discarded — the assistant's response, any tool calls, and tool results
+   * for that turn. This cleanly drops dangling tool_calls (which would
+   * otherwise break the next request). The system prompt and all earlier
+   * turns are preserved. Returns null if there is no user message in history.
+   *
+   * Used by "regenerate" (re-send the same prompt) and "edit" (replace the
+   * prompt) flows: rewind, optionally swap in a new prompt, then send().
+   */
+  rewindToLastUserMessage(): string | null {
+    let lastUserIdx = -1;
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      if (this.messages[i]!.role === "user") {
+        lastUserIdx = i;
+        break;
+      }
+    }
+    if (lastUserIdx === -1) return null;
+    const text = this.messages[lastUserIdx]!.content;
+    // Truncate to just before the last user message so send() re-appends it.
+    this.messages.length = lastUserIdx;
+    return text;
+  }
+
   async send(userInput: string, events: AgentEvents = {}): Promise<string> {
     const baseMessageCount = this.messages.length;
     const baseTasks = this.taskStore.get().map((t) => ({ ...t }));
