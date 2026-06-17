@@ -104,5 +104,7 @@ function apiKeyEnvVar(provider: ProviderName): string {
       return "XAI_API_KEY";
     case "qwen":
       return "DASHSCOPE_API_KEY";
+    case "zai":
+      return "ZAI_API_KEY";
   }
 }

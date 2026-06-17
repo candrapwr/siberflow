@@ -77,6 +77,10 @@ export abstract class OpenAICompatibleProvider implements Provider {
     this.includeUsageInStream = opts.includeUsageInStream ?? true;
   }
 
+  protected requestBodyExtras(): Record<string, unknown> {
+    return {};
+  }
+
   async *chatStream(req: ChatRequest): AsyncIterable<StreamEvent> {
     const body = {
       model: req.model,
@@ -90,6 +94,7 @@ export abstract class OpenAICompatibleProvider implements Provider {
         : {}),
       ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
       ...(req.maxTokens !== undefined ? { max_tokens: req.maxTokens } : {}),
+      ...this.requestBodyExtras(),
     };
 
     debug(

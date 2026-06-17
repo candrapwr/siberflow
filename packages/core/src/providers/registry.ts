@@ -4,6 +4,7 @@ import { GrokProvider } from "./grok.js";
 import { OpenAIProvider } from "./openai.js";
 import { OpenAIResponsesProvider } from "./openai-responses.js";
 import { QwenProvider } from "./qwen.js";
+import { ZaiProvider } from "./zai.js";
 import type { Provider, ProviderConfig } from "./base.js";
 
 export type ProviderName =
@@ -12,7 +13,8 @@ export type ProviderName =
   | "openai"
   | "openai-responses"
   | "grok"
-  | "qwen";
+  | "qwen"
+  | "zai";
 
 export function createProvider(
   name: ProviderName,
@@ -31,6 +33,8 @@ export function createProvider(
       return new GrokProvider(config);
     case "qwen":
       return new QwenProvider(config);
+    case "zai":
+      return new ZaiProvider(config);
     default: {
       const _exhaustive: never = name;
       throw new Error(`Unknown provider: ${_exhaustive as string}`);
