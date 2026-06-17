@@ -1,6 +1,6 @@
 {
   "name": "siberflow-chat",
-  "version": "0.5.12",
+  "version": "0.5.15",
   "displayName": "Siberflow",
   "description": "AI chat sidebar with multi-provider, tool calling, sandboxed file ops, and task checklists.",
   "publisher": "DatasiberLab",
@@ -153,8 +153,7 @@
   },
   "dependencies": {
     "@siberflow/core": "0.1.0",
-    "marked": "^14.1.0",
-    "ssh2": "^1.16.0"
+    "marked": "^14.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",
