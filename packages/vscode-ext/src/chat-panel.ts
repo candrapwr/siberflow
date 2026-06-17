@@ -10,6 +10,7 @@ import {
   loadSession,
   newSessionId,
   saveOptimizedView,
+  saveOptimizedMiddleView,
   saveSession,
   saveSessionSync,
   SESSION_FORMAT_VERSION,
@@ -23,6 +24,7 @@ import type {
   BannerInfo,
   ExtToView,
   HistoryMessage,
+  OptimizeMode,
   ProviderName,
   SessionInfo,
   SettingsValues,
@@ -56,6 +58,18 @@ just-finished item "completed" and set the next one to "in_progress". Keep EXACT
 - Always send the COMPLETE list on every call (full replacement), not just the changed item.
 - Only skip the checklist for a genuinely single-step request.
 - The checklist is for execution work. For a simple explanation, quick inspection, or a single factual answer, skip it.`;
+
+const SUMMARY_GUIDANCE = `\n\n# [SUMMARY] tags in user messages
+Some user messages carry a trailing \`[SUMMARY]\` block (e.g. \`[SUMMARY]\\nexec("df -h")\\nwrite_file("src/foo.ts")\`). \
+This is a provenance marker injected by the context optimizer: it records WHICH tools ran in that past turn — as a \
+compact signature of tool name plus short identifier args (path, command, query, line range). The full arguments \
+and the tool results were removed to save context. \
+Rules:
+- A signature tells you WHAT was touched (e.g. "write_file touched src/foo.ts") but NOT what was written or what the \
+tool returned. Those values may be stale, so do NOT treat them as fact.
+- It tells you tool work happened in that turn, so the assistant's answer that followed was grounded in execution, not a guess.
+- If you need the actual content/result of one of those past tool calls, re-run the tool — do not infer or fabricate it.
+- Never output or mimic the [SUMMARY] format yourself; it is read-only metadata from the optimizer.`;
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "siberflow.chatView";
@@ -205,6 +219,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       cfg.update("model", values.model, target),
       cfg.update("tasks", values.tasks, target),
       cfg.update("contextOptimize", values.contextOptimize, target),
+      cfg.update("contextOptimizeMode", values.contextOptimizeMode, target),
       cfg.update("autoContinue", values.autoContinue, target),
       cfg.update("hideTools", values.hideTools, target),
       cfg.update("debug", values.debug, target),
@@ -291,19 +306,42 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const modelOverride = this.settings.model.trim();
     const model =
       modelOverride.length > 0 ? modelOverride : this.provider.defaultModel;
+    const summaryMode = this.summaryModeActive();
+    let systemPrompt = SYSTEM_PROMPT;
+    if (this.settings.tasks) systemPrompt += TASKS_GUIDANCE;
+    if (summaryMode) systemPrompt += SUMMARY_GUIDANCE;
     return new Agent({
       provider: this.provider,
       registry: this.registry,
       model,
-      systemPrompt: this.settings.tasks
-        ? SYSTEM_PROMPT + TASKS_GUIDANCE
-        : SYSTEM_PROMPT,
+      systemPrompt,
       projectDir: this.projectDir,
-      contextOptimize: { enabled: this.settings.contextOptimize },
+      contextOptimize: this.optimizeConfig(),
       tasksEnabled: this.settings.tasks,
       autoContinue: this.settings.autoContinue,
       maxIterations: this.settings.maxIterations,
     });
+  }
+
+  /** Whether summary-mode optimization is currently in effect. */
+  private summaryModeActive(): boolean {
+    return (
+      this.settings.contextOptimize &&
+      this.settings.contextOptimizeMode === "summary"
+    );
+  }
+
+  /** Build the ContextOptimizeConfig shared by the agent and persisters. */
+  private optimizeConfig(): {
+    enabled: boolean;
+    mode?: "drop" | "summary";
+  } {
+    return {
+      enabled: this.settings.contextOptimize,
+      ...(this.settings.contextOptimizeMode !== "summary"
+        ? { mode: this.settings.contextOptimizeMode }
+        : {}),
+    };
   }
 
   private postReady(): void {
@@ -383,10 +421,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     };
     saveSessionSync(this.current);
     if (this.settings.contextOptimize) {
-      const { messages: optimized } = optimizeContext(this.current.messages, {
-        enabled: true,
-      });
-      void saveOptimizedView(this.current, optimized);
+      const { messages: optimized } = optimizeContext(
+        this.current.messages,
+        this.optimizeConfig(),
+      );
+      if (this.summaryModeActive()) {
+        void saveOptimizedMiddleView(this.current, optimized);
+      } else {
+        void saveOptimizedView(this.current, optimized);
+      }
     }
   }
 
@@ -491,10 +534,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     await saveSession(session);
     this.current = session;
     if (this.settings.contextOptimize) {
-      const { messages: optimized } = optimizeContext(session.messages, {
-        enabled: true,
-      });
-      await saveOptimizedView(session, optimized);
+      const { messages: optimized } = optimizeContext(
+        session.messages,
+        this.optimizeConfig(),
+      );
+      if (this.summaryModeActive()) {
+        await saveOptimizedMiddleView(session, optimized);
+      } else {
+        await saveOptimizedView(session, optimized);
+      }
     }
     this.post({ kind: "session_changed", session: this.sessionInfo() });
   }
@@ -686,7 +734,8 @@ function readSettings(): SettingsValues {
     provider: cfg.get<ProviderName>("provider", "deepseek"),
     model: cfg.get<string>("model", ""),
     tasks: cfg.get<boolean>("tasks", false),
-    contextOptimize: cfg.get<boolean>("contextOptimize", false),
+    contextOptimize: cfg.get<boolean>("contextOptimize", true),
+    contextOptimizeMode: cfg.get<OptimizeMode>("contextOptimizeMode", "summary"),
     autoContinue: cfg.get<boolean>("autoContinue", true),
     hideTools: cfg.get<boolean>("hideTools", false),
     debug: cfg.get<boolean>("debug", false),

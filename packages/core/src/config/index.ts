@@ -1,6 +1,6 @@
 import { statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import type { ContextOptimizeConfig } from "../agent/optimize.js";
+import type { ContextOptimizeConfig, OptimizeMode } from "../agent/optimize.js";
 import type { ProviderName } from "../providers/registry.js";
 
 export interface SiberflowConfig {
@@ -43,7 +43,21 @@ export function loadConfigFromEnv(
 }
 
 function resolveContextOptimize(env: NodeJS.ProcessEnv): ContextOptimizeConfig {
-  return { enabled: env.SIBERFLOW_CONTEXT_OPTIMIZE === "true" };
+  // Default ON — context optimization is the baseline behavior. Users who
+  // want the raw, unoptimized view set SIBERFLOW_CONTEXT_OPTIMIZE=false.
+  const enabled = env.SIBERFLOW_CONTEXT_OPTIMIZE !== "false";
+  const mode = resolveOptimizeMode(env);
+  // Omit the mode field when it equals the default ("summary") so the
+  // serialized config stays minimal; only emit it for the non-default case.
+  return { enabled, ...(mode !== "summary" ? { mode } : {}) };
+}
+
+function resolveOptimizeMode(env: NodeJS.ProcessEnv): OptimizeMode {
+  // Default "summary" (signature breadcrumb). Set SIBERFLOW_CONTEXT_OPTIMIZE_MODE=drop
+  // for the more compact drop-everything behavior. Only honored when
+  // optimization is enabled; ignored otherwise.
+  const raw = env.SIBERFLOW_CONTEXT_OPTIMIZE_MODE?.toLowerCase();
+  return raw === "drop" ? "drop" : "summary";
 }
 
 function resolveMaxIterations(env: NodeJS.ProcessEnv): number {
