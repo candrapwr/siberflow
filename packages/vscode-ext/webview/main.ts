@@ -59,6 +59,15 @@ const state: UIState = {
   stopping: false,
 };
 
+/**
+ * Set when the user clicked "Edit" on the last turn: the DOM has already been
+ * rewound (old user + assistant removed) and the old prompt is in the
+ * composer. The Agent still holds the old turn until the user re-sends, so
+ * on submit we must post `edit_last` (host rewinds the Agent THEN sends)
+ * rather than `send` (which would just append, leaving the old turn behind).
+ */
+let editingLast = false;
+
 marked.setOptions({ gfm: true, breaks: true });
 
 const root = document.getElementById("root")!;
@@ -95,6 +104,8 @@ function mount(): void {
   root.appendChild(renderComposer());
   // Seed the panel if we already have tasks (resumed session).
   if (state.tasksEnabled && state.tasks.length > 0) updateTaskPanel();
+  bindScrollTracker();
+  mountJumpButton();
 }
 
 function updateTopbar(): void {
@@ -163,8 +174,12 @@ function showPending(): void {
 }
 
 function hidePending(): void {
-  pendingEl?.remove();
+  if (!pendingEl) return;
+  pendingEl.classList.add("leaving");
+  const el = pendingEl;
   pendingEl = null;
+  // Let the fade-out finish before removing from the DOM.
+  setTimeout(() => el.remove(), 160);
 }
 
 function renderTopbar(): HTMLElement {
@@ -295,14 +310,14 @@ function showSettingsModal(
       <input type="checkbox" id="cfg-tasks">
     </div>
     <div class="form-row inline">
-      <label for="cfg-optimize">Context optimization (drop old tool history)</label>
+      <label for="cfg-optimize">Context optimization (drop/summary)</label>
       <input type="checkbox" id="cfg-optimize">
     </div>
     <div class="form-row">
       <label>Context optimize mode</label>
       <select id="cfg-optmode">
-        <option value="drop">drop — remove tool history entirely</option>
-        <option value="summary">summary — leave a [SUMMARY] tool-signature breadcrumb</option>
+        <option value="drop">drop</option>
+        <option value="summary">summary</option>
       </select>
     </div>
     <div class="form-row inline">
@@ -433,6 +448,12 @@ function submit(): void {
   if (!text) return;
   ta.value = "";
   ta.style.height = "auto";
+  // If we came from "Edit", the host must rewind the Agent's old turn before
+  // re-sending — otherwise the stale turn stays in Agent history (and gets
+  // persisted on the next save, then reappears on session reload). The DOM
+  // was already rewound at click time; the host now does the same to state.
+  const wasEditing = editingLast;
+  editingLast = false;
   appendUserMessage(text);
   // Reset the task panel for the new turn. The previous turn's checklist
   // is stale; the model will repopulate via task_update if it decides to
@@ -443,19 +464,26 @@ function submit(): void {
   }
   showPending();
   setBusy(true);
-  vscode.postMessage({ kind: "send", input: text });
+  vscode.postMessage({ kind: wasEditing ? "edit_last" : "send", input: text });
 }
 
 function setBusy(b: boolean): void {
   state.busy = b;
   if (!b) state.stopping = false;
   updateComposerState();
+  // Clear action buttons while generating; they're re-attached on assistant_end.
+  if (b) document.querySelectorAll(".msg .actions").forEach((n) => n.remove());
 }
 
 function requestStop(): void {
   if (!state.busy || state.stopping) return;
   state.stopping = true;
   updateComposerState();
+  const btn = document.getElementById("send-btn");
+  if (btn) {
+    btn.classList.add("pressed");
+    setTimeout(() => btn.classList.remove("pressed"), 420);
+  }
   vscode.postMessage({ kind: "stop" });
 }
 
@@ -504,6 +532,8 @@ function appendAssistantHistory(text: string): void {
   el.className = "msg assistant";
   el.innerHTML = `<div class="role">ai</div><div class="body">${marked.parse(text)}</div>`;
   messagesEl.appendChild(el);
+  const body = el.querySelector(".body") as HTMLElement | null;
+  if (body) enhanceCodeBlocks(body);
 }
 
 function startAssistant(): void {
@@ -546,9 +576,43 @@ function appendAssistantContent(delta: string): void {
 function finalizeCurrentTextEl(): void {
   if (currentTextEl && state.currentAssistantText.length > 0) {
     currentTextEl.innerHTML = marked.parse(state.currentAssistantText) as string;
+    enhanceCodeBlocks(currentTextEl);
   }
   currentTextEl = null;
   state.currentAssistantText = "";
+}
+
+/**
+ * Add a "copy" overlay button to every <pre> code block inside `container`.
+ * Uses the Clipboard API. Idempotent — skips <pre> that already have a
+ * button. Called after markdown render (streaming finalize + history load).
+ */
+function enhanceCodeBlocks(container: HTMLElement): void {
+  const pres = container.querySelectorAll("pre");
+  for (const pre of pres) {
+    if (pre.querySelector(":scope > .code-copy")) continue;
+    const btn = document.createElement("button");
+    btn.className = "code-copy";
+    btn.type = "button";
+    btn.title = "Copy code";
+    btn.setAttribute("aria-label", "Copy code");
+    btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
+    btn.addEventListener("click", async () => {
+      const code = pre.querySelector("code")?.textContent ?? pre.textContent ?? "";
+      try {
+        await navigator.clipboard.writeText(code);
+        btn.classList.add("copied");
+        btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`;
+        setTimeout(() => {
+          btn.classList.remove("copied");
+          btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
+        }, 1400);
+      } catch {
+        btn.textContent = "!";
+      }
+    });
+    pre.appendChild(btn);
+  }
 }
 
 function finalizeAssistant(): void {
@@ -558,6 +622,98 @@ function finalizeAssistant(): void {
   }
   finalizeCurrentTextEl();
   state.currentAssistant = null;
+}
+
+/**
+ * Strip any lingering action bar from all messages, then attach a fresh
+ * "regenerate / edit" action bar under the LAST assistant message. Only one
+ * bar is visible at a time (the most recent response). Hidden while busy.
+ */
+function refreshActionBar(): void {
+  document.querySelectorAll(".msg .actions").forEach((n) => n.remove());
+  if (state.busy) return;
+  const assistants = messagesEl?.querySelectorAll(".msg.assistant");
+  const last = assistants?.[assistants.length - 1] as HTMLElement | undefined;
+  if (!last) return;
+
+  const actions = document.createElement("div");
+  actions.className = "actions";
+
+  const regen = document.createElement("button");
+  regen.className = "action-btn";
+  regen.type = "button";
+  regen.title = "Regenerate response";
+  regen.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg><span>Regenerate</span>`;
+  regen.addEventListener("click", () => {
+    if (state.busy) return;
+    if (!confirmRewind()) return;
+    rewindLastAssistant();
+    showPending();
+    setBusy(true);
+    vscode.postMessage({ kind: "regenerate" });
+  });
+
+  const edit = document.createElement("button");
+  edit.className = "action-btn";
+  edit.type = "button";
+  edit.title = "Edit your last message";
+  edit.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg><span>Edit</span>`;
+  edit.addEventListener("click", () => {
+    if (state.busy) return;
+    const ta = document.getElementById("input") as HTMLTextAreaElement | null;
+    if (!ta) return;
+    const last = lastUserText();
+    if (last === null) return;
+    if (!confirmRewind()) return;
+    // Edit REPLACES the last turn: rewind both the assistant response and
+    // the old user message, then drop the old prompt into the composer so
+    // the user can revise and re-send. Mark editingLast so the next submit
+    // posts `edit_last` (host rewinds the Agent THEN sends) instead of
+    // `send` (which would append and leave the old turn in Agent history).
+    rewindLastAssistant();
+    rewindLastUser();
+    editingLast = true;
+    ta.value = last;
+    ta.style.height = "auto";
+    ta.style.height = Math.min(ta.scrollHeight, 200) + "px";
+    ta.focus();
+    // Re-attach the bar to whatever assistant message is now last (or none).
+    refreshActionBar();
+    // Editing does not auto-send — user reviews and presses Enter / Send.
+  });
+
+  actions.appendChild(regen);
+  actions.appendChild(edit);
+  last.appendChild(actions);
+}
+
+/** Returns the text of the last user message in the DOM, or null. */
+function lastUserText(): string | null {
+  const users = messagesEl?.querySelectorAll(".msg.user");
+  const last = users?.[users.length - 1] as HTMLElement | undefined;
+  if (!last) return null;
+  return last.querySelector(".body")?.textContent ?? null;
+}
+
+/** Confirm before rewinding since it discards the last response + tool work. */
+function confirmRewind(): boolean {
+  // No native confirm (webview restriction) — proceed directly; the rewind is
+  // cheap and the original session on disk is untouched until the next turn.
+  return true;
+}
+
+/** Remove the last assistant message (response + tool blocks) from the DOM. */
+function rewindLastAssistant(): void {
+  const assistants = messagesEl?.querySelectorAll(".msg.assistant");
+  const last = assistants?.[assistants.length - 1] as HTMLElement | undefined;
+  last?.remove();
+}
+
+/** Remove the last user message from the DOM (used by the edit flow). */
+function rewindLastUser(): void {
+  const users = messagesEl?.querySelectorAll(".msg.user");
+  const last = users?.[users.length - 1] as HTMLElement | undefined;
+  last?.remove();
 }
 
 function startToolCall(index: number, name: string): void {
@@ -592,11 +748,20 @@ function startToolCall(index: number, name: string): void {
     scrollToBottom();
     return;
   } else {
-    head.innerHTML = `↳ tool ${escape(name)}`;
+    head.innerHTML = `<span class="tool-chevron">▾</span><span class="tool-label">↳ tool ${escape(name)}</span>`;
     root.appendChild(head);
+    // Wrap args + future result in a collapsible body so the header can
+    // toggle them as a unit.
+    const toolBody = document.createElement("div");
+    toolBody.className = "tool-body";
     argsEl = document.createElement("div");
     argsEl.className = "args";
-    root.appendChild(argsEl);
+    toolBody.appendChild(argsEl);
+    root.appendChild(toolBody);
+    head.addEventListener("click", () => {
+      const collapsed = root.classList.toggle("collapsed");
+      head.querySelector(".tool-chevron")!.textContent = collapsed ? "▸" : "▾";
+    });
   }
 
   // Append inside body so it interleaves naturally with .seg text segments.
@@ -636,7 +801,10 @@ function showToolResult(index: number, name: string, result: string): void {
   r.className = "result";
   const preview = formatToolResultPreview(name, t.argsBuffer, result);
   r.textContent = preview;
-  t.root.appendChild(r);
+  // Append into the collapsible tool body if present, else the root.
+  const toolBody = t.root.querySelector(":scope > .tool-body");
+  if (toolBody) toolBody.appendChild(r);
+  else t.root.appendChild(r);
   t.resultEl = r;
   scrollToBottom();
 }
@@ -662,9 +830,47 @@ function showUsage(usage: SessionUsage, optSaved: number): void {
   showNotice("info", lines.join("\n"));
 }
 
-function scrollToBottom(): void {
+// Auto-scroll tracking: only stick to the bottom when the user is already
+// near it. Once they scroll up to read history, streaming no longer yanks
+// the view down. A "jump to bottom" button surfaces while pinned up.
+let userPinnedUp = false;
+
+function bindScrollTracker(): void {
+  const el = document.getElementById("messages");
+  if (!el) return;
+  el.addEventListener("scroll", () => {
+    const nearBottom =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    userPinnedUp = !nearBottom;
+    updateJumpButton();
+  });
+}
+
+function updateJumpButton(): void {
+  const btn = document.getElementById("jump-bottom");
+  if (btn) btn.classList.toggle("visible", userPinnedUp);
+}
+
+function scrollToBottom(force = false): void {
   const messages = document.getElementById("messages");
-  if (messages) messages.scrollTop = messages.scrollHeight;
+  if (!messages) return;
+  if (force || !userPinnedUp) {
+    messages.scrollTop = messages.scrollHeight;
+    userPinnedUp = false;
+  }
+}
+
+function mountJumpButton(): void {
+  if (document.getElementById("jump-bottom")) return;
+  const btn = document.createElement("button");
+  btn.id = "jump-bottom";
+  btn.title = "Jump to latest";
+  btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/></svg>`;
+  btn.addEventListener("click", () => {
+    scrollToBottom(true);
+    updateJumpButton();
+  });
+  document.getElementById("root")?.appendChild(btn);
 }
 
 function escape(s: string): string {
@@ -809,6 +1015,7 @@ window.addEventListener("message", (ev) => {
       hidePending();
       finalizeAssistant();
       setBusy(false);
+      refreshActionBar();
       break;
     case "tool_call_start":
       startToolCall(msg.index, msg.name);
@@ -889,6 +1096,7 @@ window.addEventListener("message", (ev) => {
       }
       syncEmptyState();
       scrollToBottom();
+      refreshActionBar();
       break;
   }
 });
