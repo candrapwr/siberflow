@@ -1,11 +1,57 @@
 import { build, context } from "esbuild";
+import { writeFileSync } from "node:fs";
 
 const watch = process.argv.includes("--watch");
+
+// ssh2 optional-requires the native `cpu-features` binding for a minor
+// speedup; it falls back to no-op when absent (wrapped in try/catch in
+// ssh2/lib/protocol/constants.js). Since esbuild can't bundle a .node
+// binary and we want a self-contained VSIX, we stub the module to a function
+// returning undefined — ssh2's own try/catch accepts that and runs its
+// pure-JS crypto path. Create the stub on disk so esbuild can resolve it.
+const CPU_STUB_PATH = new URL("./dist/.cpu-features-stub.js", import.meta.url);
+try {
+  writeFileSync(CPU_STUB_PATH, "module.exports = () => undefined;\n");
+} catch {
+  // dist/ may not exist yet on a fresh checkout; esbuild creates it during
+  // build, and the stub is only needed at bundle time below.
+}
+const cpuFeaturesStub = {
+  name: "cpu-features-stub",
+  setup(b) {
+    b.onResolve({ filter: /^cpu-features$/ }, () => ({
+      path: CPU_STUB_PATH.pathname,
+      sideEffects: false,
+    }));
+  },
+};
+
+// ssh2 also optional-requires a native crypto binding (`sshcrypto.node`) in
+// lib/protocol/crypto.js for hardware-accelerated ciphers. Same story: it's
+// wrapped in try/catch and falls back to pure-JS crypto. We stub it to an
+// empty module so esbuild can bundle ssh2 without a .node loader, and ssh2's
+// own try/catch handles the missing binding at runtime.
+const SSHCRYPTO_STUB_PATH = new URL("./dist/.sshcrypto-stub.js", import.meta.url);
+try {
+  writeFileSync(SSHCRYPTO_STUB_PATH, "module.exports = {};\n");
+} catch {
+  // dist/ may not exist yet; esbuild creates it during build.
+}
+const sshcryptoStub = {
+  name: "sshcrypto-stub",
+  setup(b) {
+    b.onResolve({ filter: /build\/Release\/sshcrypto\.node$/ }, () => ({
+      path: SSHCRYPTO_STUB_PATH.pathname,
+      sideEffects: false,
+    }));
+  },
+};
 
 const common = {
   bundle: true,
   sourcemap: true,
   logLevel: "info",
+  plugins: [cpuFeaturesStub, sshcryptoStub],
 };
 
 const extension = {
@@ -15,11 +61,7 @@ const extension = {
   platform: "node",
   format: "cjs",
   target: "node20",
-  // ssh2 + cpu-features ship optional native (.node) bindings that esbuild
-  // cannot bundle. Mark them external so the extension host resolves them
-  // from node_modules at runtime (ssh2 also has a pure-JS fallback if the
-  // native crypto binding is absent).
-  external: ["vscode", "ssh2", "cpu-features"],
+  external: ["vscode"],
 };
 
 const webview = {
@@ -38,7 +80,8 @@ async function run() {
     await Promise.all([ctxExt.watch(), ctxView.watch()]);
     console.log("watching…");
   } else {
-    await Promise.all([build(extension), build(webview)]);
+    await build(extension);
+    await build(webview);
   }
 }
 
