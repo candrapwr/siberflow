@@ -92,7 +92,7 @@ Update versi: edit `version` di `packages/vscode-ext/package.json`, lalu `npm ru
 - **File dan shell tools** — `read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`, `exec`
 - **Database query tool** — `db_query` mendukung `mysql`, `postgresql`, dan `sqlite`; query bebas, optional `params`, SQLite path tetap dibatasi ke project dir
 - **Task checklist** — opt-in via env / settings; AI maintain checklist multi-step yang bisa di-resume setelah Ctrl+C atau session restart
-- **Context optimization** — buang tool history dari turn lama (opt-in); current task tetap utuh
+- **Context optimization** — buang tool history dari turn lama (default aktif); current task tetap utuh. Dua mode via `SIBERFLOW_CONTEXT_OPTIMIZE_MODE`: `drop` (buang total, default) atau `summary` (sisakan tag `[SUMMARY]` berisi *signature* per tool — nama + identifier ringkas seperti `exec("df -h")` / `write_file("src/foo.ts")`; payload berat dan result tetap dibuang)
 - **Auto-continue** — sambung otomatis respons yang kepotong max_tokens
 - **Multi-session** — sesi tersimpan per project, picker saat startup
 - **Debug tracing** — env `SIBERFLOW_DEBUG=true` untuk log HTTP/finish_reason/usage

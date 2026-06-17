@@ -35,11 +35,14 @@ export type ViewToExt =
 
 export type ProviderName = "deepseek" | "gemini" | "openai" | "openai-responses" | "grok" | "qwen" | "zai" | "claude";
 
+export type OptimizeMode = "drop" | "summary";
+
 export interface SettingsValues {
   provider: ProviderName;
   model: string;
   tasks: boolean;
   contextOptimize: boolean;
+  contextOptimizeMode: OptimizeMode;
   autoContinue: boolean;
   hideTools: boolean;
   debug: boolean;

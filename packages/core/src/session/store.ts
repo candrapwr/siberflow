@@ -26,6 +26,10 @@ function optimizedPathFor(id: string): string {
   return join(SESSIONS_DIR, `${id}.optimized.json`);
 }
 
+function optimizedMiddlePathFor(id: string): string {
+  return join(SESSIONS_DIR, `${id}.optimized_middle.json`);
+}
+
 export function newSessionId(): string {
   const ts = new Date().toISOString().replace(/[:.]/g, "-").replace("Z", "");
   const rand = Math.random().toString(36).slice(2, 6);
@@ -109,6 +113,12 @@ export async function deleteSession(id: string): Promise<boolean> {
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
   }
+  // Best-effort cleanup of the optimized_middle view file (if any).
+  try {
+    await unlink(optimizedMiddlePathFor(id));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
   return removed;
 }
 
@@ -131,6 +141,32 @@ export async function saveOptimizedView(
   };
   await writeFile(
     optimizedPathFor(session.id),
+    JSON.stringify(view, null, 2),
+    "utf8",
+  );
+}
+
+/**
+ * Write a sibling file `<id>.optimized_middle.json` that mirrors the session
+ * JSON but with `messages` replaced by the "middle" optimized view (tool
+ * activity summarized as a `[SUMMARY]` breadcrumb on each user turn instead
+ * of dropped entirely). Same monitoring role as saveOptimizedView — the
+ * original `<id>.json` is untouched and this file is never read back into
+ * the agent flow.
+ */
+export async function saveOptimizedMiddleView(
+  session: Session,
+  optimizedMessages: Message[],
+): Promise<void> {
+  await ensureDir();
+  const view = {
+    ...session,
+    messages: optimizedMessages,
+    _view: "optimized_middle" as const,
+    _generatedAt: new Date().toISOString(),
+  };
+  await writeFile(
+    optimizedMiddlePathFor(session.id),
     JSON.stringify(view, null, 2),
     "utf8",
   );
@@ -160,6 +196,7 @@ export async function listSessions(filter?: {
   for (const f of files) {
     if (!f.endsWith(".json")) continue;
     if (f.endsWith(".optimized.json")) continue; // sibling monitoring file
+    if (f.endsWith(".optimized_middle.json")) continue; // sibling monitoring file
     try {
       const raw = await readFile(join(SESSIONS_DIR, f), "utf8");
       const s = JSON.parse(raw) as Session;

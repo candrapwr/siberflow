@@ -10,6 +10,7 @@ import {
   newSessionId,
   optimizeContext,
   saveOptimizedView,
+  saveOptimizedMiddleView,
   saveSession,
   saveSessionSync,
   SESSION_FORMAT_VERSION,
@@ -52,6 +53,18 @@ just-finished item "completed" and set the next one to "in_progress". Keep EXACT
 When in doubt, make a checklist — the user prefers seeing progress.
 - The checklist is for execution work. For a simple explanation, quick inspection, or a single factual answer, skip it.`;
 
+const SUMMARY_GUIDANCE = `\n\n# [SUMMARY] tags in user messages
+Some user messages carry a trailing \`[SUMMARY]\` block (e.g. \`[SUMMARY]\\nexec("df -h")\\nwrite_file("src/foo.ts")\`). \
+This is a provenance marker injected by the context optimizer: it records WHICH tools ran in that past turn — as a \
+compact signature of tool name plus short identifier args (path, command, query, line range). The full arguments \
+and the tool results were removed to save context. \
+Rules:
+- A signature tells you WHAT was touched (e.g. "write_file touched src/foo.ts") but NOT what was written or what the \
+tool returned. Those values may be stale, so do NOT treat them as fact.
+- It tells you tool work happened in that turn, so the assistant's answer that followed was grounded in execution, not a guess.
+- If you need the actual content/result of one of those past tool calls, re-run the tool — do not infer or fabricate it.
+- Never output or mimic the [SUMMARY] format yourself; it is read-only metadata from the optimizer.`;
+
 export interface ReplOptions {
   provider: Provider;
   registry: ToolRegistry;
@@ -65,11 +78,18 @@ export interface ReplOptions {
 }
 
 export async function runRepl(opts: ReplOptions): Promise<void> {
+  const summaryMode =
+    opts.contextOptimize.enabled &&
+    (opts.contextOptimize.mode ?? "drop") === "summary";
+  let systemPrompt = SYSTEM_PROMPT;
+  if (opts.tasksEnabled) systemPrompt += TASKS_GUIDANCE;
+  if (summaryMode) systemPrompt += SUMMARY_GUIDANCE;
+
   const agent = new Agent({
     provider: opts.provider,
     registry: opts.registry,
     model: opts.model,
-    systemPrompt: opts.tasksEnabled ? SYSTEM_PROMPT + TASKS_GUIDANCE : SYSTEM_PROMPT,
+    systemPrompt,
     projectDir: opts.projectDir,
     contextOptimize: opts.contextOptimize,
     tasksEnabled: opts.tasksEnabled,
@@ -327,7 +347,11 @@ async function persistAfterTurn(ctx: SessionContext): Promise<void> {
       session.messages,
       ctx.contextOptimize,
     );
-    await saveOptimizedView(session, optimized);
+    if ((ctx.contextOptimize.mode ?? "drop") === "summary") {
+      await saveOptimizedMiddleView(session, optimized);
+    } else {
+      await saveOptimizedView(session, optimized);
+    }
   }
 }
 

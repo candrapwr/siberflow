@@ -298,6 +298,13 @@ function showSettingsModal(
       <label for="cfg-optimize">Context optimization (drop old tool history)</label>
       <input type="checkbox" id="cfg-optimize">
     </div>
+    <div class="form-row">
+      <label>Context optimize mode</label>
+      <select id="cfg-optmode">
+        <option value="drop">drop — remove tool history entirely</option>
+        <option value="summary">summary — leave a [SUMMARY] tool-signature breadcrumb</option>
+      </select>
+    </div>
     <div class="form-row inline">
       <label for="cfg-autocontinue">Auto-continue cut-off responses</label>
       <input type="checkbox" id="cfg-autocontinue">
@@ -330,6 +337,7 @@ function showSettingsModal(
   modelInput.value = values.model;
   (modal.querySelector("#cfg-tasks") as HTMLInputElement).checked = values.tasks;
   (modal.querySelector("#cfg-optimize") as HTMLInputElement).checked = values.contextOptimize;
+  (modal.querySelector("#cfg-optmode") as HTMLSelectElement).value = values.contextOptimizeMode;
   (modal.querySelector("#cfg-autocontinue") as HTMLInputElement).checked = values.autoContinue;
   (modal.querySelector("#cfg-hidetools") as HTMLInputElement).checked = values.hideTools;
   (modal.querySelector("#cfg-debug") as HTMLInputElement).checked = values.debug;
@@ -346,6 +354,7 @@ function showSettingsModal(
     const model = modelInput.value;
     const tasks = (modal.querySelector("#cfg-tasks") as HTMLInputElement).checked;
     const contextOptimize = (modal.querySelector("#cfg-optimize") as HTMLInputElement).checked;
+    const contextOptimizeMode = (modal.querySelector("#cfg-optmode") as HTMLSelectElement).value as "drop" | "summary";
     const autoContinue = (modal.querySelector("#cfg-autocontinue") as HTMLInputElement).checked;
     const hideTools = (modal.querySelector("#cfg-hidetools") as HTMLInputElement).checked;
     const debug = (modal.querySelector("#cfg-debug") as HTMLInputElement).checked;
@@ -364,6 +373,7 @@ function showSettingsModal(
         model,
         tasks,
         contextOptimize,
+        contextOptimizeMode,
         autoContinue,
         hideTools,
         debug,

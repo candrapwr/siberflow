@@ -1,6 +1,6 @@
 {
   "name": "siberflow-chat",
-  "version": "0.5.8",
+  "version": "0.5.9",
   "displayName": "Siberflow",
   "description": "AI chat sidebar with multi-provider, tool calling, sandboxed file ops, and task checklists.",
   "publisher": "DatasiberLab",
@@ -111,6 +111,12 @@
         "siberflow.contextOptimize": {
           "type": "boolean",
           "default": true
+        },
+        "siberflow.contextOptimizeMode": {
+          "type": "string",
+          "enum": ["drop", "summary"],
+          "default": "summary",
+          "description": "Context optimization strategy. summary = leave a [SUMMARY] tool-signature breadcrumb on the user message (default); drop = remove tool history entirely. Only applies when contextOptimize is true."
         },
         "siberflow.tasks": {
           "type": "boolean",
