@@ -15,7 +15,11 @@ const extension = {
   platform: "node",
   format: "cjs",
   target: "node20",
-  external: ["vscode"],
+  // ssh2 + cpu-features ship optional native (.node) bindings that esbuild
+  // cannot bundle. Mark them external so the extension host resolves them
+  // from node_modules at runtime (ssh2 also has a pure-JS fallback if the
+  // native crypto binding is absent).
+  external: ["vscode", "ssh2", "cpu-features"],
 };
 
 const webview = {
