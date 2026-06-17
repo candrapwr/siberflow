@@ -5,7 +5,7 @@ export class DeepSeekProvider extends OpenAICompatibleProvider {
   constructor(config: ProviderConfig) {
     super(config, {
       name: "deepseek",
-      defaultModel: "deepseek-chat",
+      defaultModel: "deepseek-v4-flash",
       defaultBaseUrl: "https://api.deepseek.com/v1",
     });
   }
