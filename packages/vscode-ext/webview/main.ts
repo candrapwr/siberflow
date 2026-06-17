@@ -278,6 +278,7 @@ function showSettingsModal(
         <option value="grok">grok (xAI)</option>
         <option value="qwen">qwen (Alibaba)</option>
         <option value="zai">zai (GLM / Z.AI)</option>
+        <option value="claude">claude (Anthropic)</option>
       </select>
     </div>
     <div class="form-row">

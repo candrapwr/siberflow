@@ -106,5 +106,7 @@ function apiKeyEnvVar(provider: ProviderName): string {
       return "DASHSCOPE_API_KEY";
     case "zai":
       return "ZAI_API_KEY";
+    case "claude":
+      return "ANTHROPIC_API_KEY";
   }
 }

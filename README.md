@@ -11,6 +11,7 @@ AI platform dengan dukungan multi-provider, tool calling streaming, sandbox file
 - `grok` — `grok-build-0.1` (xAI, via endpoint OpenAI-compatible)
 - `qwen` — `qwen3.7-plus` (Alibaba DashScope / MaaS, OpenAI-compatible). Default endpoint internasional; custom MaaS workspace bisa override via `SIBERFLOW_BASE_URL`
 - `zai` — `glm-5.2` (Z.AI / GLM, OpenAI-compatible). Default ke general endpoint `https://api.z.ai/api/paas/v4`; kalau perlu GLM Coding endpoint bisa override via `SIBERFLOW_BASE_URL`
+- `claude` — `claude-sonnet-4-5` (Anthropic, via OpenAI-compatible chat completions endpoint)
 
 ## Struktur
 
@@ -29,7 +30,7 @@ Semua sesi tersimpan di `~/.siberflow/sessions/` — cross-compat antar CLI dan 
 ```bash
 npm install
 cp .env.example .env
-# isi minimal salah satu API key: DEEPSEEK_API_KEY / GEMINI_API_KEY / OPENAI_API_KEY / XAI_API_KEY / DASHSCOPE_API_KEY / ZAI_API_KEY
+# isi minimal salah satu API key: DEEPSEEK_API_KEY / GEMINI_API_KEY / OPENAI_API_KEY / XAI_API_KEY / DASHSCOPE_API_KEY / ZAI_API_KEY / ANTHROPIC_API_KEY
 
 npm run dev:cli
 ```
