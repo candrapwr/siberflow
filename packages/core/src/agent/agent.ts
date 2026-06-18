@@ -198,7 +198,9 @@ export class Agent {
           );
           const contMessages: Message[] = [
             ...requestMessages,
-            { role: "assistant", content: assistant.content ?? "" },
+            // Never send empty/null assistant content to the API (rejected by
+            // strict OpenAI-compatible servers). Fall back to a space.
+            { role: "assistant", content: assistant.content && assistant.content.length > 0 ? assistant.content : " " },
             { role: "user", content: CONTINUE_NUDGE },
           ];
           const cont = await this.runStream(contMessages, toolSchemas, events);

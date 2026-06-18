@@ -183,7 +183,7 @@ export class OpenAIResponsesProvider implements Provider {
 
     const message: AssistantMessage = {
       role: "assistant",
-      content: content.length > 0 ? content : null,
+      content: content.length > 0 ? content : toolCalls.length > 0 ? null : " ",
       ...(toolCalls.length > 0 ? { toolCalls } : {}),
     };
 

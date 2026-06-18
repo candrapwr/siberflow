@@ -72,6 +72,20 @@ marked.setOptions({ gfm: true, breaks: true });
 
 const root = document.getElementById("root")!;
 
+// ---------- Inline SVG icons ----------
+const ICONS = {
+  brand: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M18.5 5.5c-1.4-1.6-3.4-2.5-5.9-2.5-3.7 0-6.1 1.9-6.1 4.8 0 2.7 2.2 3.9 5.5 4.6 3 .6 5 1.4 5 3.4 0 1.8-1.7 3.2-4.7 3.2-2.5 0-4.7-.9-6.3-2.6"/><path d="M5.2 5.4H3.3"/><path d="M20.7 18.6h-1.9"/><circle cx="2.6" cy="5.4" r="1.1" fill="currentColor" stroke="none"/><circle cx="21.4" cy="18.6" r="1.1" fill="currentColor" stroke="none"/></svg>`,
+  user: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`,
+  ai: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3z"/></svg>`,
+  send: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>`,
+  settings: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`,
+  newSession: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>`,
+  loadSession: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>`,
+  usage: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>`,
+  trash: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>`,
+  tool: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>`,
+};
+
 // Element references so updates can target panels without wiping #messages.
 let mounted = false;
 let messagesEl: HTMLElement | null = null;
@@ -109,7 +123,7 @@ function mount(): void {
 }
 
 function updateTopbar(): void {
-  // Topbar is visual-only now: brand + menu.
+  // Topbar is brand icon + menu only.
 }
 
 /**
@@ -129,31 +143,31 @@ function updateTaskPanel(): void {
 
   const done = state.tasks.filter((t) => t.status === "completed").length;
   const chevron = taskPanelCollapsed ? "▸" : "▾";
+  const pct = state.tasks.length > 0 ? Math.round((done / state.tasks.length) * 100) : 0;
 
   const items = state.tasks
     .map((t) => {
-      const icon =
-        t.status === "completed"
-          ? "✔"
-          : t.status === "in_progress"
-            ? "▶"
-            : "○";
       const cls =
         t.status === "completed"
           ? "done"
           : t.status === "in_progress"
             ? "inprogress"
             : "pending";
-      return `<li><span class="${cls}">${icon}</span><span class="${cls}">${escape(t.content)}</span></li>`;
+      const marker =
+        t.status === "completed"
+          ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`
+          : t.status === "in_progress"
+            ? `<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="12" cy="12" r="5"/></svg>`
+            : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/></svg>`;
+      return `<li class="${cls}"><span class="task-ico">${marker}</span><span class="task-text">${escape(t.content)}</span></li>`;
     })
     .join("");
 
   taskPanelEl.innerHTML = `
     <div class="task-panel-header" id="tp-header">
-      <div class="task-panel-title">
-        <span class="task-panel-chevron">${chevron}</span>
-        <span>tasks <b>${done}/${state.tasks.length}</b></span>
-      </div>
+      <span class="task-panel-chevron">${chevron}</span>
+      <span class="task-panel-title">tasks <b>${done}/${state.tasks.length}</b></span>
+      <div class="task-panel-progress"><div class="task-panel-progress-fill" style="width:${pct}%"></div></div>
     </div>
     <div class="task-panel-body"><ul>${items}</ul></div>
   `;
@@ -168,7 +182,7 @@ function showPending(): void {
   if (pendingEl || !messagesEl) return;
   pendingEl = document.createElement("div");
   pendingEl.className = "pending";
-  pendingEl.innerHTML = `<span class="spin">◴</span><span>thinking…</span>`;
+  pendingEl.innerHTML = `<span class="thinking-dots"><span></span><span></span><span></span></span>`;
   messagesEl.appendChild(pendingEl);
   scrollToBottom();
 }
@@ -188,7 +202,7 @@ function renderTopbar(): HTMLElement {
 
   const brand = document.createElement("div");
   brand.className = "topbar-brand";
-  brand.innerHTML = `<span class="brand-mark"></span><span class="brand-name">Siberflow</span>`;
+  brand.innerHTML = `<span class="brand-icon">${ICONS.brand}</span>`;
   el.appendChild(brand);
 
   const menuBtn = document.createElement("button");
@@ -212,14 +226,14 @@ function openCmdPopover(anchor: HTMLElement): void {
   pop.className = "popover popover-cmd";
   pop.dataset.kind = "cmd";
 
-  const items: Array<[string, Cmd] | "divider"> = [
-    ["⚙  Settings", "settings"],
+  const items: Array<[string, Cmd, string] | "divider"> = [
+    ["Settings", "settings", ICONS.settings],
     "divider",
-    ["+  New session", "new"],
-    ["↻  Load session", "load"],
+    ["New session", "new", ICONS.newSession],
+    ["Load session", "load", ICONS.loadSession],
     "divider",
-    ["📊  Usage", "usage"],
-    ["🗑  Clear all sessions", "clearAll"],
+    ["Usage", "usage", ICONS.usage],
+    ["Clear all sessions", "clearAll", ICONS.trash],
   ];
   for (const item of items) {
     if (item === "divider") {
@@ -228,9 +242,9 @@ function openCmdPopover(anchor: HTMLElement): void {
       pop.appendChild(d);
       continue;
     }
-    const [label, cmd] = item;
+    const [label, cmd, icon] = item;
     const btn = document.createElement("button");
-    btn.textContent = label;
+    btn.innerHTML = `${icon}<span>${escape(label)}</span>`;
     btn.onclick = () => {
       vscode.postMessage({ kind: "command", command: cmd });
       closePopovers();
@@ -282,59 +296,72 @@ function showSettingsModal(
 
   modal.innerHTML = `
     <h3>Siberflow settings</h3>
+    <div class="modal-subtitle">Configure your provider and agent behavior.</div>
     ${mustConfigure ? `<div class="must-configure">An API key is required before you can chat. Fill in the form below.</div>` : ""}
-    <div class="form-row">
-      <label>Provider</label>
-      <select id="cfg-provider">
-        <option value="deepseek">deepseek</option>
-        <option value="gemini">gemini</option>
-        <option value="openai">openai (chat completions)</option>
-        <option value="openai-responses">openai-responses (/v1/responses)</option>
-        <option value="grok">grok (xAI)</option>
-        <option value="qwen">qwen (Alibaba)</option>
-        <option value="zai">zai (GLM / Z.AI)</option>
-        <option value="claude">claude (Anthropic)</option>
-      </select>
+    <div class="form-section">
+      <div class="form-section-title">Provider</div>
+      <div class="form-row">
+        <label>Provider</label>
+        <select id="cfg-provider">
+          <option value="deepseek">deepseek</option>
+          <option value="gemini">gemini</option>
+          <option value="openai">openai (chat completions)</option>
+          <option value="openai-responses">openai-responses (/v1/responses)</option>
+          <option value="grok">grok (xAI)</option>
+          <option value="qwen">qwen (Alibaba)</option>
+          <option value="zai">zai (GLM / Z.AI)</option>
+          <option value="claude">claude (Anthropic)</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>API key</label>
+        <input type="password" id="cfg-apikey" placeholder="${hasApiKey ? "(stored — leave blank to keep)" : "paste your key"}" autocomplete="off">
+        <div class="help">Stored encrypted in VSCode SecretStorage, per provider.</div>
+      </div>
+      <div class="form-row">
+        <label>Model override</label>
+        <input type="text" id="cfg-model" placeholder="(leave empty for provider default)">
+      </div>
     </div>
-    <div class="form-row">
-      <label>API key</label>
-      <input type="password" id="cfg-apikey" placeholder="${hasApiKey ? "(stored — leave blank to keep)" : "paste your key"}" autocomplete="off">
-      <div class="help">Stored encrypted in VSCode SecretStorage, per provider.</div>
+    <div class="form-section">
+      <div class="form-section-title">Agent</div>
+      <div class="form-row inline">
+        <label for="cfg-tasks">Enable task checklist</label>
+        <input type="checkbox" id="cfg-tasks">
+      </div>
+      <div class="form-row inline">
+        <label for="cfg-autocontinue">Auto-continue cut-off responses</label>
+        <input type="checkbox" id="cfg-autocontinue">
+      </div>
+      <div class="form-row inline">
+        <label for="cfg-hidetools">Hide tool call details (spinner only)</label>
+        <input type="checkbox" id="cfg-hidetools">
+      </div>
+      <div class="form-row">
+        <label>Max iterations per turn</label>
+        <input type="number" id="cfg-max" min="1" max="500">
+      </div>
     </div>
-    <div class="form-row">
-      <label>Model override</label>
-      <input type="text" id="cfg-model" placeholder="(leave empty for provider default)">
+    <div class="form-section">
+      <div class="form-section-title">Context optimization</div>
+      <div class="form-row inline">
+        <label for="cfg-optimize">Context optimization (drop/summary)</label>
+        <input type="checkbox" id="cfg-optimize">
+      </div>
+      <div class="form-row">
+        <label>Context optimize mode</label>
+        <select id="cfg-optmode">
+          <option value="drop">drop</option>
+          <option value="summary">summary</option>
+        </select>
+      </div>
     </div>
-    <div class="form-row inline">
-      <label for="cfg-tasks">Enable task checklist</label>
-      <input type="checkbox" id="cfg-tasks">
-    </div>
-    <div class="form-row inline">
-      <label for="cfg-optimize">Context optimization (drop/summary)</label>
-      <input type="checkbox" id="cfg-optimize">
-    </div>
-    <div class="form-row">
-      <label>Context optimize mode</label>
-      <select id="cfg-optmode">
-        <option value="drop">drop</option>
-        <option value="summary">summary</option>
-      </select>
-    </div>
-    <div class="form-row inline">
-      <label for="cfg-autocontinue">Auto-continue cut-off responses</label>
-      <input type="checkbox" id="cfg-autocontinue">
-    </div>
-    <div class="form-row inline">
-      <label for="cfg-hidetools">Hide tool call details (spinner only)</label>
-      <input type="checkbox" id="cfg-hidetools">
-    </div>
-    <div class="form-row inline">
-      <label for="cfg-debug">Debug logging (stderr)</label>
-      <input type="checkbox" id="cfg-debug">
-    </div>
-    <div class="form-row">
-      <label>Max iterations per turn</label>
-      <input type="number" id="cfg-max" min="1" max="500">
+    <div class="form-section">
+      <div class="form-section-title">Developer</div>
+      <div class="form-row inline">
+        <label for="cfg-debug">Debug logging (stderr)</label>
+        <input type="checkbox" id="cfg-debug">
+      </div>
     </div>
     <div class="modal-actions">
       ${mustConfigure ? "" : '<button class="secondary" id="cfg-cancel">Cancel</button>'}
@@ -499,16 +526,16 @@ function updateComposerState(): void {
       btn.textContent = state.stopping ? "..." : "Stop";
     } else {
       btn.title = "Send (Enter)";
-      btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>`;
+      btn.innerHTML = ICONS.send;
     }
   }
   if (ta) ta.disabled = state.busy;
   if (hint) {
-    hint.textContent = state.busy
+    hint.innerHTML = state.busy
       ? state.stopping
         ? "Stopping generation..."
-        : "Generating... click Stop to cancel"
-      : "Enter to send  •  Shift+Enter for newline";
+        : "Generating — click Stop to cancel"
+      : `<kbd>Enter</kbd> send · <kbd>Shift+Enter</kbd> newline`;
   }
 }
 
@@ -518,7 +545,7 @@ function appendUserMessage(text: string): void {
   syncEmptyState(false);
   const el = document.createElement("div");
   el.className = "msg user";
-  el.innerHTML = `<div class="role">you</div><div class="body"></div>`;
+  el.innerHTML = `<div class="role"><span class="role-dot"></span>You</div><div class="body"></div>`;
   el.querySelector(".body")!.textContent = text;
   messages.appendChild(el);
   scrollToBottom();
@@ -530,7 +557,7 @@ function appendAssistantHistory(text: string): void {
   syncEmptyState(false);
   const el = document.createElement("div");
   el.className = "msg assistant";
-  el.innerHTML = `<div class="role">ai</div><div class="body">${marked.parse(text)}</div>`;
+  el.innerHTML = `<div class="role"><span class="role-dot"></span>Siberflow</div><div class="body">${marked.parse(text)}</div>`;
   messagesEl.appendChild(el);
   const body = el.querySelector(".body") as HTMLElement | null;
   if (body) enhanceCodeBlocks(body);
@@ -541,7 +568,7 @@ function startAssistant(): void {
   syncEmptyState(false);
   const el = document.createElement("div");
   el.className = "msg assistant";
-  el.innerHTML = `<div class="role">ai</div><div class="body"><span class="thinking-dot"></span></div>`;
+  el.innerHTML = `<div class="role"><span class="role-dot"></span>Siberflow</div><div class="body"><span class="thinking-dot"></span></div>`;
   messagesEl.appendChild(el);
   state.currentAssistant = el;
   state.currentAssistantText = "";
@@ -717,6 +744,20 @@ function rewindLastUser(): void {
 }
 
 function startToolCall(index: number, name: string): void {
+  // task_update is a silent housekeeping tool: still executed, but never
+  // rendered — its effect shows in the task panel instead.
+  if (name === "task_update") {
+    // Register a placeholder so showToolResult can no-op cleanly.
+    state.currentTools.set(index, {
+      root: document.createElement("div"),
+      argsEl: null,
+      resultEl: null,
+      argsBuffer: "",
+      name,
+      completed: false,
+    });
+    return;
+  }
   hidePending();
   if (!state.currentAssistant) startAssistant();
   const body = state.currentAssistant!.querySelector(".body") as HTMLElement;
@@ -748,7 +789,7 @@ function startToolCall(index: number, name: string): void {
     scrollToBottom();
     return;
   } else {
-    head.innerHTML = `<span class="tool-chevron">▾</span><span class="tool-label">↳ tool ${escape(name)}</span>`;
+    head.innerHTML = `<span class="tool-chevron">▾</span><span class="tool-icon">${ICONS.tool}</span><span class="tool-label">${escape(name)}</span>`;
     root.appendChild(head);
     // Wrap args + future result in a collapsible body so the header can
     // toggle them as a unit.
@@ -787,6 +828,11 @@ function appendToolArgs(index: number, delta: string): void {
 function showToolResult(index: number, name: string, result: string): void {
   const t = state.currentTools.get(index);
   if (!t) return;
+  // task_update: never rendered; just mark complete and drop the placeholder.
+  if (name === "task_update") {
+    t.completed = true;
+    return;
+  }
   if (state.hideTools) {
     if (!t.completed) {
       t.completed = true;
@@ -891,9 +937,26 @@ function renderEmptyState(): HTMLElement {
   const el = document.createElement("div");
   el.className = "empty-state";
   el.innerHTML = `
-    <div class="empty-title">Ask for code edits, file inspection, shell commands, or database queries.</div>
-    <div class="empty-copy">Tools: file ops, <code>exec</code>, and <code>db_query</code>.</div>
+    <div class="empty-icon">${ICONS.brand}</div>
+    <div class="empty-title">How can I help?</div>
+    <div class="empty-copy">Ask for code edits, file inspection, shell commands, or database queries. Tools: file ops, <code>exec</code>, <code>db_query</code>.</div>
+    <div class="empty-actions">
+      <button class="empty-chip" data-prompt="Explain what this codebase does and its main entry points">Explain this codebase</button>
+      <button class="empty-chip" data-prompt="Review the current file for bugs and suggest improvements">Review for bugs</button>
+      <button class="empty-chip" data-prompt="Refactor the selected code for readability">Refactor my code</button>
+    </div>
   `;
+  // Wire up quick-action chips to fill the composer.
+  el.querySelectorAll(".empty-chip").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      const prompt = (chip as HTMLElement).dataset.prompt ?? "";
+      const ta = document.getElementById("input") as HTMLTextAreaElement | null;
+      if (!ta) return;
+      ta.value = prompt;
+      ta.dispatchEvent(new Event("input"));
+      ta.focus();
+    });
+  });
   return el;
 }
 
@@ -945,8 +1008,8 @@ function renderHiddenToolSummary(): void {
 
   hiddenToolSummary.headEl.innerHTML =
     remaining > 0
-      ? `<span class="spin">◴</span> tools ${hiddenToolSummary.completed}/${total}`
-      : `✓ tools ${total}`;
+      ? `<span class="thinking-dots"><span></span><span></span><span></span></span><span>tools ${hiddenToolSummary.completed}/${total}</span>`
+      : `<span class="tool-icon" style="color:var(--vscode-charts-green)">✓</span><span>tools ${total}</span>`;
   hiddenToolSummary.metaEl.textContent =
     total === 0
       ? ""

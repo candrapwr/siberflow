@@ -414,6 +414,9 @@ async function runTurn(input: string, ctx: SessionContext): Promise<void> {
         for (const r of renderers.values()) r.finishArgs();
       },
       onToolCallStart: (index, name) => {
+        // task_update is a silent housekeeping tool: still executed, but never
+        // rendered in the transcript — its effect shows in the task list instead.
+        if (name === "task_update") return;
         if (currentLine.length > 0 || onFirstLine) flushCurrentLine(true);
         if (ctx.hideTools) {
           // Hidden mode: no header/args/result — just a spinner with the tool name.
@@ -428,6 +431,7 @@ async function runTurn(input: string, ctx: SessionContext): Promise<void> {
         if (!ctx.hideTools) renderers.get(index)?.feed(delta);
       },
       onToolResult: (index, _name, result) => {
+        if (_name === "task_update") return;
         if (ctx.hideTools) {
           spinner.setLabel("thinking…");
         } else {
