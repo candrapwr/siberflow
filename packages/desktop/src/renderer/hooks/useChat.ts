@@ -8,6 +8,7 @@ import type {
   BannerInfo,
   CurrentSessionInfo,
   MainEvent,
+  UsageInfo,
 } from "@shared/protocol";
 
 /** A tool call rendered inside an assistant turn. */
@@ -58,6 +59,9 @@ interface ChatState {
   stopping: boolean;
   notices: Array<{ id: number; kind: "info" | "error" | "warn"; text: string }>;
   showActions: boolean;
+  /** Latest usage stats — `last.promptTokens` is the context window size that
+   * will be sent to the LLM on the next request (not the billing total). */
+  usage: UsageInfo | null;
 }
 
 const initial: ChatState = {
@@ -77,6 +81,7 @@ const initial: ChatState = {
   stopping: false,
   notices: [],
   showActions: false,
+  usage: null,
 };
 
 type Action =
@@ -168,6 +173,20 @@ function reducer(state: ChatState, action: Action): ChatState {
       return { ...state, requireSettings: false };
 
     case "session-changed":
+      // When the active session becomes null (e.g. deleted), clear the chat
+      // area so the welcome screen shows and the composer is hidden.
+      if (e.session === null) {
+        return {
+          ...state,
+          session: null,
+          messages: [],
+          tasks: [],
+          showActions: false,
+          busy: false,
+          stopping: false,
+          usage: null,
+        };
+      }
       return { ...state, session: e.session };
 
     case "session-list":
@@ -292,7 +311,7 @@ function reducer(state: ChatState, action: Action): ChatState {
       };
 
     case "usage":
-      return state;
+      return { ...state, usage: e.usage };
 
     case "info":
       if (e.message === "__noop__") return state; // legacy safety

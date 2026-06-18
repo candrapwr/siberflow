@@ -1,11 +1,130 @@
 // Renders a single message bubble. Assistant turns render an ordered list of
 // text + tool content blocks in the exact order they streamed.
 
-import { memo, useState } from "react";
+import { memo, useState, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism/index.js";
 import type { AssistantTurn } from "../hooks/useChat.js";
-import { RefreshIcon, EditIcon, ToolIcon, ChevronDownIcon } from "./icons.js";
+import {
+  RefreshIcon,
+  EditIcon,
+  ToolIcon,
+  ChevronDownIcon,
+  CopyIcon,
+  CheckIcon,
+} from "./icons.js";
+
+// ─── Code Block with Syntax Highlighting + Copy Button ──────────────────────
+
+interface CodeBlockProps {
+  language: string;
+  code: string;
+}
+
+const CodeBlock = memo(function CodeBlock({ language, code }: CodeBlockProps) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard API may fail in some contexts — silently ignore
+    }
+  }, [code]);
+
+  return (
+    <div className="code-block">
+      <div className="code-block-header">
+        <span className="code-lang-label">{language}</span>
+        <button
+          className={`code-copy-btn ${copied ? "copied" : ""}`}
+          onClick={handleCopy}
+          title="Copy code"
+        >
+          {copied ? <CheckIcon size={11} /> : <CopyIcon size={11} />}
+          <span>{copied ? "Copied" : "Copy"}</span>
+        </button>
+      </div>
+      <SyntaxHighlighter
+        language={language}
+        style={oneDark}
+        PreTag="pre"
+        customStyle={{
+          margin: 0,
+          borderTopLeftRadius: 0,
+          borderTopRightRadius: 0,
+          borderBottomLeftRadius: "var(--radius-sm)",
+          borderBottomRightRadius: "var(--radius-sm)",
+          fontSize: "0.92em",
+          lineHeight: 1.5,
+          background: "#181818",
+        }}
+        codeTagProps={{ style: { fontFamily: "var(--mono)" } }}
+      >
+        {code}
+      </SyntaxHighlighter>
+    </div>
+  );
+});
+
+// ─── Inline helpers used by ReactMarkdown ───────────────────────────────────
+
+/** Components override for ReactMarkdown — adds syntax highlighting to code
+ * blocks and a copy button. Inline code is rendered normally. */
+const markdownComponents = {
+  // For fenced code blocks we output a self-contained <div> tree, so the
+  // default <pre> wrapper from react-markdown would double-wrap.  We strip
+  // it by rendering only the children (which the `code` renderer provides).
+  pre({ children }: { children: React.ReactNode }) {
+    return <>{children}</>;
+  },
+  code({
+    className,
+    children,
+    ...props
+  }: {
+    className?: string;
+    children?: React.ReactNode;
+    [key: string]: unknown;
+  }) {
+    const match = /language-(\w+)/.exec(className || "");
+    const code = String(children).replace(/\n$/, "");
+
+    if (match) {
+      // Fenced code block with explicit language → highlighted
+      return <CodeBlock language={match[1]} code={code} />;
+    }
+
+    // Check for multi-line code without language annotation → plain pre+code
+    if (code.includes("\n")) {
+      return (
+        <pre>
+          <button
+            className="code-copy-btn legacy-copy"
+            onClick={() => navigator.clipboard.writeText(code).catch(() => {})}
+            title="Copy code"
+          >
+            <CopyIcon size={11} />
+          </button>
+          <code className={className}>{children}</code>
+        </pre>
+      );
+    }
+
+    // Inline code
+    return (
+      <code className={className} {...props}>
+        {children}
+      </code>
+    );
+  },
+};
+
+// ─── User Message ───────────────────────────────────────────────────────────
 
 interface UserMessageProps {
   content: string;
@@ -22,6 +141,8 @@ export const UserMessage = memo(function UserMessage({ content }: UserMessagePro
     </div>
   );
 });
+
+// ─── Assistant Message ──────────────────────────────────────────────────────
 
 interface AssistantMessageProps {
   turn: AssistantTurn;
@@ -54,14 +175,15 @@ export const AssistantMessage = memo(function AssistantMessage({
           if (blk.kind === "text") {
             return (
               <div className="seg" key={blk.id}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{blk.text}</ReactMarkdown>
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={markdownComponents}
+                >
+                  {blk.text}
+                </ReactMarkdown>
               </div>
             );
           }
-          // tool block
-          // tool block — always render. In hideTools mode, show a compact
-          // collapsed header only (no args/result expanded) so the user still
-          // sees tool activity, just without the noise.
           return (
             <ToolBlock
               key={blk.id}
@@ -94,6 +216,8 @@ export const AssistantMessage = memo(function AssistantMessage({
   );
 });
 
+// ─── Tool Block ─────────────────────────────────────────────────────────────
+
 interface ToolBlockProps {
   name: string;
   args: string;
@@ -102,22 +226,28 @@ interface ToolBlockProps {
 }
 
 function ToolBlock({ name, args, result, compact = false }: ToolBlockProps) {
-  // Compact mode (hideTools): always collapsed, click still toggles detail.
   const [open, setOpen] = useState(false);
-  const hasResult = result !== null;
+  const running = result === null;
+
   return (
-    <div className="tool-block">
+    <div className={`tool-block ${running ? "running" : ""}`}>
       <div className="tool-head" onClick={() => !compact && setOpen((v) => !v)}>
         {!compact && <ChevronDownIcon size={10} className={open ? "" : "rotated"} />}
         <ToolIcon size={11} />
         <span>{name}</span>
-        {compact && (
-          <span style={{ marginLeft: "auto", opacity: 0.6, fontSize: 9 }}>
-            {hasResult ? "done" : "…"}
-          </span>
-        )}
+        <span className="tool-status">
+          {running ? (
+            <span className="thinking-dots">
+              <span />
+              <span />
+              <span />
+            </span>
+          ) : (
+            <span className="tool-done">done</span>
+          )}
+        </span>
       </div>
-      {!compact && open && (
+      {!compact && open && !running && (
         <div className="tool-content">
           {args && <pre>{args}</pre>}
           {result && (

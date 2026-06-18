@@ -68,7 +68,7 @@ export const Composer = memo(function Composer({ busy, onSend }: ComposerProps) 
         )}
       </div>
       <div className="composer-hint">
-        <kbd>Enter</kbd> send · <kbd>Shift+Enter</kbd> newline
+        <kbd>Enter</kbd> send · <kbd>Shift+Enter</kbd> newline · <kbd>Cmd+K</kbd> focus
       </div>
     </div>
   );

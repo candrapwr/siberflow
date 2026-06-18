@@ -17,6 +17,13 @@ import { SettingsModal } from "./components/SettingsModal.js";
 import { ArrowDownIcon } from "./components/icons.js";
 import type { SettingsValues } from "@shared/protocol";
 
+/** Compact token count: 1234 → "1.2k", 12345 → "12k". */
+function formatTokens(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 10000) return (n / 1000).toFixed(1) + "k";
+  return Math.round(n / 1000) + "k";
+}
+
 export default function App() {
   const { state, dismissNotice, sendMessage } = useChat();
   const sessions = useSessions();
@@ -102,16 +109,33 @@ export default function App() {
     }
   }, [state.session?.name, sessions]);
 
-  // Auto-scroll to bottom on new messages while busy.
+  // Track whether the user is pinned to the bottom of the scroll area.
+  // Only auto-scroll on new content if they haven't scrolled up to read.
+  const stickToBottomRef = useRef(true);
+
+  // When switching sessions, re-pin to bottom so the new conversation shows
+  // its latest messages.
   useEffect(() => {
-    if (!state.busy) return;
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    stickToBottomRef.current = true;
+    const el = messagesScrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [state.session?.id]);
+
+  // Auto-scroll to bottom on new streaming content — but ONLY if the user
+  // is currently pinned to the bottom. If they scrolled up to read history,
+  // respect that and don't yank them back down.
+  useEffect(() => {
+    if (!state.busy || !stickToBottomRef.current) return;
+    const el = messagesScrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
   }, [state.messages, state.busy]);
 
   const onScroll = () => {
     const el = messagesScrollRef.current;
     if (!el) return;
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    stickToBottomRef.current = nearBottom;
     setShowJump(!nearBottom);
   };
 
@@ -148,6 +172,47 @@ export default function App() {
     }
   }, [state.messages]);
 
+  // ── Keyboard shortcuts ──────────────────────────────────────────────
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const isMeta = e.metaKey || e.ctrlKey;
+
+      // Cmd+N / Ctrl+N → new chat
+      if (isMeta && e.key === "n") {
+        e.preventDefault();
+        newChat();
+        return;
+      }
+
+      // Cmd+K / Ctrl+K → focus composer
+      if (isMeta && e.key === "k") {
+        e.preventDefault();
+        const ta = document.querySelector<HTMLTextAreaElement>(".composer textarea");
+        ta?.focus();
+        return;
+      }
+
+      // Cmd+, / Ctrl+, → open settings
+      if (isMeta && e.key === ",") {
+        e.preventDefault();
+        openSettings();
+        return;
+      }
+
+      // Escape → dismiss all notices
+      if (e.key === "Escape") {
+        const notices = state.notices;
+        if (notices.length > 0) {
+          // Dismiss the most recent notice
+          dismissNotice(notices[notices.length - 1].id);
+        }
+        return;
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [newChat, openSettings, state.notices, dismissNotice]);
+
   const isEmpty = state.messages.length === 0;
 
   return (
@@ -176,6 +241,16 @@ export default function App() {
               {state.banner.provider} · {state.banner.model}
             </span>
           )}
+          {state.usage && (
+            <span
+              className="topbar-tokens"
+              title={`Turn total — prompt (input to model): ${state.usage.last.promptTokens.toLocaleString()}\ncompletion (model output): ${state.usage.last.completionTokens.toLocaleString()}`}
+            >
+              <span className="token-prompt">{formatTokens(state.usage.last.promptTokens)}</span>
+              <span className="token-sep">/</span>
+              <span className="token-completion">{formatTokens(state.usage.last.completionTokens)}</span>
+            </span>
+          )}
         </header>
 
         <div className="chat-scroll-area" ref={messagesScrollRef} onScroll={onScroll}>
@@ -183,9 +258,11 @@ export default function App() {
             <div className="messages">
               {isEmpty ? (
                 <EmptyState
+                  hasSession={!!state.session}
                   onPick={(prompt) => {
                     setComposerPrefill(prompt);
                   }}
+                  onNewChat={newChat}
                 />
               ) : (
                 state.messages.map((m, i) => {
@@ -219,12 +296,12 @@ export default function App() {
           </div>
         </div>
 
-        {/* Floating task panel — top-right of the chat area */}
-        {state.tasksEnabled && state.tasks.length > 0 && (
+        {/* Floating task panel — top-right of the chat area (only with active session) */}
+        {state.session && state.tasksEnabled && state.tasks.length > 0 && (
           <TaskPanel tasks={state.tasks} taskPlan={state.taskPlan} />
         )}
 
-        {showJump && (
+        {showJump && state.session && (
           <button
             className="jump-bottom visible"
             onClick={() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })}
@@ -233,9 +310,12 @@ export default function App() {
           </button>
         )}
 
-        <div className="chat-center composer-wrap">
-          <Composer busy={state.busy} onSend={sendMessage} />
-        </div>
+        {/* Composer only when a session is active */}
+        {state.session && (
+          <div className="chat-center composer-wrap">
+            <Composer busy={state.busy} onSend={sendMessage} />
+          </div>
+        )}
       </main>
 
       {showSettings && settingsData && (
