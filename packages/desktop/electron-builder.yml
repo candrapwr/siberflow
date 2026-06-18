@@ -6,13 +6,18 @@ directories:
 files:
   - out/**/*
   - package.json
-  - "!**/node_modules/*/{CHANGELOG.md,README.md,readme.md,readme}"
+  - "!**/node_modules/*/{CHANGELOG.md,README.md,readbe.md,readme}"
   - "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}"
   - "!**/*.{md,markdown}"
   - "!**/.{idea,git,cache,vscode,DS_Store}"
 extraResources:
   - from: resources
     to: resources
+# Publish ke GitHub Releases. GH_TOKEN env var wajib di-set.
+publish:
+  provider: github
+  owner: candrapwr
+  repo: siberflow
 mac:
   category: public.app-category.developer-tools
   target:
@@ -38,4 +43,3 @@ dmg:
       y: 220
       type: link
       path: /Applications
-publish: null

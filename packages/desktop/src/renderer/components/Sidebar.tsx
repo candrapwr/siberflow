@@ -5,7 +5,15 @@
 
 import { memo, useEffect, useRef, useState } from "react";
 import type { SessionSummary } from "@shared/protocol";
-import { BrandIcon, NewChatIcon, SettingsIcon, TrashIcon, EditIcon, FolderIcon } from "./icons.js";
+import {
+  BrandIcon,
+  NewChatIcon,
+  SettingsIcon,
+  TrashIcon,
+  EditIcon,
+  FolderIcon,
+  SearchIcon,
+} from "./icons.js";
 
 interface SidebarProps {
   sessions: SessionSummary[];
@@ -63,11 +71,22 @@ export const Sidebar = memo(function Sidebar({
 }: SidebarProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (editingId) inputRef.current?.focus();
   }, [editingId]);
+
+  // Filter sessions by search query (match name or first few chars of id)
+  const filtered = searchQuery.trim()
+    ? sessions.filter(
+        (s) =>
+          (s.name ?? "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+          s.id.toLowerCase().startsWith(searchQuery.toLowerCase()),
+      )
+    : sessions;
 
   // Group sessions by relative time, then sort newest-first within each group.
   const buckets: Record<TimeGroup, SessionSummary[]> = {
@@ -75,7 +94,7 @@ export const Sidebar = memo(function Sidebar({
     yesterday: [],
     earlier: [],
   };
-  for (const s of sessions) buckets[groupOf(s.updatedAt)].push(s);
+  for (const s of filtered) buckets[groupOf(s.updatedAt)].push(s);
   for (const k of GROUP_ORDER) {
     buckets[k].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
@@ -96,6 +115,22 @@ export const Sidebar = memo(function Sidebar({
     setEditingId(null);
     setDraft("");
   };
+
+  // Keyboard shortcut: focus search on Cmd+Shift+F, or Escape to clear
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "f") {
+        e.preventDefault();
+        searchRef.current?.focus();
+      }
+      if (e.key === "Escape" && searchQuery && document.activeElement === searchRef.current) {
+        setSearchQuery("");
+        searchRef.current?.blur();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [searchQuery]);
 
   const renderSession = (s: SessionSummary) => (
     <div
@@ -156,6 +191,7 @@ export const Sidebar = memo(function Sidebar({
   );
 
   const hasAny = sessions.length > 0;
+  const hasFiltered = filtered.length > 0;
 
   return (
     <aside className="sidebar">
@@ -165,14 +201,38 @@ export const Sidebar = memo(function Sidebar({
           <span>Siberflow</span>
         </div>
         <div className="sidebar-actions">
-          <button className="icon-btn" onClick={onNewChat} title="New chat">
+          <button className="icon-btn" onClick={onNewChat} title="New chat (Cmd+N)">
             <NewChatIcon size={15} />
           </button>
-          <button className="icon-btn" onClick={onOpenSettings} title="Settings">
+          <button className="icon-btn" onClick={onOpenSettings} title="Settings (Cmd+,)">
             <SettingsIcon size={15} />
           </button>
         </div>
       </div>
+
+      {/* Search / filter bar */}
+      {hasAny && (
+        <div className="sidebar-search">
+          <SearchIcon size={12} className="sidebar-search-icon" />
+          <input
+            ref={searchRef}
+            className="sidebar-search-input"
+            type="text"
+            placeholder="Search sessions…"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+          {searchQuery && (
+            <button
+              className="sidebar-search-clear"
+              onClick={() => setSearchQuery("")}
+              title="Clear"
+            >
+              &times;
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="session-list">
         {!hasAny && (
@@ -182,7 +242,17 @@ export const Sidebar = memo(function Sidebar({
             <div className="session-empty-hint">Click + to start a conversation</div>
           </div>
         )}
+        {hasAny && !hasFiltered && (
+          <div className="session-empty">
+            <SearchIcon size={18} />
+            <div>No sessions match &ldquo;{searchQuery}&rdquo;</div>
+            <div className="session-empty-hint">
+              Try a different search term
+            </div>
+          </div>
+        )}
         {hasAny &&
+          hasFiltered &&
           GROUP_ORDER.map((g) =>
             buckets[g].length > 0 ? (
               <div key={g} className="session-group">

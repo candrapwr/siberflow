@@ -1,6 +1,6 @@
 {
   "name": "siberflow-desktop",
-  "version": "0.1.0",
+  "version": "26.07.1802",
   "description": "Siberflow desktop app",
   "productName": "Siberflow",
   "type": "module",
@@ -16,6 +16,9 @@
     "package:mac": "electron-vite build && electron-builder --mac",
     "package:win": "electron-vite build && electron-builder --win",
     "package:linux": "electron-vite build && electron-builder --linux",
+    "release:mac": "electron-vite build && electron-builder --mac --publish always",
+    "release:win": "electron-vite build && electron-builder --win --publish always",
+    "release:linux": "electron-vite build && electron-builder --linux --publish always",
     "postinstall": "electron-builder install-app-deps",
     "rebuild": "electron-rebuild -f -w @siberflow/core",
     "clean": "rm -rf out dist"
@@ -25,12 +28,14 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^9.0.1",
+    "react-syntax-highlighter": "^15.6.1",
     "remark-gfm": "^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
+    "@types/react-syntax-highlighter": "^15.5.13",
     "@vitejs/plugin-react": "^4.3.4",
     "electron": "33.4.11",
     "electron-builder": "^25.1.8",

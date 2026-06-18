@@ -306,8 +306,11 @@ export class AgentHost {
   async deleteSessionById(id: string): Promise<void> {
     await deleteSession(id);
     if (this.current?.id === id) {
+      // Active session deleted — clear state so the renderer shows the empty
+      // welcome screen instead of the now-orphaned messages/composer.
       this.current = null;
       this.agent = null;
+      this.emit({ type: "session-changed", session: null });
     }
     await this.broadcastSessionList();
   }
@@ -408,7 +411,6 @@ export class AgentHost {
     this.turnAbort = abort;
     this.planEmittedForTurn = false;
     const initialTaskCount = this.agent.getTasks().length;
-    let latestUsage: UsageInfo["last"] | undefined;
     let turnAddPrompt = 0;
     let turnAddCompletion = 0;
 
@@ -419,7 +421,6 @@ export class AgentHost {
         onContent: (delta) => this.emit({ type: "assistant-content", delta }),
         onAssistantEnd: (_msg, meta) => {
           if (meta.usage) {
-            latestUsage = meta.usage;
             turnAddPrompt += meta.usage.promptTokens;
             turnAddCompletion += meta.usage.completionTokens;
           }
@@ -458,8 +459,14 @@ export class AgentHost {
           this.emit({ type: "max-iterations", limit }),
       });
 
-      if (this.current && latestUsage) {
-        this.current.usage.last = latestUsage;
+      if (this.current) {
+        // usage.last = AKUMULASI seluruh iterasi pada turn terakhir (semua tool
+        // loops digabung), bukan hanya iterasi terakhir. Ini yang ditampilkan ke
+        // UI sebagai "token yang dikirim ke AI" untuk satu turn.
+        this.current.usage.last = {
+          promptTokens: turnAddPrompt,
+          completionTokens: turnAddCompletion,
+        };
         this.current.usage.total.promptTokens += turnAddPrompt;
         this.current.usage.total.completionTokens += turnAddCompletion;
       }
@@ -496,6 +503,7 @@ export class AgentHost {
     this.current = session;
     this.writeOptimizedView();
     this.emit({ type: "session-changed", session: this.sessionInfo() });
+    this.emitUsage();
   }
 
   private writeOptimizedView(): void {
@@ -546,5 +554,12 @@ export class AgentHost {
     if (this.settings.tasks && this.agent) {
       this.emit({ type: "tasks", tasks: this.agent.getTasks() as Task[] });
     }
+    this.emitUsage();
+  }
+
+  /** Emit the current usage stats so the renderer can show context size. */
+  private emitUsage(): void {
+    const usage = this.getUsage();
+    if (usage) this.emit({ type: "usage", usage });
   }
 }
