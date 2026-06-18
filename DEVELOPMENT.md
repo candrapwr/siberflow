@@ -13,7 +13,7 @@ Runtime dependencies di `@siberflow/core` saat ini:
 
 ```
 siberflow/
-├── package.json              # workspaces root; build script chains core → cli
+├── package.json              # workspaces root; build script chains core → cli → vscode-ext
 ├── tsconfig.base.json        # shared strict TS config + types:[node]
 ├── .env.example
 └── packages/
@@ -23,6 +23,7 @@ siberflow/
     │       │   ├── types.ts       # Message, ToolCall, StreamEvent, FinishReason
     │       │   ├── agent.ts       # class Agent — streaming loop
     │       │   ├── optimize.ts    # optimizeContext() — Layer 1 context compaction
+    │       │   ├── prompts.ts     # buildSystemPrompt() — interface-aware system prompt
     │       │   └── tasks.ts       # Task, TaskStore, renderTaskList
     │       ├── providers/
     │       │   ├── base.ts        # interface Provider (chatStream only)
@@ -34,6 +35,8 @@ siberflow/
     │       │   ├── openai.ts      # extends OpenAICompatibleProvider (/v1/chat/completions)
     │       │   ├── openai-responses.ts   # standalone — OpenAI /v1/responses API
     │       │   ├── qwen.ts        # extends OpenAICompatibleProvider (Alibaba DashScope/MaaS)
+    │       │   ├── zai.ts         # extends OpenAICompatibleProvider (Z.AI / GLM)
+    │       │   ├── claude.ts      # extends OpenAICompatibleProvider (Anthropic OpenAI-compat)
     │       │   └── registry.ts    # createProvider(name, config)
     │       ├── tools/
     │       │   ├── base.ts        # interface Tool, ToolContext { projectDir }
@@ -47,6 +50,10 @@ siberflow/
     │       │   │   └── index.ts   # dbTools[]
     │       │   ├── cli/
     │       │   │   ├── exec.ts    # shell exec, cwd=projectDir
+    │       │   │   └── index.ts
+    │       │   ├── ssh/
+    │       │   │   ├── exec.ts    # ssh_exec — remote shell over SSH2
+    │       │   │   ├── sftp.ts    # sftp — remote file transfer
     │       │   │   └── index.ts
     │       │   ├── task/
     │       │   │   ├── update.ts  # task_update tool (opt-in via SIBERFLOW_TASKS)
@@ -67,16 +74,39 @@ siberflow/
     │       ├── tool-renderer.ts   # ToolCallRenderer (raw arg streaming)
     │       ├── spinner.ts         # Spinner (loading animation, TTY-only)
     │       └── ui.ts              # ANSI colors + splashBanner + helpers
-    └── vscode-ext/           # @siberflow/vscode (sidebar webview, bundled by esbuild)
-        ├── package.json      # manifest: viewsContainer, view, commands, settings
-        ├── resources/icon.svg          # activity bar icon
-        ├── esbuild.config.mjs          # bundles extension (cjs) + webview (iife)
-        ├── src/
-        │   ├── extension.ts            # activate(): register WebviewViewProvider + commands
-        │   ├── chat-panel.ts           # ChatViewProvider — agent + session + settings lifecycle
-        │   └── protocol.ts             # ExtToView / ViewToExt message types
-        └── webview/
-            └── main.ts                 # webview-side: topbar, popovers, messages, composer
+    ├── vscode-ext/           # siberflow-chat (sidebar webview, bundled by esbuild)
+    │   ├── package.json      # manifest: viewsContainer, view, commands, settings
+    │   ├── resources/icon.svg          # activity bar icon
+    │   ├── esbuild.config.mjs          # bundles extension (cjs) + webview (iife)
+    │   ├── src/
+    │   │   ├── extension.ts            # activate(): register WebviewViewProvider + commands
+    │   │   ├── chat-panel.ts           # ChatViewProvider — agent + session + settings lifecycle
+    │   │   └── protocol.ts             # ExtToView / ViewToExt message types
+    │   └── webview/
+    │       └── main.ts                 # webview-side: topbar, popovers, messages, composer
+    └── desktop/              # siberflow-desktop (Electron + React + Vite)
+        ├── package.json              # electron, electron-vite, electron-builder, react
+        ├── electron.vite.config.ts   # vite config (main + preload + renderer)
+        ├── electron-builder.yml      # installer config (dmg/nsis/AppImage)
+        ├── resources/                # app icons (.icns/.ico/.png + source .svg)
+        └── src/
+            ├── shared/protocol.ts    # MainEvent / RendererCalls typed IPC contract
+            ├── main/
+            │   ├── index.ts          # Electron entry: BrowserWindow, app lifecycle
+            │   ├── agent-host.ts     # Agent lifecycle + turn runner (mirrors chat-panel.ts)
+            │   ├── ipc.ts            # ipcMain handlers (typed)
+            │   ├── secrets.ts        # safeStorage wrapper untuk API keys
+            │   └── settings.ts       # JSON settings store di userData
+            ├── preload/
+            │   └── index.ts          # contextBridge — expose window.siberflow
+            └── renderer/
+                ├── index.html        # Vite entry
+                ├── main.tsx          # React root
+                ├── App.tsx           # layout (sidebar + chat + modals)
+                ├── ipc.ts            # typed wrapper window.siberflow
+                ├── components/       # Sidebar, ChatView, Message, Composer, TaskPanel, ...
+                ├── hooks/            # useChat (streaming reducer), useSessions
+                └── styles/global.css # design system (flat, dark)
 ```
 
 ## Inti
@@ -162,10 +192,12 @@ interface ToolContext {
 
 Tool return string yang akan dikirim balik ke LLM sebagai `tool` message content. Throw `Error` untuk kegagalan — `ToolRegistry.execute()` yang menangkap & convert ke "Error: ..." string.
 
-Default registry saat ini memuat tiga kategori tool:
+Default registry saat ini memuat lima kategori tool:
 - file tools: `read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`
 - cli tool: `exec`
-- database tool: `db_query`
+- database tool: `db_query` (MySQL / PostgreSQL / SQLite)
+- ssh tools: `ssh_exec` (remote shell via SSH2), `sftp` (remote file transfer)
+- task tool: `task_update` (opt-in via `tasks: true` — silent di semua interface)
 
 ### Database tool
 
@@ -372,11 +404,12 @@ Semua via env. CLI loader (`packages/cli/src/env.ts`) walk-up dari cwd cari `.en
 
 | Variabel | Default | Keterangan |
 |---|---|---|
-| `SIBERFLOW_PROVIDER` | `deepseek` | `deepseek` / `gemini` / `openai` / `openai-responses` / `grok` / `qwen` |
+| `SIBERFLOW_PROVIDER` | `deepseek` | `deepseek` / `gemini` / `openai` / `openai-responses` / `grok` / `qwen` / `zai` / `claude` |
 | `SIBERFLOW_MODEL` | provider default | Override model string |
 | `SIBERFLOW_BASE_URL` | provider default | Override endpoint |
 | `SIBERFLOW_PROJECT_DIR` | `INIT_CWD` → `cwd()` | Sandbox root. Absolute / relative / `~/...`. Divalidasi exists. |
 | `SIBERFLOW_CONTEXT_OPTIMIZE` | `false` | Aktifkan Layer 1 — buang tool call & result dari turn sebelumnya, sisakan teks final assistant |
+| `SIBERFLOW_CONTEXT_OPTIMIZE_MODE` | `summary` | `drop` (buang total) atau `summary` (sisakan `[SUMMARY]` breadcrumb berisi tool signature) |
 | `SIBERFLOW_TASKS` | `false` | Aktifkan task checklist (`task_update` tool + injeksi state tiap turn) |
 | `SIBERFLOW_AUTO_CONTINUE` | `true` | Sambung otomatis respons yang kepotong limit output token (set `false` untuk matikan) |
 | `SIBERFLOW_DEBUG` | `false` | Tracing verbose ke stderr (HTTP status, raw finish_reason, usage, error, stream lifecycle) |
@@ -387,6 +420,8 @@ Semua via env. CLI loader (`packages/cli/src/env.ts`) walk-up dari cwd cari `.en
 | `OPENAI_API_KEY` | — | wajib jika `provider=openai` atau `openai-responses` |
 | `XAI_API_KEY` | — | wajib jika `provider=grok` |
 | `DASHSCOPE_API_KEY` | — | wajib jika `provider=qwen` (Alibaba) |
+| `ZAI_API_KEY` | — | wajib jika `provider=zai` (Z.AI / GLM) |
+| `ANTHROPIC_API_KEY` | — | wajib jika `provider=claude` (Anthropic) |
 
 Mapping provider → env var nama API key di `config/index.ts` (`apiKeyEnvVar`). Saat tambah provider, tambah case di sana juga.
 
@@ -569,15 +604,127 @@ Kalau nanti mau publish:
 
 Perlu juga: marketplace icon PNG 128×128 (`resources/icon.png` + field `icon` di package.json) — saat ini hanya SVG untuk activity bar, marketplace tetap minta PNG terpisah.
 
+## Desktop App (Electron)
+
+Package `packages/desktop` — aplikasi desktop standalone (mirip Claude Desktop). UI React + Vite, terpisah total dari CLI/VSCode karena kebutuhan desktop berbeda (window management, folder picker per-session, multi-session sidebar, branding installer). Mengkonsumsi `@siberflow/core` langsung.
+
+### Arsitektur
+
+Dua proses terpisah dengan typed IPC bridge:
+
+```
+┌─────────────────────────────────────┐
+│  Main Process (Node.js, ESM)        │
+│  ├─ BrowserWindow + app lifecycle   │
+│  ├─ AgentHost (mirrors chat-panel)  │ ← @siberflow/core
+│  ├─ ipcMain handlers                │
+│  ├─ safeStorage (API keys)          │
+│  └─ dialog (folder picker)          │
+│         │ contextBridge             │
+│         ▼                           │
+│  Renderer (React, sandboxed)        │
+│  ├─ Sidebar (multi-session)         │
+│  ├─ ChatView (messages + tools)     │
+│  ├─ Composer + TaskPanel            │
+│  └─ SettingsModal                   │
+└─────────────────────────────────────┘
+```
+
+### Main Process
+
+- **[main/index.ts](packages/desktop/src/main/index.ts)** — `app.whenReady`, `BrowserWindow` (1000×720), preload path, branding (`app.setName("Siberflow")`, window icon)
+- **[main/agent-host.ts](packages/desktop/src/main/agent-host.ts)** — `AgentHost` class: port logic dari VSCode `chat-panel.ts`. Mengelola lifecycle Agent, provider, registry, sessions, turn runner dengan `AbortController`. Auto-name session dari first user message (6 kata pertama)
+- **[main/ipc.ts](packages/desktop/src/main/ipc.ts)** — semua `ipcMain.handle` registration, forwarding streaming events ke renderer via `webContents.send`
+- **[main/secrets.ts](packages/desktop/src/main/secrets.ts)** — wrapper `safeStorage`: `getApiKey(provider)`, `setApiKey`, `deleteApiKey`. Encrypt ke `userData/siberflow-keys.json`
+- **[main/settings.ts](packages/desktop/src/main/settings.ts)** — JSON settings store di `userData/siberflow-settings.json`
+
+### Preload
+
+[preload/index.ts](packages/desktop/src/preload/index.ts) — `contextBridge.exposeInMainWorld("siberflow", api)`. Renderer hanya bisa panggil method ter-typed, tidak ada akses Node langsung (`contextIsolation: true`, `nodeIntegration: false`).
+
+### Shared protocol
+
+[shared/protocol.ts](packages/desktop/src/shared/protocol.ts) — contract ter-typed antara main dan renderer:
+- `MainEvent` — 18 union types (streaming events: `assistant-start`, `assistant-content`, `tool-call-start`, `tasks`, `error`, dll) dikirim main → renderer
+- `RendererCalls` — method interface yang renderer panggil (`send`, `stop`, `newSession`, `loadSession`, `pickFolder`, `saveSettings`, dll)
+- `SettingsValues`, `SessionSummary`, `UsageInfo` — tipe data bersama
+
+### Renderer (React)
+
+State management via reducer (`hooks/useChat.ts`) yang subscribe ke streaming events:
+
+```ts
+type ContentBlock =
+  | { kind: "text"; id: number; text: string }
+  | { kind: "tool"; id: number; tool: ToolCall };
+type AssistantTurn = { role: "assistant"; blocks: ContentBlock[] };
+```
+
+Setiap assistant turn = list berurutan text + tool blocks. IDs monoton (`++blockSeq`) untuk hindari collision antar iteration. User message ditampilkan optimistic via action `user-send` sebelum backend turn selesai.
+
+Komponen:
+- **App.tsx** — root layout: resizable sidebar + chat area (centered max-width 760px) + floating task panel + modals
+- **Sidebar.tsx** — session list grouped per folder, new/delete, rename inline (double-click)
+- **Message.tsx** — user/assistant bubbles dengan `react-markdown` + collapsible tool blocks (skip `task_update`)
+- **Composer.tsx** — auto-resize textarea, Enter to send, Shift+Enter newline, send/stop button
+- **TaskPanel.tsx** — floating kanan-atas, collapsible, progress bar
+- **SettingsModal.tsx** — provider select, API key, agent config (grouped sections)
+
+### Konfigurasi (TIDAK pakai `.env`)
+
+Sama seperti VSCode extension — settings tersimpan lokal, bukan env:
+- **API key** → Electron `safeStorage` (OS keychain encrypted)
+- **Setting lainnya** → JSON di `userData/siberflow-settings.json`: `provider`, `model`, `tasks`, `contextOptimize`, `autoContinue`, `hideTools`, `maxIterations`, `debug`
+- **`projectDir`** → pilih per-session via native folder picker dialog (`dialog.showOpenDialog`)
+
+### Bundling
+
+[electron.vite.config.ts](packages/desktop/electron.vite.config.ts) — tiga output via `electron-vite`:
+- `out/main/index.js` — main process (esbuild, external native modules `ssh2`/`sqlite3`/`pg`/`mysql2`)
+- `out/preload/index.mjs` — preload bridge
+- `out/renderer/` — Vite + React (HMR saat dev)
+
+### Packaging
+
+[electron-builder.yml](packages/desktop/electron-builder.yml) — installer config:
+- macOS: `.dmg` (arm64/x64)
+- Windows: NSIS `.exe`
+- Linux: `.AppImage`
+
+```bash
+npm run package:mac    # → packages/desktop/dist/Siberflow-<version>-arm64.dmg (~110MB)
+```
+
+Native modules (`ssh2`, `sqlite3`, `cpu-features`) otomatis di-rebuild untuk Electron ABI via `postinstall: electron-builder install-app-deps`. Penting: version `electron` di package.json harus **fixed** (bukan `^`), karena electron-builder butuh binary exact match.
+
+### Branding
+
+- `app.setName("Siberflow")` di main process → OS menampilkan nama benar di dock/menubar
+- `productName: "Siberflow"` di package.json
+- App icons generated dari `resources/icon.svg` (background gradient biru + logo S putih):
+  - `icon.icns` (macOS, 16–1024px)
+  - `icon.ico` (Windows, 16–256px)
+  - `icon.png` (Linux, 512×512)
+
+### Cross-compat dengan CLI & VSCode
+
+Session files di lokasi yang sama (`~/.siberflow/sessions/`), format identik. Session dibuat via desktop bisa di-load di CLI/VSCode dan sebaliknya.
+
 ## Build & Dev
 
 | Script | Aksi |
 |---|---|
 | `npm install` | resolve workspaces |
 | `npm run build` | core → cli → vscode-ext (urutan eksplisit, bukan alphabetical) |
+| `npm run build:core` | build hanya core (prasyarat desktop/cli) |
+| `npm run build:desktop` | core → desktop (electron-vite build) |
 | `npm run dev:cli` | tsx (no rebuild) — paling cepat untuk iterasi |
 | `npm run cli` | run dari `dist/` (perlu build dulu) |
-| `npm run clean` | hapus semua `dist/` |
+| `npm run dev:desktop` | electron-vite dev (HMR renderer, auto-reload main) |
+| `npm run package:desktop` | build + electron-builder (auto-detect platform) |
+| `npm run package:mac` | build + electron-builder --mac (.dmg) |
+| `npm run rebuild:desktop` | rebuild native modules untuk Electron ABI |
+| `npm run clean` | hapus semua `dist/` dan `out/` |
 
 ### TypeScript project references
 
@@ -637,13 +784,17 @@ Contoh kategori baru yang sudah ada di repo:
 - `tools/cli/*` untuk shell command
 - `tools/db/*` untuk akses database
 
-### Interface baru (web/vscode)
+### Interface baru (web/desktop)
 
-Buat workspace baru di `packages/<name>/`, depend ke `@siberflow/core`. Subscribe `AgentEvents`, kelola session lifecycle pakai `saveSession/loadSession`. Tidak perlu modifikasi core.
+Buat workspace baru di `packages/<name>/`, depend ke `@siberflow/core`. Subscribe `AgentEvents`, kelola session lifecycle pakai `saveSession/loadSession`. Tidak perlu modifikasi core. Lihat `packages/desktop` (Electron + React) atau `packages/vscode-ext` (webview) sebagai contoh pola integrasi.
 
 ## Catatan Keamanan Singkat
 
 - File tools sandboxed ke `projectDir` (hard).
 - `exec` tool cwd=projectDir tapi shell bisa akses path lain (soft). OK untuk single-user dev; untuk multi-user / web public perlu permission layer.
-- API key plain text di env. Untuk produksi multi-user pakai secret manager.
-- Session JSON di `~/.siberflow/sessions/` un-encrypted, mode 644.
+- API key:
+  - CLI: plain text di env / `.env` (gitignored)
+  - VSCode: `vscode.SecretStorage` (OS keychain, encrypted)
+  - Desktop: Electron `safeStorage` (OS keychain, encrypted) di `userData/siberflow-keys.json`
+- Session JSON di `~/.siberflow/sessions/` un-encrypted, mode 644. Berisi tool call args (termasuk db password / ssh key) verbatim — aware untuk deployment multi-user.
+- `task_update` tool silent di semua interface (tetap dieksekusi, tidak dirender di transcript).

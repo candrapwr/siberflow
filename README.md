@@ -1,6 +1,6 @@
 # Siberflow
 
-AI platform dengan dukungan multi-provider, tool calling streaming, sandbox file, akses database, persistensi multi-session, dan task checklist. Interface saat ini: **CLI** dan **VSCode extension** (sidebar panel). Web menyusul.
+AI platform dengan dukungan multi-provider, tool calling streaming, sandbox file, akses database, persistensi multi-session, dan task checklist. Interface saat ini: **CLI**, **VSCode extension** (sidebar panel), dan **Desktop app** (Electron + React).
 
 ## Provider yang didukung
 
@@ -20,8 +20,9 @@ npm workspaces monorepo.
 - `packages/core` — agent loop, provider adapter, tool registry, file/db tools, session store, context optimize, task store
 - `packages/cli` — REPL interaktif, slash commands, ASCII banner, streaming render
 - `packages/vscode-ext` — VSCode extension dengan sidebar chat panel, settings UI, markdown render
+- `packages/desktop` — Electron desktop app (React + Vite), standalone UI, multi-session sidebar, safeStorage API key
 
-Semua sesi tersimpan di `~/.siberflow/sessions/` — cross-compat antar CLI dan VSCode.
+Semua sesi tersimpan di `~/.siberflow/sessions/` — cross-compat antar CLI, VSCode, dan Desktop.
 
 ## CLI
 
@@ -86,14 +87,47 @@ VSIX self-contained (~40 KB) — esbuild sudah inline `@siberflow/core` + `marke
 
 Update versi: edit `version` di `packages/vscode-ext/package.json`, lalu `npm run package:vscode` lagi.
 
+## Desktop App (Electron)
+
+Aplikasi desktop standalone (mirip Claude Desktop). UI dibangun dari nol dengan React + Vite, terpisah dari CLI/VSCode karena kebutuhan desktop berbeda (window management, folder picker per-session, sidebar multi-session). Mengkonsumsi `@siberflow/core` langsung — semua logic agent, tools, sessions reused.
+
+### Mode dev
+
+```bash
+npm run build:core      # build core dulu (prasyarat)
+npm run dev:desktop     # electron-vite dev (HMR untuk renderer)
+```
+
+Pertama kali buka, settings modal muncul untuk pilih provider + input API key. API key disimpan via **Electron `safeStorage`** (OS keychain, encrypted) di `~/Library/Application Support/Siberflow/siberflow-keys.json`.
+
+### Build installer
+
+```bash
+npm run package:desktop       # build + package (auto-detect platform)
+npm run package:mac           # macOS (.dmg)
+npm run package:win           # Windows (.exe / NSIS)
+npm run package:linux         # Linux (.AppImage)
+```
+
+Output: `packages/desktop/dist/Siberflow-<version>-<arch>.dmg` (macOS, ~110MB). Native modules (`ssh2`, `sqlite3`) otomatis di-rebuild untuk Electron ABI via `postinstall: electron-builder install-app-deps`.
+
+### Fitur desktop
+
+- **Multi-session sidebar** — daftar chat dikelompokkan per folder project, switch/new/delete, rename inline (double-click)
+- **Folder picker** — tiap chat session terikat ke satu folder project (sandbox tool file/exec); pilih via native dialog saat new chat
+- **Layout centered** — messages & composer di-tengah (max-width 760px) untuk readability, task panel floating di kanan-atas
+- **Resizable sidebar** — drag border kanan sidebar untuk resize
+- **Branding lengkap** — app name, icon (.icns/.ico/.png), window title "Siberflow"
+
 ## Fitur ringkas
 
 - **Streaming response** — token muncul real-time, support markdown
 - **File dan shell tools** — `read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`, `exec`
 - **Database query tool** — `db_query` mendukung `mysql`, `postgresql`, dan `sqlite`; query bebas, optional `params`, SQLite path tetap dibatasi ke project dir
 - **Task checklist** — opt-in via env / settings; AI maintain checklist multi-step yang bisa di-resume setelah Ctrl+C atau session restart
-- **Context optimization** — buang tool history dari turn lama (default aktif); current task tetap utuh. Dua mode via `SIBERFLOW_CONTEXT_OPTIMIZE_MODE`: `drop` (buang total, default) atau `summary` (sisakan tag `[SUMMARY]` berisi *signature* per tool — nama + identifier ringkas seperti `exec("df -h")` / `write_file("src/foo.ts")`; payload berat dan result tetap dibuang)
+- **Context optimization** — buang tool history dari turn lama (default aktif); current task tetap utuh. Dua mode via `SIBERFLOW_CONTEXT_OPTIMIZE_MODE`: `drop` (buang total, default) atau `summary` (sisakan tag `[SUMMARY]` berisi *signature* per tool — nama + identifier ringkas seperti `exec("df -h")` / `write_file("src/foo.ts")`; payload berat dan result tetap dibuang). Defense-in-depth: provider & serialization selalu menjamin assistant message punya content atau tool_calls (fix error 400 DeepSeek)
 - **Auto-continue** — sambung otomatis respons yang kepotong max_tokens
+- **Silent task_update** — tool `task_update` tetap dieksekusi tapi tidak ditampilkan di transcript (CLI, VSCode, Desktop); efeknya hanya terlihat di task checklist
 - **Multi-session** — sesi tersimpan per project, picker saat startup
 - **Debug tracing** — env `SIBERFLOW_DEBUG=true` untuk log HTTP/finish_reason/usage
 

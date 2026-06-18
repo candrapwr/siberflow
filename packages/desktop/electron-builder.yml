@@ -1,0 +1,41 @@
+appId: com.siberflow.desktop
+productName: Siberflow
+directories:
+  buildResources: build
+  output: dist
+files:
+  - out/**/*
+  - package.json
+  - "!**/node_modules/*/{CHANGELOG.md,README.md,readme.md,readme}"
+  - "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}"
+  - "!**/*.{md,markdown}"
+  - "!**/.{idea,git,cache,vscode,DS_Store}"
+extraResources:
+  - from: resources
+    to: resources
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - dmg
+  icon: resources/icon.icns
+win:
+  target:
+    - nsis
+  icon: resources/icon.ico
+linux:
+  target:
+    - AppImage
+  icon: resources/icon.png
+  category: Development
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+dmg:
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+publish: null
