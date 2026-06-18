@@ -93,6 +93,15 @@ export default function App() {
     }
   }, [state.session, sessions]);
 
+  // Refresh the sidebar list when the active session's name changes — this
+  // picks up auto-renames (first-prompt substring) so the sidebar shows the
+  // new name without a manual reload.
+  useEffect(() => {
+    if (state.session?.name) {
+      void sessions.refresh();
+    }
+  }, [state.session?.name, sessions]);
+
   // Auto-scroll to bottom on new messages while busy.
   useEffect(() => {
     if (!state.busy) return;
@@ -147,6 +156,7 @@ export default function App() {
         <Sidebar
           sessions={sessions.sessions}
           activeId={sessions.activeId}
+          currentFolder={state.session?.projectDir ?? null}
           onSelect={(id) => void sessions.loadSession(id)}
           onDelete={(id) => void sessions.deleteSession(id)}
           onRename={(id, name) => void renameSession(id, name)}

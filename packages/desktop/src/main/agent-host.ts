@@ -58,6 +58,42 @@ function isAbortError(err: unknown): boolean {
   return err instanceof Error && err.name === "AbortError";
 }
 
+/**
+ * Derive a short, human-readable session name from the first user prompt.
+ * - Takes up to 5 words.
+ * - Truncates at a word boundary near 50 characters (no mid-word cut).
+ * - Capitalizes the first letter.
+ * - Strips leading command prefixes like "tolong", "please", "coba", "bisa".
+ */
+function deriveSessionName(input: string): string {
+  const STRIP_PREFIXES = [
+    "tolong", "please", "tolonglah", "coba", "bisa", "bantu", "help",
+    "minta", "saya", "aku", "gimana", "gmn", "how", "what", "why", "can you",
+  ];
+  const MAX_WORDS = 5;
+  const MAX_CHARS = 50;
+
+  let words = input.trim().replace(/\s+/g, " ").split(" ");
+  // Drop leading filler words so the name starts with the real intent.
+  while (words.length > 1 && STRIP_PREFIXES.includes(words[0]!.toLowerCase())) {
+    words = words.slice(1);
+  }
+  words = words.slice(0, MAX_WORDS);
+
+  let name = words.join(" ");
+  // Truncate at the last word boundary that fits within MAX_CHARS.
+  if (name.length > MAX_CHARS) {
+    name = name.slice(0, MAX_CHARS);
+    const lastSpace = name.lastIndexOf(" ");
+    if (lastSpace > 15) name = name.slice(0, lastSpace);
+    name = name.trimEnd() + "…";
+  }
+
+  // Capitalize the first character.
+  name = name.charAt(0).toUpperCase() + name.slice(1);
+  return name || "New chat";
+}
+
 export class AgentHost {
   private provider: Provider | null = null;
   private registry: ToolRegistry | null = null;
@@ -302,12 +338,12 @@ export class AgentHost {
 
   async send(input: string): Promise<void> {
     // Auto-name the session from the first user message if it has no name yet.
-    // Takes up to 6 words of the prompt, truncated to 60 chars.
+    // Takes a substring of the prompt: up to 5 words, truncated at a word
+    // boundary near 50 chars, with the first letter capitalized.
     if (this.current && this.current.name === null) {
       const firstUserSeen = this.current.messages.some((m) => m.role === "user");
       if (!firstUserSeen) {
-        const words = input.trim().split(/\s+/).slice(0, 6).join(" ");
-        this.current.name = words.length > 60 ? words.slice(0, 57) + "…" : words;
+        this.current.name = deriveSessionName(input);
         this.current.updatedAt = new Date().toISOString();
         saveSessionSync(this.current);
         this.emit({ type: "session-changed", session: this.sessionInfo() });
