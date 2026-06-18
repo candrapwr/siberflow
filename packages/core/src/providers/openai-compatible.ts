@@ -205,7 +205,7 @@ export abstract class OpenAICompatibleProvider implements Provider {
 
     const message: AssistantMessage = {
       role: "assistant",
-      content: content.length > 0 ? content : null,
+      content: content.length > 0 ? content : toolCalls.length > 0 ? null : " ",
       ...(toolCalls.length > 0 ? { toolCalls } : {}),
     };
 
@@ -223,13 +223,21 @@ function toOpenAIMessage(m: Message): OpenAIChatMessage {
     case "system":
     case "user":
       return { role: m.role, content: m.content };
-    case "assistant":
+    case "assistant": {
+      const hasToolCalls = !!(m.toolCalls && m.toolCalls.length > 0);
       return {
         role: "assistant",
-        content: m.content,
-        ...(m.toolCalls && m.toolCalls.length > 0
+        // Belt-and-suspenders: never emit null/empty content without
+        // tool_calls — strict OpenAI-compatible servers (DeepSeek, etc.)
+        // reject "{role: assistant, content: null}" with a 400.
+        content: hasToolCalls
+          ? m.content ?? ""
+          : m.content && m.content.length > 0
+            ? m.content
+            : " ",
+        ...(hasToolCalls
           ? {
-              tool_calls: m.toolCalls.map((tc) => ({
+              tool_calls: m.toolCalls!.map((tc) => ({
                 id: tc.id,
                 type: "function" as const,
                 function: { name: tc.name, arguments: tc.arguments },
@@ -237,6 +245,7 @@ function toOpenAIMessage(m: Message): OpenAIChatMessage {
             }
           : {}),
       };
+    }
     case "tool":
       return {
         role: "tool",

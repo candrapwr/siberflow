@@ -228,9 +228,10 @@ export function optimizeContext(
     if (last && last.role === "assistant" && m.role === "assistant") {
       const a = last.content ?? "";
       const b = m.content ?? "";
+      const combined = a && b ? `${a}\n${b}` : a || b;
       merged[merged.length - 1] = {
         role: "assistant",
-        content: a && b ? `${a}\n${b}` : a || b || null,
+        content: combined.length > 0 ? combined : " ",
       };
       continue;
     }
