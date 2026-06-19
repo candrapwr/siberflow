@@ -16,11 +16,19 @@ export { taskTools } from "./task/index.js";
 export interface RegistryOptions {
   /** Register the task_update checklist tool (default false). */
   tasks?: boolean;
+  /** Register filesystem + shell tools (file ops, exec). Disable when the
+   * session has no working directory so the agent can't touch the local disk.
+   * db/ssh/task tools remain available regardless. Default true. */
+  filesystem?: boolean;
 }
 
 export function createDefaultRegistry(opts: RegistryOptions = {}): ToolRegistry {
   const registry = new ToolRegistry();
-  const tools = [...fileTools, ...cliTools, ...dbTools, ...sshTools];
+  const tools: import("./base.js").Tool[] = [];
+  if (opts.filesystem !== false) {
+    tools.push(...fileTools, ...cliTools);
+  }
+  tools.push(...dbTools, ...sshTools);
   if (opts.tasks) tools.push(...taskTools);
   for (const tool of tools) {
     registry.register(tool);

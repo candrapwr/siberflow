@@ -14,7 +14,7 @@ import { UserMessage, AssistantMessage } from "./components/Message.js";
 import { TaskPanel } from "./components/TaskPanel.js";
 import { EmptyState } from "./components/EmptyState.js";
 import { SettingsModal } from "./components/SettingsModal.js";
-import { ArrowDownIcon } from "./components/icons.js";
+import { ArrowDownIcon, FolderIcon } from "./components/icons.js";
 import type { SettingsValues } from "@shared/protocol";
 
 /** Compact token count: 1234 → "1.2k", 12345 → "12k". */
@@ -24,8 +24,14 @@ function formatTokens(n: number): string {
   return Math.round(n / 1000) + "k";
 }
 
+/** Return the last path segment of a filesystem path. */
+function basename(p: string): string {
+  const parts = p.replace(/\\/g, "/").split("/").filter(Boolean);
+  return parts[parts.length - 1] ?? p;
+}
+
 export default function App() {
-  const { state, dismissNotice, sendMessage } = useChat();
+  const { state, dismissNotice, sendMessage, clearForRegenerate, editLast } = useChat();
   const sessions = useSessions();
   const [showSettings, setShowSettings] = useState(false);
   const [settingsData, setSettingsData] = useState<{
@@ -33,10 +39,12 @@ export default function App() {
     hasApiKey: boolean;
     mustConfigure: boolean;
   } | null>(null);
-  const [composerPrefill, setComposerPrefill] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   const [showJump, setShowJump] = useState(false);
+  // Edit flow: when non-null, the composer is prefilled with this text and
+  // the next send goes through editLast instead of a normal send.
+  const [editPrefill, setEditPrefill] = useState<string | null>(null);
 
   // Resizable sidebar: drag the handle on the right edge to resize.
   const [sidebarWidth, setSidebarWidth] = useState(240);
@@ -145,11 +153,10 @@ export default function App() {
     setShowSettings(true);
   }, []);
 
+  // New chat: folder picker is optional — user may start without a workdir
+  // and set one later from the topbar.
   const newChat = useCallback(async () => {
-    const folder = await ipc().pickFolder();
-    if (!folder) return;
-    await sessions.newSession(folder, null);
-    // The agent host will emit a fresh "ready"/"history" (empty) automatically.
+    await sessions.newSession(null, null);
   }, [sessions]);
 
   const renameSession = useCallback(
@@ -160,17 +167,45 @@ export default function App() {
     [sessions],
   );
 
-  const onRegenerate = useCallback(() => {
-    void ipc().regenerate();
+  /** Pick a folder and set it as the current session's workdir. */
+  const changeWorkdir = useCallback(async () => {
+    const folder = await ipc().pickFolder();
+    if (!folder) return;
+    await ipc().setWorkdir(folder);
   }, []);
 
+  const onRegenerate = useCallback(() => {
+    // Clear the displayed assistant turn so the regenerated response doesn't
+    // stack on top of the old one. The backend rewinds its own history.
+    clearForRegenerate();
+    void ipc().regenerate();
+  }, [clearForRegenerate]);
+
   const onEdit = useCallback(() => {
-    // Prefill composer with the last user message (renderer-local convenience).
+    // Pre-fill the composer with the last user message so the user can edit it,
+    // then resend. We do NOT call the backend yet — that happens on send.
     const lastUser = [...state.messages].reverse().find((m) => "role" in m && m.role === "user");
     if (lastUser && "content" in lastUser) {
-      void ipc().editLast(lastUser.content);
+      setEditPrefill(lastUser.content);
     }
   }, [state.messages]);
+
+  /** Composer send: routes to editLast when we're in edit mode, else a normal
+   * send. Also clears the edit prefill so the next send is normal again. */
+  const onComposerSend = useCallback(
+    (content: string) => {
+      if (editPrefill !== null) {
+        // Edit mode: drop the trailing user+assistant and show the edited
+        // prompt optimistically, then ask the backend to re-run.
+        editLast(content);
+        void ipc().editLast(content);
+        setEditPrefill(null);
+      } else {
+        sendMessage(content);
+      }
+    },
+    [editPrefill, editLast, sendMessage],
+  );
 
   // ── Keyboard shortcuts ──────────────────────────────────────────────
   useEffect(() => {
@@ -221,7 +256,7 @@ export default function App() {
         <Sidebar
           sessions={sessions.sessions}
           activeId={sessions.activeId}
-          currentFolder={state.session?.projectDir ?? null}
+          currentFolder={state.session?.projectDir || null}
           onSelect={(id) => void sessions.loadSession(id)}
           onDelete={(id) => void sessions.deleteSession(id)}
           onRename={(id, name) => void renameSession(id, name)}
@@ -251,6 +286,20 @@ export default function App() {
               <span className="token-completion">{formatTokens(state.usage.last.completionTokens)}</span>
             </span>
           )}
+          {state.session && (
+            <button
+              className={`topbar-workdir ${state.session.projectDir ? "" : "empty"}`}
+              onClick={changeWorkdir}
+              title={
+                state.session.projectDir
+                  ? `Workdir: ${state.session.projectDir}\nClick to change`
+                  : "No working directory — file & exec tools disabled\nClick to set one"
+              }
+            >
+              <FolderIcon size={12} />
+              <span>{state.session.projectDir ? basename(state.session.projectDir) : "No folder"}</span>
+            </button>
+          )}
         </header>
 
         <div className="chat-scroll-area" ref={messagesScrollRef} onScroll={onScroll}>
@@ -259,9 +308,7 @@ export default function App() {
               {isEmpty ? (
                 <EmptyState
                   hasSession={!!state.session}
-                  onPick={(prompt) => {
-                    setComposerPrefill(prompt);
-                  }}
+                  onPick={() => {}}
                   onNewChat={newChat}
                 />
               ) : (
@@ -315,8 +362,9 @@ export default function App() {
           <div className="chat-center composer-wrap">
             <Composer
               busy={state.busy}
-              onSend={sendMessage}
+              onSend={onComposerSend}
               autoFocusKey={`${state.session.id}:${state.busy}`}
+              prefill={editPrefill ?? undefined}
             />
           </div>
         )}

@@ -88,6 +88,8 @@ type Action =
   | { type: "reset" }
   | { type: "dismiss-notice"; id: number }
   | { type: "user-send"; content: string }
+  | { type: "regenerate" }
+  | { type: "edit-last"; content: string }
   | { type: "event"; event: MainEvent };
 
 // Monotonic id generators (kept module-level; ids only need to be unique).
@@ -142,6 +144,47 @@ function reducer(state: ChatState, action: Action): ChatState {
       ...state,
       showActions: false,
       messages: [...state.messages, { role: "user", content: action.content }],
+    };
+  }
+
+  if (action.type === "regenerate") {
+    // Drop the trailing assistant turn (and any notices) so the regenerated
+    // response doesn't stack on top of the old one. The last user message is
+    // kept since the backend re-sends it after rewinding.
+    const msgs = [...state.messages];
+    while (msgs.length > 0) {
+      const last = msgs[msgs.length - 1];
+      if (last && last.role === "assistant") {
+        msgs.pop();
+      } else {
+        break;
+      }
+    }
+    return { ...state, messages: msgs, showActions: false };
+  }
+
+  if (action.type === "edit-last") {
+    // Edit mode: drop the trailing assistant turn AND the last user message,
+    // then optimistically show the edited prompt. The backend rewinds its own
+    // history and re-sends, so this keeps the UI in sync.
+    const msgs = [...state.messages];
+    while (msgs.length > 0) {
+      const last = msgs[msgs.length - 1];
+      if (last && last.role === "assistant") {
+        msgs.pop();
+      } else {
+        break;
+      }
+    }
+    // Drop the trailing user message too.
+    if (msgs.length > 0) {
+      const last = msgs[msgs.length - 1];
+      if (last && last.role === "user") msgs.pop();
+    }
+    return {
+      ...state,
+      messages: [...msgs, { role: "user", content: action.content }],
+      showActions: false,
     };
   }
 
@@ -356,5 +399,15 @@ export function useChat() {
     void ipc().send(text);
   }, []);
 
-  return { state, dismissNotice, sendMessage };
+  /** Clear the trailing assistant turn(s) before the backend regenerates. */
+  const clearForRegenerate = useCallback(() => {
+    dispatch({ type: "regenerate" });
+  }, []);
+
+  /** Edit mode: replace the last user message + drop its assistant response. */
+  const editLast = useCallback((content: string) => {
+    dispatch({ type: "edit-last", content });
+  }, []);
+
+  return { state, dismissNotice, sendMessage, clearForRegenerate, editLast };
 }
