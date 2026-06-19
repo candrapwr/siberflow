@@ -10,8 +10,8 @@
     "./tools": "./dist/tools/index.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "clean": "rm -rf dist"
+    "build": "tsc --build",
+    "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
     "esbuild": "0.28.0",

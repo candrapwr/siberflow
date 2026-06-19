@@ -57,12 +57,25 @@ npm run build:core
 npm run package:win
 ```
 
-Script ini menjalankan 3 langkah otomatis:
+Bisa dijalankan dari **root** (`D:\siberflow`) atau dari `packages\desktop`. Script ini menjalankan 3 langkah otomatis:
 1. `electron-vite build` — bundle main + preload + renderer
 2. `electron-builder install-app-deps` — rebuild native modules untuk Windows/Electron
 3. `electron-builder --win` — package jadi installer `.exe`
 
 Output: `packages\desktop\dist\Siberflow-Setup-<version>.exe`
+
+### ⚠️ Kalau `npm run package:win` gagal
+
+Jika error `electron-builder is not recognized` atau `app-builder.exe ENOENT`, binary electron-builder tidak ter-download dengan benar. Force install manual:
+
+```powershell
+cd D:\siberflow
+npm install electron-builder@25 --force
+npm install app-builder-bin --force
+npm run package:win
+```
+
+Ini download ulang binary Windows (`app-builder.exe`) yang dibutuhkan electron-builder. Setelah sukses sekali, build berikutnya tidak perlu diulang.
 
 ---
 
