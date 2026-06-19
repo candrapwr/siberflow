@@ -41,16 +41,16 @@ git clone <repo-url> siberflow
 cd siberflow
 ```
 
-### 2. Build core package (prasyarat desktop)
-```powershell
-npm run build:core
-```
-
-### 3. Install dependencies desktop
+### 2. Install semua dependencies DULU (wajib sebelum build apapun)
 ```powershell
 npm install
 ```
-Tidak ada lagi `postinstall` yang rekursif — install bersih.
+Ini install `typescript` (root devDependency), `electron`, `electron-builder`, `prismjs`, dll. Tidak ada `postinstall` yang rekursif — install bersih.
+
+### 3. Build core package (prasyarat desktop)
+```powershell
+npm run build:core
+```
 
 ### 4. Build + package installer Windows
 ```powershell
