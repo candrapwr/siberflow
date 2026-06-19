@@ -157,6 +157,8 @@ function reducer(state: ChatState, action: Action): ChatState {
         hideTools: e.hideTools,
         tasksEnabled: e.tasksEnabled,
         messages: [],
+        tasks: [],
+        usage: null,
         showActions: false,
       };
 

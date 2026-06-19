@@ -202,9 +202,9 @@ export default function App() {
       // Escape → dismiss all notices
       if (e.key === "Escape") {
         const notices = state.notices;
-        if (notices.length > 0) {
-          // Dismiss the most recent notice
-          dismissNotice(notices[notices.length - 1].id);
+        const last = notices[notices.length - 1];
+        if (last) {
+          dismissNotice(last.id);
         }
         return;
       }
@@ -313,7 +313,11 @@ export default function App() {
         {/* Composer only when a session is active */}
         {state.session && (
           <div className="chat-center composer-wrap">
-            <Composer busy={state.busy} onSend={sendMessage} />
+            <Composer
+              busy={state.busy}
+              onSend={sendMessage}
+              autoFocusKey={`${state.session.id}:${state.busy}`}
+            />
           </div>
         )}
       </main>

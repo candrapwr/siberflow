@@ -1,120 +1,128 @@
 // Renders a single message bubble. Assistant turns render an ordered list of
 // text + tool content blocks in the exact order they streamed.
 
-import { memo, useState, useCallback } from "react";
+import { memo, useState, type ComponentPropsWithoutRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism/index.js";
+import { Highlight, themes } from "prism-react-renderer";
+// prism-react-renderer bundles a limited Prism; load ALL grammars we need
+// from prismjs onto the shared global Prism instance so every language is
+// consistently available. prismjs grammars have a dependency order (e.g. php
+// needs markup-templating, typescript needs javascript needs clike).
+import Prism from "prismjs";
+import "prismjs/components/prism-clike.js";
+import "prismjs/components/prism-javascript.js";
+import "prismjs/components/prism-typescript.js";
+import "prismjs/components/prism-jsx.js";
+import "prismjs/components/prism-tsx.js";
+import "prismjs/components/prism-css.js";
+import "prismjs/components/prism-json.js";
+import "prismjs/components/prism-markup.js";
+import "prismjs/components/prism-markup-templating.js";
+import "prismjs/components/prism-php.js";
+import "prismjs/components/prism-python.js";
+import "prismjs/components/prism-ruby.js";
+import "prismjs/components/prism-java.js";
+import "prismjs/components/prism-csharp.js";
+import "prismjs/components/prism-go.js";
+import "prismjs/components/prism-rust.js";
+import "prismjs/components/prism-sql.js";
+import "prismjs/components/prism-yaml.js";
+import "prismjs/components/prism-bash.js";
+import "prismjs/components/prism-c.js";
+import "prismjs/components/prism-cpp.js";
+import "prismjs/components/prism-swift.js";
+import "prismjs/components/prism-kotlin.js";
+import "prismjs/components/prism-dart.js";
+import "prismjs/components/prism-lua.js";
+import "prismjs/components/prism-perl.js";
+import "prismjs/components/prism-scala.js";
+import "prismjs/components/prism-elixir.js";
+import "prismjs/components/prism-haskell.js";
+import "prismjs/components/prism-graphql.js";
+import "prismjs/components/prism-markdown.js";
 import type { AssistantTurn } from "../hooks/useChat.js";
 import {
   RefreshIcon,
   EditIcon,
   ToolIcon,
   ChevronDownIcon,
-  CopyIcon,
-  CheckIcon,
 } from "./icons.js";
 
-// ─── Code Block with Syntax Highlighting + Copy Button ──────────────────────
+// ─── Code Block (syntax highlighted) ────────────────────────────────────────
 
 interface CodeBlockProps {
   language: string;
   code: string;
 }
 
+/** Syntax-highlighted code block using prism-react-renderer (lightweight,
+ * React-native, no dynamic eval). Includes a language badge header. */
 const CodeBlock = memo(function CodeBlock({ language, code }: CodeBlockProps) {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(code);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard API may fail in some contexts — silently ignore
-    }
-  }, [code]);
+  // Map common aliases to the language names Prism understands.
+  const ALIAS: Record<string, string> = {
+    sh: "bash",
+    shell: "bash",
+    zsh: "bash",
+    ts: "typescript",
+    js: "javascript",
+    py: "python",
+    rs: "rust",
+    golang: "go",
+    yml: "yaml",
+    kt: "kotlin",
+    kts: "kotlin",
+    h: "cpp",
+    cs: "csharp",
+    rb: "ruby",
+  };
+  const lang = ALIAS[language] ?? language;
 
   return (
-    <div className="code-block">
-      <div className="code-block-header">
-        <span className="code-lang-label">{language}</span>
-        <button
-          className={`code-copy-btn ${copied ? "copied" : ""}`}
-          onClick={handleCopy}
-          title="Copy code"
-        >
-          {copied ? <CheckIcon size={11} /> : <CopyIcon size={11} />}
-          <span>{copied ? "Copied" : "Copy"}</span>
-        </button>
-      </div>
-      <SyntaxHighlighter
-        language={language}
-        style={oneDark}
-        PreTag="pre"
-        customStyle={{
-          margin: 0,
-          borderTopLeftRadius: 0,
-          borderTopRightRadius: 0,
-          borderBottomLeftRadius: "var(--radius-sm)",
-          borderBottomRightRadius: "var(--radius-sm)",
-          fontSize: "0.92em",
-          lineHeight: 1.5,
-          background: "#181818",
-        }}
-        codeTagProps={{ style: { fontFamily: "var(--mono)" } }}
-      >
-        {code}
-      </SyntaxHighlighter>
+    <div className="code-block" data-lang={lang || "text"}>
+      {language && <span className="code-block-lang">{language}</span>}
+      <Highlight prism={Prism} theme={themes.vsDark} code={code.replace(/\n$/, "")} language={lang || "text"}>
+        {({ className, style, tokens, getLineProps, getTokenProps }) => (
+          <pre className={className} style={style}>
+            {tokens.map((line, i) => {
+              const lineProps = getLineProps({ line });
+              return (
+                <div {...lineProps} key={i}>
+                  {line.map((token, key) => {
+                    const tokenProps = getTokenProps({ token });
+                    return <span {...tokenProps} key={key} />;
+                  })}
+                </div>
+              );
+            })}
+          </pre>
+        )}
+      </Highlight>
     </div>
   );
 });
 
-// ─── Inline helpers used by ReactMarkdown ───────────────────────────────────
+// ─── ReactMarkdown component overrides ──────────────────────────────────────
 
-/** Components override for ReactMarkdown — adds syntax highlighting to code
- * blocks and a copy button. Inline code is rendered normally. */
-const markdownComponents = {
-  // For fenced code blocks we output a self-contained <div> tree, so the
-  // default <pre> wrapper from react-markdown would double-wrap.  We strip
-  // it by rendering only the children (which the `code` renderer provides).
-  pre({ children }: { children: React.ReactNode }) {
+/** Override `pre`/`code` so fenced code blocks get syntax highlighting via
+ * CodeBlock. Inline code and multi-line plain code keep the default styling. */
+const markdownComponents: ComponentPropsWithoutRef<typeof ReactMarkdown>["components"] = {
+  pre({ children }) {
+    // react-markdown wraps the fenced <code> in a <pre>; the inner code element
+    // already renders the CodeBlock, so strip the outer pre to avoid nesting.
     return <>{children}</>;
   },
-  code({
-    className,
-    children,
-    ...props
-  }: {
-    className?: string;
-    children?: React.ReactNode;
-    [key: string]: unknown;
-  }) {
+  code({ className, children, ...props }) {
     const match = /language-(\w+)/.exec(className || "");
-    const code = String(children).replace(/\n$/, "");
-
-    if (match) {
-      // Fenced code block with explicit language → highlighted
-      return <CodeBlock language={match[1]} code={code} />;
+    const text = String(children);
+    // Fenced block with explicit language → highlighted
+    if (match && match[1]) {
+      return <CodeBlock language={match[1]} code={text.replace(/\n$/, "")} />;
     }
-
-    // Check for multi-line code without language annotation → plain pre+code
-    if (code.includes("\n")) {
-      return (
-        <pre>
-          <button
-            className="code-copy-btn legacy-copy"
-            onClick={() => navigator.clipboard.writeText(code).catch(() => {})}
-            title="Copy code"
-          >
-            <CopyIcon size={11} />
-          </button>
-          <code className={className}>{children}</code>
-        </pre>
-      );
+    // Multi-line code without language → plain highlighted as text
+    if (text.includes("\n")) {
+      return <CodeBlock language="" code={text.replace(/\n$/, "")} />;
     }
-
     // Inline code
     return (
       <code className={className} {...props}>
@@ -175,10 +183,7 @@ export const AssistantMessage = memo(function AssistantMessage({
           if (blk.kind === "text") {
             return (
               <div className="seg" key={blk.id}>
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  components={markdownComponents}
-                >
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
                   {blk.text}
                 </ReactMarkdown>
               </div>
