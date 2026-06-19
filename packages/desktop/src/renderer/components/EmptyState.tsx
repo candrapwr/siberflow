@@ -1,6 +1,6 @@
 // Welcome screen. Two variants:
-// - No active session (e.g. after delete): invites the user to start a new chat.
-// - Active session but no messages yet: brand icon + quick action chips.
+// - No active session (e.g. after delete / startup): invites new chat.
+// - Active session but no messages yet: clean welcome with brand identity.
 
 import { memo } from "react";
 import { BrandIcon, NewChatIcon } from "./icons.js";
@@ -11,12 +11,6 @@ interface EmptyStateProps {
   onNewChat: () => void;
 }
 
-const QUICK_ACTIONS = [
-  "Explain what this codebase does and its main entry points",
-  "Review the current file for bugs and suggest improvements",
-  "Refactor my code for readability",
-];
-
 export const EmptyState = memo(function EmptyState({
   hasSession,
   onPick,
@@ -24,34 +18,29 @@ export const EmptyState = memo(function EmptyState({
 }: EmptyStateProps) {
   return (
     <div className="empty-state">
-      <div className="empty-icon">
-        <BrandIcon size={26} />
+      <div className="empty-hero">
+        <div className="empty-glow" />
+        <div className="empty-icon">
+          <BrandIcon size={34} />
+        </div>
       </div>
       {hasSession ? (
         <>
-          <div className="empty-title">How can I help?</div>
+          <div className="empty-title">How can I help you today?</div>
           <div className="empty-copy">
-            Ask for code edits, file inspection, shell commands, or database queries.
-          </div>
-          <div className="empty-actions">
-            {QUICK_ACTIONS.map((prompt) => (
-              <button key={prompt} className="empty-chip" onClick={() => onPick(prompt)}>
-                {prompt}
-              </button>
-            ))}
+            Ask anything — code edits, explanations, shell commands, or database queries.
           </div>
         </>
       ) : (
         <>
           <div className="empty-title">Welcome to Siberflow</div>
           <div className="empty-copy">
-            Start a new chat to begin. Pick a project folder and ask away.
+            Your AI coding companion. Start a new conversation to begin.
           </div>
-          <div className="empty-actions">
-            <button className="empty-chip primary" onClick={onNewChat}>
-              <NewChatIcon size={13} /> New chat
-            </button>
-          </div>
+          <button className="empty-cta" onClick={onNewChat}>
+            <NewChatIcon size={14} />
+            <span>Start new chat</span>
+          </button>
         </>
       )}
     </div>

@@ -57,8 +57,9 @@ interface CodeBlockProps {
 }
 
 /** Syntax-highlighted code block using prism-react-renderer (lightweight,
- * React-native, no dynamic eval). Includes a language badge header. */
+ * React-native, no dynamic eval). Includes a language badge + copy button. */
 const CodeBlock = memo(function CodeBlock({ language, code }: CodeBlockProps) {
+  const [copied, setCopied] = useState(false);
   // Map common aliases to the language names Prism understands.
   const ALIAS: Record<string, string> = {
     sh: "bash",
@@ -78,9 +79,28 @@ const CodeBlock = memo(function CodeBlock({ language, code }: CodeBlockProps) {
   };
   const lang = ALIAS[language] ?? language;
 
+  const copyCode = () => {
+    navigator.clipboard.writeText(code).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      },
+      () => {},
+    );
+  };
+
   return (
     <div className="code-block" data-lang={lang || "text"}>
-      {language && <span className="code-block-lang">{language}</span>}
+      <div className="code-block-header">
+        <span className="code-block-lang">{language || "text"}</span>
+        <button
+          className={`code-copy-btn ${copied ? "copied" : ""}`}
+          onClick={copyCode}
+          title="Copy code"
+        >
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
       <Highlight prism={Prism} theme={themes.vsDark} code={code.replace(/\n$/, "")} language={lang || "text"}>
         {({ className, style, tokens, getLineProps, getTokenProps }) => (
           <pre className={className} style={style}>

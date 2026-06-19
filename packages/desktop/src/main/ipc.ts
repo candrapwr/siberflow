@@ -72,6 +72,10 @@ export function registerIpc(): void {
     return result.filePaths[0]!;
   });
 
+  ipcMain.handle("siberflow:setWorkdir", async (_e, folderPath: string) => {
+    host!.setWorkdir(folderPath);
+  });
+
   ipcMain.handle("siberflow:getSettings", () => {
     return host!.getSettings();
   });

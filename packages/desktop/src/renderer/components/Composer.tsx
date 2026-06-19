@@ -11,12 +11,30 @@ interface ComposerProps {
    * Pass e.g. `${sessionId}:${busy}` to refocus on session switch and after
    * a turn completes. */
   autoFocusKey?: string;
+  /** When this changes to a non-empty string, prefill the input with it and
+   * focus/select-all so the user can edit then resend. */
+  prefill?: string;
 }
 
-export const Composer = memo(function Composer({ busy, onSend, autoFocusKey }: ComposerProps) {
+export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, prefill }: ComposerProps) {
   const [value, setValue] = useState("");
   const taRef = useRef<HTMLTextAreaElement>(null);
   const [stopping, setStopping] = useState(false);
+
+  // Prefill the input when `prefill` changes to a non-empty string (Edit flow).
+  useEffect(() => {
+    if (prefill !== undefined && prefill.length > 0) {
+      setValue(prefill);
+      // Focus + select-all so the user can immediately edit or replace.
+      requestAnimationFrame(() => {
+        const ta = taRef.current;
+        if (ta) {
+          ta.focus();
+          ta.select();
+        }
+      });
+    }
+  }, [prefill]);
 
   // Auto-resize textarea to fit content.
   useEffect(() => {

@@ -111,6 +111,7 @@ export interface RendererCalls {
   deleteSession: (id: string) => Promise<void>;
   listSessions: (projectDir?: string) => Promise<SessionSummary[]>;
   pickFolder: () => Promise<string | null>;
+  setWorkdir: (folderPath: string) => Promise<void>;
   getSettings: () => Promise<{ values: SettingsValues; hasApiKey: boolean }>;
   saveSettings: (values: SettingsValues, apiKey: string | null) => Promise<void>;
   renameSession: (id: string, name: string) => Promise<void>;

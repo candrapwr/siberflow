@@ -225,7 +225,13 @@ export class AgentHost {
   private rebuildAgent(): void {
     if (!this.apiKey) return;
     this.provider = createProvider(this.settings.provider, { apiKey: this.apiKey });
-    this.registry = createDefaultRegistry({ tasks: this.settings.tasks });
+    // Only register filesystem + exec tools when the session has a working
+    // directory. Sessions without a workdir keep db/ssh/task tools only.
+    const hasWorkdir = !!this.current?.projectDir;
+    this.registry = createDefaultRegistry({
+      tasks: this.settings.tasks,
+      filesystem: hasWorkdir,
+    });
     this.agent = this.buildAgent();
     if (this.current) {
       this.agent.loadHistory(this.current.messages);
@@ -244,12 +250,15 @@ export class AgentHost {
       tasksEnabled: this.settings.tasks,
       summaryMode: this.summaryModeActive(),
     });
+    const workdir = this.current?.projectDir;
     return new Agent({
       provider: this.provider,
       registry: this.registry,
       model,
       systemPrompt,
-      projectDir: this.current?.projectDir ?? process.cwd(),
+      // projectDir is optional now — pass undefined when no workdir so the
+      // agent won't sandbox to a random cwd.
+      ...(workdir ? { projectDir: workdir } : {}),
       contextOptimize: this.optimizeConfig(),
       tasksEnabled: this.settings.tasks,
       autoContinue: this.settings.autoContinue,
@@ -286,7 +295,7 @@ export class AgentHost {
       version: SESSION_FORMAT_VERSION,
       id: newSessionId(),
       name,
-      projectDir: folderPath ?? process.cwd(),
+      projectDir: folderPath ?? "",
       provider: this.provider.name,
       model,
       createdAt: now,
@@ -294,8 +303,8 @@ export class AgentHost {
       messages: [...this.agent.history()],
       usage: { last: { promptTokens: 0, completionTokens: 0 }, total: { promptTokens: 0, completionTokens: 0 } },
     };
-    // Rebuild so the agent's projectDir matches the new session's folder.
-    this.agent = this.buildAgent();
+    // Rebuild so the agent's projectDir + tool set matches the new session.
+    this.rebuildAgent();
     saveSessionSync(this.current);
     this.writeOptimizedView();
     // Notify the renderer so the new session becomes active immediately in the
@@ -314,6 +323,19 @@ export class AgentHost {
     this.current = session;
     this.rebuildAgent();
     this.postReady();
+  }
+
+  /** Set or change the working directory for the current session. Empty string
+   * clears it (disables filesystem + exec tools). */
+  setWorkdir(folderPath: string): void {
+    if (!this.current) return;
+    this.current.projectDir = folderPath;
+    this.current.updatedAt = new Date().toISOString();
+    saveSessionSync(this.current);
+    // Rebuild the agent so the tool set + sandbox reflect the new workdir.
+    this.rebuildAgent();
+    this.postReady();
+    void this.broadcastSessionList();
   }
 
   async deleteSessionById(id: string): Promise<void> {
