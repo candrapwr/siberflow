@@ -130,8 +130,17 @@ export class AgentHost {
     }
     this.rebuildAgent();
     this.readyForChat = true;
-    this.startNewSession(null, null);
-    this.postReady();
+    // On startup, resume the most recently used session if one exists, so we
+    // don't spawn an empty new session every launch. Only create a fresh one
+    // when there are no prior sessions at all.
+    const recent = await listSessions();
+    if (recent.length > 0) {
+      await this.loadSessionById(recent[0]!.id);
+    } else {
+      this.startNewSession(null, null);
+      this.postReady();
+    }
+    await this.broadcastSessionList();
   }
 
   // -------- settings --------
@@ -289,6 +298,10 @@ export class AgentHost {
     this.agent = this.buildAgent();
     saveSessionSync(this.current);
     this.writeOptimizedView();
+    // Notify the renderer so the new session becomes active immediately in the
+    // main container (clears history, sets the session, refreshes the sidebar).
+    this.postReady();
+    void this.broadcastSessionList();
     return this.sessionInfo()!;
   }
 

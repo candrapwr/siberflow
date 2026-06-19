@@ -378,6 +378,20 @@ kbd {
   margin: 0 auto;
   padding: 0 24px;
 }
+/* On wide windows, let the column grow so it doesn't look cramped/tiny
+   when the app is maximized or fullscreen. */
+@media (min-width: 1100px) {
+  .chat-center {
+    max-width: 900px;
+    padding: 0 32px;
+  }
+}
+@media (min-width: 1500px) {
+  .chat-center {
+    max-width: 1100px;
+    padding: 0 40px;
+  }
+}
 .composer-wrap {
   padding-top: 0;
   padding-bottom: 16px;
@@ -388,231 +402,200 @@ kbd {
   padding: 20px 0;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 18px;
 }
 
+/* Each message row: user aligned right, assistant aligned left full-width. */
 .msg {
   display: flex;
   flex-direction: column;
-  gap: 3px;
   max-width: 100%;
 }
 
-.msg .role-label {
-  font-size: 9px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  padding: 0 1px;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-.msg .role-label .dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: currentColor;
-}
-.msg.user .role-label {
-  color: var(--accent);
-}
-.msg.assistant .role-label {
-  color: var(--green);
-}
-
-.msg .body {
-  width: 100%;
-  min-width: 0;
-  word-wrap: break-word;
-  overflow-wrap: anywhere;
-  border-radius: var(--radius-sm);
-  padding: 9px 12px;
-  line-height: 1.55;
-  font-size: 12px;
-  user-select: text;
+/* User messages: right-aligned box with dark background, rounded corners */
+.msg.user {
+  align-items: flex-end;
 }
 .msg.user .body {
+  max-width: 85%;
   white-space: pre-wrap;
   background: var(--bg-surface-alt);
+  color: var(--fg);
   border: 1px solid var(--border);
-}
-.msg.assistant .body {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 11px 15px;
+  font-size: 13px;
+  line-height: 1.6;
+  user-select: text;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
 }
 
-/* Markdown inside body */
-.msg .body p {
-  margin: 5px 0;
+/* Assistant messages: full-width, no border, subtle — like ChatGPT/Codex */
+.msg.assistant {
+  align-items: stretch;
 }
-.msg .body p:first-child {
+.msg.assistant .body {
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--fg);
+  user-select: text;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* Role labels — hidden for the cleaner look; user is obvious from the bubble
+   and assistant fills the width. Kept for a11y but visually minimal. */
+.msg .role-label {
+  display: none;
+}
+
+/* Markdown inside body — assistant gets richer typography */
+.msg.assistant .body p {
+  margin: 8px 0;
+}
+.msg.assistant .body p:first-child {
   margin-top: 0;
 }
-.msg .body p:last-child {
+.msg.assistant .body p:last-child {
   margin-bottom: 0;
 }
+.msg.user .body p {
+  margin: 0;
+}
+
 .msg .body ul,
 .msg .body ol {
-  margin: 5px 0;
-  padding-left: 20px;
+  margin: 8px 0;
+  padding-left: 22px;
 }
 .msg .body li {
-  margin: 2px 0;
+  margin: 4px 0;
+}
+.msg .body li > p {
+  margin: 0;
 }
 .msg .body h1,
 .msg .body h2,
 .msg .body h3,
 .msg .body h4 {
-  margin: 12px 0 5px;
+  margin: 16px 0 8px;
   font-weight: 700;
   line-height: 1.3;
 }
 .msg .body h1 {
-  font-size: 1.12em;
+  font-size: 1.2em;
 }
 .msg .body h2 {
-  font-size: 1.05em;
+  font-size: 1.1em;
 }
 .msg .body h3,
 .msg .body h4 {
   font-size: 1em;
+}
+.msg .body h1:first-child,
+.msg .body h2:first-child,
+.msg .body h3:first-child {
+  margin-top: 0;
 }
 .msg .body a {
   color: var(--accent);
   text-decoration-thickness: 1px;
 }
 .msg .body blockquote {
-  margin: 8px 0;
-  padding: 8px 12px;
+  margin: 10px 0;
+  padding: 8px 14px;
   border-left: 3px solid var(--accent);
-  background: var(--bg-surface-alt);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
   border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+  color: var(--fg-muted);
 }
+
+/* Code blocks — terminal-style container with language badge header */
 .msg .body pre {
-  background: #181818;
-  border: 1px solid var(--border);
-  padding: 10px 12px;
-  margin: 8px 0;
+  background: transparent;
+  border: none;
+  padding: 12px 14px;
+  margin: 0;
   max-width: 100%;
   overflow-x: auto;
+  border-radius: 0;
+  line-height: 1.6;
+  font-size: 12.5px;
+  font-family: var(--mono);
+}
+.code-block {
+  margin: 10px 0;
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  line-height: 1.5;
+  overflow: hidden;
+  background: #1e1e1e;
   position: relative;
 }
+.code-block-lang {
+  display: block;
+  padding: 4px 12px;
+  font-family: var(--font);
+  font-size: 10px;
+  color: var(--fg-subtle);
+  background: rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid var(--border);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+/* Language label badge (top-right of code block) */
+.msg .body pre code[class*="language-"]::before {
+  content: none;
+}
+
+/* Inline code — subtle pill */
 .msg .body code {
   background: var(--bg-surface-alt);
-  border: 1px solid var(--border);
-  padding: 1px 5px;
-  border-radius: var(--radius-xs);
+  padding: 1px 6px;
+  border-radius: 4px;
   font-family: var(--mono);
-  font-size: 0.9em;
+  font-size: 0.88em;
+  color: var(--accent);
+  border: 1px solid var(--border);
 }
 .msg .body pre code {
   background: transparent;
   border: none;
   padding: 0;
-  font-size: 0.92em;
+  font-size: 12px;
+  color: var(--fg);
+  display: block;
 }
+
+/* Tables */
 .msg .body table {
   border-collapse: collapse;
-  margin: 8px 0;
+  margin: 10px 0;
   font-size: 0.92em;
+  width: 100%;
+  overflow-x: auto;
+  display: block;
 }
 .msg .body th,
 .msg .body td {
   border: 1px solid var(--border);
-  padding: 4px 8px;
+  padding: 6px 10px;
+  text-align: left;
 }
 .msg .body th {
   background: var(--bg-surface-alt);
+  font-weight: 600;
 }
 .msg .body hr {
   border: none;
   border-top: 1px solid var(--border);
-  margin: 10px 0;
-}
-
-.code-copy {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 22px;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  color: var(--fg);
-  opacity: 0;
-  transition: opacity 0.12s;
-}
-.msg .body pre:hover .code-copy {
-  opacity: 0.9;
-}
-.code-copy:hover {
-  opacity: 1;
-}
-.code-copy.copied {
-  color: var(--green);
-  opacity: 1;
-}
-
-/* ── Code Block (syntax highlighted) ── */
-.code-block {
-  margin: 8px 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-}
-.code-block-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 8px;
-  background: #1e1e1e;
-  border-bottom: 1px solid var(--border);
-  font-size: 10px;
-}
-.code-lang-label {
-  color: var(--fg-muted);
-  font-weight: 600;
-  font-size: 10px;
-  text-transform: lowercase;
-}
-.code-copy-btn {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  background: var(--bg-input);
-  color: var(--fg-muted);
-  font-size: 10px;
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s;
-}
-.code-copy-btn:hover {
-  background: var(--bg-surface-alt);
-  color: var(--fg);
-}
-.code-copy-btn.copied {
-  color: var(--green);
-  border-color: var(--green);
-}
-.code-copy-btn.legacy-copy {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  opacity: 0;
-  transition: opacity 0.12s;
-}
-.msg .body pre:hover .code-copy-btn.legacy-copy {
-  opacity: 0.9;
+  margin: 14px 0;
 }
 
 /* ── Sidebar Search ── */
@@ -1129,10 +1112,10 @@ kbd {
 }
 
 /* ---------- Action buttons (regenerate/edit) ---------- */
-.actions-bar {
+.msg.assistant .actions-bar {
   display: flex;
   gap: 6px;
-  margin: 6px 0 0 1px;
+  margin: 10px 0 0 0;
 }
 .action-btn {
   display: inline-flex;

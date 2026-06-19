@@ -7,9 +7,13 @@ import { SendIcon, StopIcon } from "./icons.js";
 interface ComposerProps {
   busy: boolean;
   onSend: (content: string) => void;
+  /** When this value changes and we're not busy, refocus the input.
+   * Pass e.g. `${sessionId}:${busy}` to refocus on session switch and after
+   * a turn completes. */
+  autoFocusKey?: string;
 }
 
-export const Composer = memo(function Composer({ busy, onSend }: ComposerProps) {
+export const Composer = memo(function Composer({ busy, onSend, autoFocusKey }: ComposerProps) {
   const [value, setValue] = useState("");
   const taRef = useRef<HTMLTextAreaElement>(null);
   const [stopping, setStopping] = useState(false);
@@ -21,6 +25,18 @@ export const Composer = memo(function Composer({ busy, onSend }: ComposerProps) 
     ta.style.height = "auto";
     ta.style.height = Math.min(ta.scrollHeight, 160) + "px";
   }, [value]);
+
+  // Focus the input on mount, on session switch, and after a turn completes.
+  useEffect(() => {
+    if (busy) return;
+    const ta = taRef.current;
+    if (ta && document.activeElement !== ta) {
+      ta.focus();
+      // Place caret at end so typing appends.
+      const len = ta.value.length;
+      ta.setSelectionRange(len, len);
+    }
+  }, [autoFocusKey, busy]);
 
   const send = () => {
     const text = value.trim();
