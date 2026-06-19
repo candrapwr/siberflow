@@ -111,6 +111,44 @@ npm run package:linux         # Linux (.AppImage)
 
 Output: `packages/desktop/dist/Siberflow-<version>-<arch>.dmg` (macOS, ~110MB). Native modules (`ssh2`, `sqlite3`) otomatis di-rebuild untuk Electron ABI via `postinstall: electron-builder install-app-deps`.
 
+### ⚠️ Batasan Cross-Platform Build
+
+**Installer desktop harus di-build di OS target yang sama.** Tidak bisa cross-compile dari satu OS ke OS lain untuk menghasilkan installer yang berfungsi.
+
+| Build dari | macOS `.dmg` | Windows `.exe` | Linux `.AppImage` |
+|---|---|---|---|
+| **macOS** | ✅ berfungsi | ⚠️ installer terbentuk tapi **app crash** | ⚠️ sama |
+| **Windows** | ⚠️ sama | ✅ berfungsi | ⚠️ sama |
+| **Linux** | ⚠️ sama | ⚠️ sama | ✅ berfungsi |
+
+**Kenapa?** Native modules (`ssh2`, `sqlite3`, `cpu-features`) adalah machine code yang harus di-compile untuk tiap platform:
+- macOS → `Mach-O arm64/x64`
+- Windows → `PE32 x64`
+- Linux → `ELF x64`
+
+Dari Mac, native modules ter-compile jadi `Mach-O arm64`. Saat installer Windows hasil cross-compile dijalankan → load native module Mach-O di Windows → **crash instan**. Shortcut desktop tidak dibuat (dibuat saat first-run sukses), yang tersisa cuma uninstaller. `electron-builder` / `electron-rebuild` hanya rebuild untuk platform yang sedang jalan, tidak ada flag cross-compile untuk native addons.
+
+**Solusi dapat installer per-platform:**
+
+1. **Build di OS target** — paling simpel. Clone repo di Windows untuk `.exe`, di Linux untuk `.AppImage`.
+2. **GitHub Actions** (rekomendasi) — build otomatis di runner (`windows-latest` / `ubuntu-latest` / `macos-latest`). Push tag → semua platform ter-build + upload ke Releases. Native modules ter-compile asli untuk tiap platform.
+3. **Virtual Machine** — install VM Windows/Linux di Mac, build di sana.
+
+**Catatan Linux:** sebelum build, install toolchain native module:
+```bash
+sudo apt update
+sudo apt install -y build-essential python3 make g++
+# runtime dependencies untuk Electron:
+sudo apt install -y libgtk-3-0 libnotify4 libnss3 libxss1 libxtst6 xauth \
+  libatspi2.0-0 libdrm2 libgbm1 libasound2
+```
+
+Kalau `npm install` timeout/`SIGINT` karena `postinstall` (electron-builder download Electron binary ~180MB), skip dulu lalu rebuild manual:
+```bash
+npm install --ignore-scripts
+cd packages/desktop && npm run rebuild
+```
+
 ### Fitur desktop
 
 - **Multi-session sidebar** — daftar chat dikelompokkan per folder project, switch/new/delete, rename inline (double-click)
