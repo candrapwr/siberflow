@@ -11,9 +11,12 @@
     "build:core": "npm run build -w @siberflow/core",
     "build:desktop": "npm run build -w @siberflow/core && npm run build -w siberflow-desktop",
     "dev:desktop": "npm run dev -w siberflow-desktop",
-    "package:desktop": "npm run package -w siberflow-desktop",
+    "package:desktop": "cd packages/desktop && npm run package",
+    "package:win": "cd packages/desktop && npm run package:win",
+    "package:mac": "cd packages/desktop && npm run package:mac",
+    "package:linux": "cd packages/desktop && npm run package:linux",
     "release:desktop": "cd packages/desktop && npm run release:mac",
-    "rebuild:desktop": "npm run rebuild -w siberflow-desktop",
+    "rebuild:desktop": "cd packages/desktop && npm run rebuild",
     "build:vscode": "npm run build -w siberflow-chat",
     "watch:vscode": "npm run watch -w siberflow-chat",
     "package:vscode": "npm run package -w siberflow-chat",
@@ -22,11 +25,19 @@
     "clean": "rm -rf packages/*/dist packages/*/out"
   },
   "devDependencies": {
-    "typescript": "^5.6.3",
     "@types/node": "^22.9.0",
-    "tsx": "^4.19.2"
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  },
+  "overrides": {
+    "tar": "^7.5.16",
+    "esbuild": "^0.25.0"
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "app-builder-bin": "^5.0.0-alpha.10",
+    "electron-builder": "^25.1.8"
   }
 }

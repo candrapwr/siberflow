@@ -109,7 +109,17 @@ npm run package:win           # Windows (.exe / NSIS)
 npm run package:linux         # Linux (.AppImage)
 ```
 
-Output: `packages/desktop/dist/Siberflow-<version>-<arch>.dmg` (macOS, ~110MB). Native modules (`ssh2`, `sqlite3`) otomatis di-rebuild untuk Electron ABI via `postinstall: electron-builder install-app-deps`.
+Semua script di atas bisa dijalankan dari **root** repo maupun dari `packages/desktop`. Native modules (`ssh2`, `sqlite3`) otomatis di-rebuild untuk Electron ABI via `electron-builder install-app-deps` yang ada di dalam script `package:*` (tidak pakai `postinstall` agar tidak rekursif).
+
+Output: `packages/desktop/dist/Siberflow-<version>-<arch>.dmg` (macOS, ~110MB).
+
+> **Windows:** jika `npm run package:win` gagal dengan `electron-builder is not recognized` atau `app-builder.exe ENOENT`, force install binary-nya:
+> ```powershell
+> npm install electron-builder@25 --force
+> npm install app-builder-bin --force
+> npm run package:win
+> ```
+> Panduan lengkap build Windows (termasuk prasyarat Python + VS Build Tools): lihat [BUILD-WINDOWS.md](BUILD-WINDOWS.md).
 
 ### ⚠️ Batasan Cross-Platform Build
 
@@ -134,6 +144,12 @@ Dari Mac, native modules ter-compile jadi `Mach-O arm64`. Saat installer Windows
 2. **GitHub Actions** (rekomendasi) — build otomatis di runner (`windows-latest` / `ubuntu-latest` / `macos-latest`). Push tag → semua platform ter-build + upload ke Releases. Native modules ter-compile asli untuk tiap platform.
 3. **Virtual Machine** — install VM Windows/Linux di Mac, build di sana.
 
+**Catatan Untuk Build Desktop:** di path root:
+```bash
+npm install electron-builder@25 --force
+npm install app-builder-bin --force
+```
+
 **Catatan Linux:** sebelum build, install toolchain native module:
 ```bash
 sudo apt update
@@ -145,7 +161,7 @@ sudo apt install -y libgtk-3-0 libnotify4 libnss3 libxss1 libxtst6 xauth \
 
 Kalau `npm install` timeout/`SIGINT` karena `postinstall` (electron-builder download Electron binary ~180MB), skip dulu lalu rebuild manual:
 ```bash
-npm install --ignore-scripts
+npm install
 cd packages/desktop && npm run rebuild
 ```
 
