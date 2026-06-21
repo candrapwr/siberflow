@@ -100,6 +100,12 @@ npm run dev:desktop     # electron-vite dev (HMR untuk renderer)
 
 Pertama kali buka, settings modal muncul untuk pilih provider + input API key. API key disimpan via **Electron `safeStorage`** (OS keychain, encrypted) di `~/Library/Application Support/Siberflow/siberflow-keys.json`.
 
+> **Error `Electron uninstall`?** Binary Electron (~180MB) tidak ter-download saat `npm install` (network/caching issue). Jalankan manual:
+> ```bash
+> node node_modules/electron/install.js
+> ```
+> Ini download Electron binary ke `node_modules/electron/dist/` + buat `path.txt`. Setelah itu `npm run dev:desktop` jalan normal. Catatan: `release:mac` tetap bisa tanpa ini karena electron-builder download Electron sendiri saat packaging.
+
 ### Build installer
 
 ```bash
