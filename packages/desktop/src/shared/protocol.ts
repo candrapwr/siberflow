@@ -28,6 +28,8 @@ export interface SettingsValues {
   maxIterations: number;
   /** Milliseconds to wait before each LLM request (anti rate-limit). 0 = off. */
   requestDelayMs: number;
+  /** Tool names enabled for the agent. Default: file ops only. */
+  enabledTools: string[];
 }
 
 export const DEFAULT_SETTINGS: SettingsValues = {
@@ -41,6 +43,7 @@ export const DEFAULT_SETTINGS: SettingsValues = {
   debug: false,
   maxIterations: 50,
   requestDelayMs: 1500,
+  enabledTools: ["read_file", "write_file", "edit_file", "copy_file", "list_dir"],
 };
 
 /** Info shown in the topbar / sidebar. */
@@ -98,7 +101,7 @@ export interface PickedFile {
 // ---- Main → Renderer (streaming events) ----
 
 export type MainEvent =
-  | { type: "ready"; banner: BannerInfo; session: CurrentSessionInfo | null; hideTools: boolean; tasksEnabled: boolean }
+  | { type: "ready"; banner: BannerInfo; session: CurrentSessionInfo | null; hideTools: boolean; tasksEnabled: boolean; enabledTools: string[] }
   | { type: "require-settings"; mustConfigure: boolean; values: SettingsValues; hasApiKey: boolean }
   | { type: "settings-saved" }
   | { type: "session-changed"; session: CurrentSessionInfo | null }

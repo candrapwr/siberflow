@@ -23,9 +23,12 @@ interface ComposerProps {
    * (and attachments cleared) when false, since there's no sandbox to copy
    * files into and `read_excel` wouldn't be registered anyway. */
   hasWorkdir?: boolean;
+  /** Whether read_excel is enabled in settings. The upload button is disabled
+   * (with a tooltip hint) when false, since uploaded files can't be read. */
+  excelEnabled?: boolean;
 }
 
-export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, prefill, hasWorkdir = true }: ComposerProps) {
+export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, prefill, hasWorkdir = true, excelEnabled = true }: ComposerProps) {
   const [value, setValue] = useState("");
   const [attachments, setAttachments] = useState<PickedFile[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -122,12 +125,14 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
     }
   };
 
-  const uploadDisabled = busy || uploading || !hasWorkdir;
+  const uploadDisabled = busy || uploading || !hasWorkdir || !excelEnabled;
   const uploadTitle = !hasWorkdir
     ? "Pilih folder project dulu sebelum upload"
-    : uploading
-      ? "Menyalin file…"
-      : "Upload file Excel (.xlsx)";
+    : !excelEnabled
+      ? "Aktifkan read_excel di Tools settings untuk upload Excel"
+      : uploading
+        ? "Menyalin file…"
+        : "Upload file Excel (.xlsx)";
 
   return (
     <div className="composer">

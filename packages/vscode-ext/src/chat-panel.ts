@@ -264,6 +264,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       cfg.update("debug", values.debug, target),
       cfg.update("maxIterations", values.maxIterations, target),
       cfg.update("requestDelayMs", values.requestDelayMs, target),
+      cfg.update("enabledTools", values.enabledTools, target),
     ]);
 
     if (apiKey !== null) {
@@ -331,7 +332,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.provider = createProvider(this.settings.provider, {
       apiKey: this.apiKey,
     });
-    this.registry = createDefaultRegistry({ tasks: this.settings.tasks });
+    this.registry = createDefaultRegistry({
+      tasks: this.settings.tasks,
+      enabledTools: new Set(this.settings.enabledTools),
+    });
     this.agent = this.buildAgent();
     if (this.current) {
       this.agent.loadHistory(this.current.messages);
@@ -398,6 +402,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       session: this.sessionInfo(),
       hideTools: this.settings.hideTools,
       tasksEnabled: this.settings.tasks,
+      enabledTools: this.settings.enabledTools,
     });
     if (this.current && this.current.messages.length > 0) {
       this.post({
@@ -835,6 +840,9 @@ function readSettings(): SettingsValues {
     debug: cfg.get<boolean>("debug", false),
     maxIterations: cfg.get<number>("maxIterations", 50),
     requestDelayMs: cfg.get<number>("requestDelayMs", 1500),
+    enabledTools: cfg.get<string[]>("enabledTools", [
+      "read_file", "write_file", "edit_file", "copy_file", "list_dir",
+    ]),
   };
 }
 
@@ -1523,6 +1531,33 @@ body {
   margin-bottom: 3px;
   padding-bottom: 5px;
   border-bottom: 1px solid var(--sf-border);
+}
+.modal .tools-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 12px;
+  margin: 8px 0 4px;
+}
+.modal .tool-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--vscode-foreground);
+  padding: 3px 0;
+  cursor: pointer;
+}
+.modal .tool-toggle input[type="checkbox"] { margin: 0; cursor: pointer; }
+.modal .tool-toggle .tool-toggle-name {
+  font-family: var(--vscode-editor-font-family, ui-monospace, monospace);
+}
+.modal .tool-toggle .tool-toggle-group {
+  margin-left: auto;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--sf-muted);
+  opacity: 0.7;
 }
 .modal .form-row { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
 .modal .form-row label { font-size: 11px; opacity: 0.85; }

@@ -1336,6 +1336,43 @@ kbd {
   padding-bottom: 5px;
   border-bottom: 1px solid var(--border);
 }
+.form-section-hint {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--fg-muted);
+  opacity: 0.8;
+}
+.tools-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 12px;
+  margin: 8px 0 4px;
+}
+.tool-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--fg);
+  padding: 3px 0;
+  cursor: pointer;
+}
+.tool-toggle input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+}
+.tool-toggle-name {
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.tool-toggle-group {
+  margin-left: auto;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-muted);
+  opacity: 0.7;
+}
 .form-row {
   display: flex;
   flex-direction: column;

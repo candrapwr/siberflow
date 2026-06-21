@@ -55,6 +55,8 @@ interface ChatState {
   tasks: Task[];
   /** Snapshot of the initial task plan (set once per turn via task-plan event). */
   taskPlan: Task[] | null;
+  /** Tool names currently enabled in settings (drives composer upload toggle). */
+  enabledTools: string[];
   busy: boolean;
   stopping: boolean;
   notices: Array<{ id: number; kind: "info" | "error" | "warn"; text: string }>;
@@ -77,6 +79,7 @@ const initial: ChatState = {
   messages: [],
   tasks: [],
   taskPlan: null,
+  enabledTools: ["read_file", "write_file", "edit_file", "copy_file", "list_dir"],
   busy: false,
   stopping: false,
   notices: [],
@@ -216,6 +219,7 @@ function reducer(state: ChatState, action: Action): ChatState {
         session: e.session,
         hideTools: e.hideTools,
         tasksEnabled: e.tasksEnabled,
+        enabledTools: e.enabledTools,
         messages: [],
         tasks: [],
         usage: null,

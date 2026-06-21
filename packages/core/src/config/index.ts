@@ -2,6 +2,7 @@ import { statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import type { ContextOptimizeConfig, OptimizeMode } from "../agent/optimize.js";
 import type { ProviderName } from "../providers/registry.js";
+import { DEFAULT_ENABLED_TOOLS } from "../tools/index.js";
 
 export interface SiberflowConfig {
   provider: ProviderName;
@@ -16,6 +17,8 @@ export interface SiberflowConfig {
   hideTools: boolean;
   /** Milliseconds to wait before each LLM request (anti rate-limit). 0 = off. */
   requestDelayMs: number;
+  /** Tool names to register for the agent. Default: file ops only. */
+  enabledTools: Set<string>;
 }
 
 export function loadConfigFromEnv(
@@ -39,6 +42,7 @@ export function loadConfigFromEnv(
     autoContinue: env.SIBERFLOW_AUTO_CONTINUE !== "false",
     maxIterations: resolveMaxIterations(env),
     requestDelayMs: resolveRequestDelay(env),
+    enabledTools: resolveEnabledTools(env),
     hideTools: env.SIBERFLOW_HIDE_TOOLS === "true",
     ...(env.SIBERFLOW_MODEL ? { model: env.SIBERFLOW_MODEL } : {}),
     ...(env.SIBERFLOW_BASE_URL ? { baseUrl: env.SIBERFLOW_BASE_URL } : {}),
@@ -80,6 +84,23 @@ function resolveRequestDelay(env: NodeJS.ProcessEnv): number {
   if (raw === undefined) return 1500;
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 1500;
+}
+
+/**
+ * Which tool names to register for the agent. Default: the five file
+ * operations (read/write/edit/copy/list). Set `SIBERFLOW_TOOLS` to a
+ * comma-separated list to override, e.g. `read_file,exec,db_query`.
+ * `task_update` is never controlled here — it's gated by `SIBERFLOW_TASKS`.
+ * An empty string yields an empty set (no tools; only task_update if enabled).
+ */
+function resolveEnabledTools(env: NodeJS.ProcessEnv): Set<string> {
+  const raw = env.SIBERFLOW_TOOLS;
+  if (raw === undefined) return new Set(DEFAULT_ENABLED_TOOLS);
+  const names = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  return new Set(names);
 }
 
 function resolveProjectDir(env: NodeJS.ProcessEnv): string {
