@@ -13,7 +13,7 @@ const MAX_OUTPUT = 200_000;
 export const execTool: Tool = {
   name: "exec",
   description:
-    "Run a shell command via `/bin/sh -c`, with working directory set to the project directory. Returns stdout + stderr (truncated to ~200KB). Note: shell commands can technically access paths outside the project — use container isolation for hard sandboxing.",
+    "Run a shell command, with working directory set to the project directory. Uses the platform shell (/bin/sh on Unix, cmd.exe on Windows). Returns stdout + stderr (truncated to ~200KB). Note: shell commands can technically access paths outside the project — use container isolation for hard sandboxing.",
   parameters: {
     type: "object",
     properties: {
@@ -32,11 +32,19 @@ export const execTool: Tool = {
     const { command, timeout_ms } = args as Args;
     const timeout = Math.min(timeout_ms ?? DEFAULT_TIMEOUT, 600_000);
 
+    // Pick the platform shell. Unix uses /bin/sh; Windows uses cmd.exe.
+    const isWin = process.platform === "win32";
+    const shell = isWin ? process.env.ComSpec ?? "cmd.exe" : "/bin/sh";
+    const shellArgs = isWin ? ["/d", "/s", "/c", command] : ["-c", command];
+
     return await new Promise<string>((resolvePromise) => {
-      const child = spawn("/bin/sh", ["-c", command], {
+      const child = spawn(shell, shellArgs, {
         cwd: ctx.projectDir,
         env: process.env,
-        detached: true,
+        // detached creates a process group on Unix; ignored for kill on Windows
+        // (we use taskkill there instead). Windows shells need windowsHide.
+        detached: !isWin,
+        windowsHide: true,
       });
 
       let stdout = "";
@@ -47,11 +55,11 @@ export const execTool: Tool = {
 
       const timer = setTimeout(() => {
         killed = true;
-        killProcessGroup(child.pid, "SIGTERM");
+        killProcess(child, "SIGTERM");
         forceKillTimer = setTimeout(() => {
           if (child.exitCode === null && child.signalCode === null) {
             forceKilled = true;
-            killProcessGroup(child.pid, "SIGKILL");
+            killProcess(child, "SIGKILL");
           }
         }, FORCE_KILL_GRACE_MS);
       }, timeout);
@@ -87,10 +95,28 @@ export const execTool: Tool = {
   },
 };
 
-function killProcessGroup(pid: number | undefined, signal: NodeJS.Signals): void {
+/** Kill the spawned process tree. On Unix we kill the process group via the
+ * negative pid; on Windows we shell out to `taskkill /T` which kills the
+ * process and all its children. The signal argument is ignored on Windows. */
+function killProcess(child: { pid?: number }, signal: NodeJS.Signals): void {
+  const pid = child.pid;
   if (!pid) return;
+
+  if (process.platform === "win32") {
+    // taskkill /PID <pid> /T /F — kill the tree, force. Best-effort; ignore errors.
+    try {
+      spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
+        windowsHide: true,
+        stdio: "ignore",
+      });
+    } catch {
+      // best-effort
+    }
+    return;
+  }
+
   try {
-    process.kill(-pid, signal);
+    process.kill(-pid, signal); // kill the process group
     return;
   } catch {
     // Fall back to the direct child if process-group kill is unavailable.
