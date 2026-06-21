@@ -1,8 +1,13 @@
 // Chat input: textarea + send/stop button. Enter to send, Shift+Enter newline.
+// Also hosts the Excel (.xlsx) attachment picker: a paperclip button opens a
+// native file dialog, chosen files are copied into the project sandbox by the
+// main process, and the resulting relative paths are folded into the outgoing
+// prompt so the agent picks them up via `read_excel`.
 
 import { memo, useEffect, useRef, useState } from "react";
 import { ipc } from "../ipc.js";
-import { SendIcon, StopIcon } from "./icons.js";
+import type { PickedFile } from "@shared/protocol";
+import { FileExcelIcon, PaperclipIcon, SendIcon, StopIcon, XIcon } from "./icons.js";
 
 interface ComposerProps {
   busy: boolean;
@@ -14,10 +19,16 @@ interface ComposerProps {
   /** When this changes to a non-empty string, prefill the input with it and
    * focus/select-all so the user can edit then resend. */
   prefill?: string;
+  /** Whether the active session has a working directory. Upload is disabled
+   * (and attachments cleared) when false, since there's no sandbox to copy
+   * files into and `read_excel` wouldn't be registered anyway. */
+  hasWorkdir?: boolean;
 }
 
-export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, prefill }: ComposerProps) {
+export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, prefill, hasWorkdir = true }: ComposerProps) {
   const [value, setValue] = useState("");
+  const [attachments, setAttachments] = useState<PickedFile[]>([]);
+  const [uploading, setUploading] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const [stopping, setStopping] = useState(false);
 
@@ -56,11 +67,43 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
     }
   }, [autoFocusKey, busy]);
 
+  // Drop attachments when the session loses its workdir — they're no longer
+  // reachable and the excel tools aren't registered anymore.
+  useEffect(() => {
+    if (!hasWorkdir) setAttachments([]);
+  }, [hasWorkdir]);
+
+  const onPickExcel = async () => {
+    if (busy || uploading || !hasWorkdir) return;
+    setUploading(true);
+    try {
+      const result = await ipc().pickExcelFiles();
+      if ("error" in result) {
+        // Surface as a transient alert; the host already returns a localized
+        // message (e.g. "Pilih folder project dulu…").
+        window.alert(result.error);
+        return;
+      }
+      if (result.files.length > 0) {
+        setAttachments((prev) => [...prev, ...result.files]);
+      }
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const removeAttachment = (idx: number) => {
+    setAttachments((prev) => prev.filter((_, i) => i !== idx));
+  };
+
   const send = () => {
     const text = value.trim();
-    if (!text || busy) return;
+    if (busy) return;
+    if (!text && attachments.length === 0) return;
+    const composed = buildPromptWithAttachments(text, attachments);
     setValue("");
-    onSend(text);
+    setAttachments([]);
+    onSend(composed);
   };
 
   const stop = () => {
@@ -79,9 +122,45 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
     }
   };
 
+  const uploadDisabled = busy || uploading || !hasWorkdir;
+  const uploadTitle = !hasWorkdir
+    ? "Pilih folder project dulu sebelum upload"
+    : uploading
+      ? "Menyalin file…"
+      : "Upload file Excel (.xlsx)";
+
   return (
     <div className="composer">
+      {attachments.length > 0 && (
+        <div className="composer-attachments">
+          {attachments.map((f, i) => (
+            <span className="attach-chip" key={`${f.relPath}:${i}`} title={f.relPath}>
+              <FileExcelIcon size={13} className="attach-chip-icon" />
+              <span className="attach-chip-name">{f.name}</span>
+              <button
+                type="button"
+                className="attach-chip-x"
+                onClick={() => removeAttachment(i)}
+                disabled={busy}
+                title="Hapus"
+              >
+                <XIcon size={11} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       <div className="composer-shell">
+        <button
+          type="button"
+          className="upload-btn"
+          onClick={onPickExcel}
+          disabled={uploadDisabled}
+          title={uploadTitle}
+          aria-label="Upload file Excel"
+        >
+          <PaperclipIcon size={15} />
+        </button>
         <textarea
           ref={taRef}
           value={value}
@@ -96,7 +175,7 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
             <StopIcon size={12} />
           </button>
         ) : (
-          <button className="send-btn" onClick={send} disabled={!value.trim()} title="Send (Enter)">
+          <button className="send-btn" onClick={send} disabled={!value.trim() && attachments.length === 0} title="Send (Enter)">
             <SendIcon size={13} />
           </button>
         )}
@@ -107,3 +186,18 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
     </div>
   );
 });
+
+/**
+ * Compose the user's typed instruction with any attached Excel files into a
+ * single prompt string. The attachment block lists each file's relative path
+ * and instructs the agent to read them via `read_excel`. If the user typed
+ * nothing, a sensible default instruction is supplied so the turn isn't blank.
+ *
+ * Kept in sync with the VSCode webview's equivalent helper.
+ */
+export function buildPromptWithAttachments(text: string, files: PickedFile[]): string {
+  if (files.length === 0) return text;
+  const fileList = files.map((f) => `- ${f.relPath}`).join("\n");
+  const instruction = text.length > 0 ? text : "Baca file Excel ini dengan read_excel lalu analisa dan rangkum isinya.";
+  return `Saya upload file Excel berikut, sudah tersimpan di folder project:\n${fileList}\n\nTolong baca dengan tool read_excel lalu: ${instruction}`;
+}

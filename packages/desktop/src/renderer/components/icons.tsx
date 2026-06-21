@@ -51,3 +51,15 @@ export const ToolIcon = svg(<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0
 export const ArrowDownIcon = svg(<><path d="M12 5v14" /><path d="m19 12-7 7-7-7" /></>);
 export const CheckIcon = svg(<><path d="M20 6L9 17l-5-5" strokeWidth={2.5} /></>);
 export const SearchIcon = svg(<><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></>);
+export const PaperclipIcon = svg(<><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" /></>);
+export const XIcon = svg(<><path d="M18 6 6 18" /><path d="m6 6 12 12" /></>);
+/** Spreadsheet document icon — used for .xlsx attachments. */
+export const FileExcelIcon = svg(
+  <>
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+    <path d="M14 2v6h6" />
+    <path d="M8 13h8" />
+    <path d="M8 17h8" />
+    <path d="M12 13v4" />
+  </>,
+);

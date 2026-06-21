@@ -39,7 +39,7 @@ siberflow/
     │       │   ├── claude.ts      # extends OpenAICompatibleProvider (Anthropic OpenAI-compat)
     │       │   └── registry.ts    # createProvider(name, config)
     │       ├── tools/
-    │       │   ├── base.ts        # interface Tool, ToolContext { projectDir }
+    │       │   ├── base.ts        # interface Tool, ToolContext { projectDir, uploadDir? }
     │       │   ├── registry.ts    # class ToolRegistry
     │       │   ├── file/
     │       │   │   ├── path-utils.ts # resolveWithin() — sandbox resolver
@@ -51,6 +51,11 @@ siberflow/
     │       │   ├── cli/
     │       │   │   ├── exec.ts    # shell exec, cwd=projectDir
     │       │   │   └── index.ts
+    │       │   ├── excel/
+    │       │   │   ├── read.ts    # read_excel — multi-sheet, table/json output
+    │       │   │   ├── write.ts   # write_excel — multi-sheet, styled output
+    │       │   │   ├── styles.ts  # theme presets, named colors, number formats
+    │       │   │   └── index.ts   # excelTools[]
     │       │   ├── ssh/
     │       │   │   ├── exec.ts    # ssh_exec — remote shell over SSH2
     │       │   │   ├── sftp.ts    # sftp — remote file transfer
@@ -58,10 +63,10 @@ siberflow/
     │       │   ├── task/
     │       │   │   ├── update.ts  # task_update tool (opt-in via SIBERFLOW_TASKS)
     │       │   │   └── index.ts
-    │       │   └── index.ts       # createDefaultRegistry({ tasks? })
+    │       │   └── index.ts       # createDefaultRegistry({ tasks?, filesystem? })
     │       ├── session/
     │       │   ├── types.ts       # Session, SessionSummary, SESSION_FORMAT_VERSION
-    │       │   └── store.ts       # save/load/list/delete/clear/findByNameOrId
+    │       │   └── store.ts       # save/load/list/delete/clear + uploadsDirFor/cleanupUploads
     │       ├── config/index.ts    # loadConfigFromEnv()
     │       └── index.ts           # re-exports
     ├── cli/                  # @siberflow/cli (references core)
@@ -186,18 +191,23 @@ interface Tool {
 }
 
 interface ToolContext {
-  projectDir: string;  // sandbox root
+  projectDir: string;   // sandbox root untuk semua tool file
+  uploadDir?: string;   // tmp upload dir, HANYA dibaca read_excel (lihat section Excel)
+  taskStore?: TaskStore;  // hadir saat tasksEnabled
 }
 ```
 
 Tool return string yang akan dikirim balik ke LLM sebagai `tool` message content. Throw `Error` untuk kegagalan — `ToolRegistry.execute()` yang menangkap & convert ke "Error: ..." string.
 
-Default registry saat ini memuat lima kategori tool:
+Default registry saat ini memuat enam kategori tool:
 - file tools: `read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`
 - cli tool: `exec`
 - database tool: `db_query` (MySQL / PostgreSQL / SQLite)
+- excel tools: `read_excel`, `write_excel` (multi-sheet `.xlsx`, styled output)
 - ssh tools: `ssh_exec` (remote shell via SSH2), `sftp` (remote file transfer)
 - task tool: `task_update` (opt-in via `tasks: true` — silent di semua interface)
+
+File + cli + excel tools terdaftar hanya saat `filesystem !== false` (session punya working directory). db / ssh / task tools selalu terdaftar.
 
 ### Database tool
 
@@ -243,6 +253,59 @@ Contoh argumen:
 }
 ```
 
+### Excel tools
+
+Domain `tools/excel/` pakai library `exceljs` (pure JavaScript, **tidak ada native addon** — aman untuk build Electron cross-platform, tidak perlu rebuild seperti `sqlite3`/`ssh2`). Dua tool:
+
+**`read_excel`** — baca workbook `.xlsx`. Output default markdown `table` (header ditulis sekali) atau `json` (array row objects, presisi numerik terjaga). Bisa baca satu sheet spesifik (`sheet`) atau semua sheet sekaligus (tiap sheet di-prefix `=== Sheet: <name> (<rows> rows) ===`, sheet kosong di-skip). Tipe data dipertahankan: angka tetap number, tanggal → ISO string, formula → result, merged cell → value top-left, error cell (`#N/A`) → string. Safety caps: `maxRows` default 500 per sheet, total output 200K chars (sama seperti `db_query`).
+
+Catatan implementasi penting:
+- **ESM/CJS**: `exceljs` CommonJS; di NodeNext ESM named import gagal runtime → pakai `import ExcelJS from "exceljs"; const { Workbook } = ExcelJS`
+- **Type mismatch Buffer**: exceljs pinned ke `@types/node` lama, `load(buffer)` structural mismatch → cast `as any` di call site (runtime aman)
+- **Resolve path**: pakai `resolveExcelPath(ctx, path)` — bukan `resolveWithin` langsung. Cek upload dir dulu (kalau ada & path absolut), fallback ke project sandbox
+
+**`write_excel`** — buat/overwrite workbook `.xlsx` multi-sheet dari map `sheets: { SheetName: [rowObjects] }`. Header diambil dari key object pertama. Default sudah styling rapi (theme `professional`: header bold + biru + text putih + freeze pane + autoWidth + zebra rows). Styling custom ramah AI (high-level, bukan raw exceljs style):
+- `theme`: `professional` / `zebra` / `minimal` / `colorful`
+- `header`: `{ bold?, background?, color? }` — warna pakai nama (`blue`/`lightgray`/25+ lainnya di `styles.ts`) atau hex `#RRGGBB`
+- `zebraRows`, `freezeHeader`, `autoWidth` (toggle boolean)
+- `numberFormats`: map kolom → named format (`currency`, `date`, `datetime`, `percent`, `integer`, `decimal`) atau format Excel custom string
+
+Catatan implementasi:
+- **Tanggal via JSON**: tool args datang sebagai JSON (Date → ISO string via `JSON.parse`). `coerceValue` deteksi strict ISO date-only / datetime → convert balik ke Date object supaya tersimpan sebagai date cell. Date-only `2025-01-01` parse sebagai **local midnight** (tidak geser TZ ke `07:00:00`); datetime dengan offset dipertahankan
+- **Validation**: nama sheet max 31 char, no duplikat (case-insensitive), reject karakter `\ / ? * [ ] :`; reject file bukan `.xlsx`
+- **write_excel tetap sandbox projectDir** — output Excel harus di project (berbeda dengan read_excel yang whitelist upload dir). resolve pakai `resolveWithin(ctx.projectDir, path)` langsung
+
+Contoh argumen `write_excel`:
+
+```json
+{
+  "path": "laporan.xlsx",
+  "sheets": {
+    "Penjualan": [
+      { "produk": "Indomie", "qty": 10, "harga": 3000, "tanggal": "2025-01-01" },
+      { "produk": "Aqua", "qty": 5, "harga": 5000, "tanggal": "2025-01-02" }
+    ],
+    "Stok": [
+      { "produk": "Indomie", "stok": 200 }
+    ]
+  },
+  "styling": {
+    "theme": "colorful",
+    "numberFormats": { "harga": "currency", "tanggal": "date" }
+  }
+}
+```
+
+### Upload Excel (UI Desktop & VSCode)
+
+Fitur upload `.xlsx` dari composer (tombol paperclip) menyimpan file ke **OS tmp dir** — bukan project folder — supaya workspace bersih dan tidak ikut git.
+
+- **Lokasi**: `os.tmpdir()/siberflow-uploads/<sessionId>/` (per-session isolated, `mkdir mode 0o700` → owner-only, mitigasi `/tmp` world-readable di Linux)
+- **Alur**: tombol paperclip → native file picker `.xlsx` multi-select → `copyUploads(srcPaths)` salin ke upload dir (nama di-sanitize, collide → append `-2`) → return `{ name, relPath(absolute), bytes }[]` → renderer render chip attachment → saat send, prompt otomatis digabung dengan list path file + instruksi → AI pakai `read_excel`
+- **Whitelist**: `read_excel` resolve path absolut via `ToolContext.uploadDir` (dari `AgentOptions.uploadDir`). Tool file lain (`read_file`, `write_file`, `exec`, dll) **tidak terima** `uploadDir` → tetap sandbox projectDir, tidak bisa baca tmp
+- **Cleanup**: `deleteSession(id)` otomatis `cleanupUploads(id)` (rm recursive). Folder tmp juga di-reap OS saat reboot
+- **Helper core**: `uploadsDirFor(sessionId)` + `cleanupUploads(sessionId)` di `session/store.ts`
+
 ### Path sandbox
 
 Helper [resolveWithin](packages/core/src/tools/file/path-utils.ts):
@@ -258,6 +321,8 @@ Algoritma:
 4. `path.relative(projectReal, targetReal)` — kalau mulai dengan `..` atau absolute → throw "outside project directory".
 
 Setiap tool file (read/write/edit/copy/list) wajib lewat `resolveWithin` sebelum operasi fs.
+
+`read_excel` adalah pengecualian: pakai `resolveExcelPath(ctx, path)` yang **cuma allow path absolut di dalam `ctx.uploadDir`** (tmp upload dir), lalu fallback ke `resolveWithin(ctx.projectDir, ...)`. Path relatif selalu resolve ke projectDir — tidak bisa nekat baca file upload lewat nama relatif. `write_excel` pakai `resolveWithin` biasa (output Excel harus di project).
 
 Tool `exec` cwd-nya `projectDir`, tapi shell command bisa secara teknis akses path lain (`$HOME`, `cd /tmp`, dll). Sandbox keras hanya untuk file tools. Untuk hard isolation perlu container.
 
@@ -526,8 +591,8 @@ Settings panel di webview menulis ke kedua tempat. Tidak ada fallback ke env var
 ### Protokol Webview ↔ Extension
 
 [protocol.ts](packages/vscode-ext/src/protocol.ts) mendefinisikan dua union type tipped:
-- `ExtToView`: `ready`, `assistant_start`, `assistant_content`, `assistant_end`, `tool_call_start`, `tool_call_args`, `tool_result`, `tasks`, `context_optimized`, `max_iterations`, `error`, `info`, `session_changed`, `usage`, `settings`, `history`
-- `ViewToExt`: `init`, `send`, `command`, `save_settings`
+- `ExtToView`: `ready`, `assistant_start`, `assistant_content`, `iteration_end`, `assistant_end`, `tool_call_start`, `tool_call_args`, `tool_result`, `tasks`, `context_optimized`, `max_iterations`, `error`, `info`, `session_changed`, `usage`, `settings`, `history`, `excel_files_picked`, `excel_pick_error`
+- `ViewToExt`: `init`, `send`, `stop`, `regenerate`, `edit_last`, `command`, `save_settings`, `pick_excel_files`
 
 Lifecycle khas:
 1. Webview load → kirim `init`
@@ -541,7 +606,7 @@ Lifecycle khas:
 - **Topbar compact**: tombol session label (klik → popover info versi/provider/session) + tombol `⋯` (popover command menu: Settings, New, Load, Usage, Clear all)
 - **Messages area**: scrollable; tiap `msg` = user/assistant card; tool block & task card inline di antara messages
 - **Task card** inline di `#messages` — bukan panel fixed, scroll bareng chat. Update in-place tiap `task_update`.
-- **Composer**: textarea rounded + tombol Send bundar 28×28 dengan SVG arrow icon
+- **Composer**: textarea rounded + tombol Send bundar 28×28 dengan SVG arrow icon + tombol paperclip upload Excel (chip attachment, `pick_excel_files` message ke host)
 - **Pending indicator** (`◴ thinking…`) muncul saat submit, hilang saat event pertama
 - **Settings modal**: backdrop overlay; form provider/apiKey/model + toggle checkboxes
 - **Markdown**: `marked` lib di-bundle untuk render assistant message (text streaming dulu, parse markdown saat `assistant_end`)
@@ -570,10 +635,10 @@ cd packages/vscode-ext && npm run package
 
 ```bash
 cd packages/vscode-ext
-npx vsce publish patch --no-dependencies --allow-package-all-secrets
+npx vsce publish patch --no-dependencies
 ```
 
-`vsce` (di-include sebagai devDep ekstensi, no global install needed) menjalankan `vsce package --no-dependencies` setelah build. Output: `packages/vscode-ext/siberflow-chat-<version>.vsix`, sekitar 40 KB.
+`patch` bump versi (0.1.0 → 0.1.1) lalu publish. `--no-dependencies` skip dependency detection karena esbuild sudah inline semua runtime deps. `vsce` (devDep ekstensi, no global install) butuh **Personal Access Token** (PAT) dari Azure DevOps / VS Code Marketplace — di-set via env var `VSCE_PAT` atau prompt interaktif saat publish. Lihat https://code.visualstudio.com/api/working-with-extensions/publishing-extension untuk cara bikin PAT.
 
 Yang ter-bundle di VSIX:
 ```
@@ -646,7 +711,7 @@ Dua proses terpisah dengan typed IPC bridge:
 
 [shared/protocol.ts](packages/desktop/src/shared/protocol.ts) — contract ter-typed antara main dan renderer:
 - `MainEvent` — 18 union types (streaming events: `assistant-start`, `assistant-content`, `tool-call-start`, `tasks`, `error`, dll) dikirim main → renderer
-- `RendererCalls` — method interface yang renderer panggil (`send`, `stop`, `newSession`, `loadSession`, `pickFolder`, `saveSettings`, dll)
+- `RendererCalls` — method interface yang renderer panggil (`send`, `stop`, `newSession`, `loadSession`, `pickFolder`, `setWorkdir`, `pickExcelFiles`, `saveSettings`, dll)
 - `SettingsValues`, `SessionSummary`, `UsageInfo` — tipe data bersama
 
 ### Renderer (React)
@@ -666,7 +731,7 @@ Komponen:
 - **App.tsx** — root layout: resizable sidebar + chat area (centered max-width 760px) + floating task panel + modals
 - **Sidebar.tsx** — session list grouped per folder, new/delete, rename inline (double-click)
 - **Message.tsx** — user/assistant bubbles dengan `react-markdown` + collapsible tool blocks (skip `task_update`)
-- **Composer.tsx** — auto-resize textarea, Enter to send, Shift+Enter newline, send/stop button
+- **Composer.tsx** — auto-resize textarea, Enter to send, Shift+Enter newline, send/stop button, tombol paperclip untuk upload Excel (chip attachment + `buildPromptWithAttachments`)
 - **TaskPanel.tsx** — floating kanan-atas, collapsible, progress bar
 - **SettingsModal.tsx** — provider select, API key, agent config (grouped sections)
 
@@ -777,12 +842,15 @@ Setelah file provider dibuat:
    ```
 2. Tambah ke array di `<category>/index.ts` (atau buat kategori baru di `tools/index.ts`).
 
-**Wajib** sandbox semua path user-provided lewat `resolveWithin`.
+**Wajib** sandbox semua path user-provided lewat `resolveWithin` (atau `resolveExcelPath` kalau tool butuh akses upload dir selain project).
 
-Contoh kategori baru yang sudah ada di repo:
+Contoh kategori yang sudah ada di repo:
 - `tools/file/*` untuk operasi filesystem
 - `tools/cli/*` untuk shell command
 - `tools/db/*` untuk akses database
+- `tools/excel/*` untuk spreadsheet `.xlsx` (read pakai `resolveExcelPath` agar bisa baca upload dir; write tetap `resolveWithin` project)
+- `tools/ssh/*` untuk remote shell & SFTP
+- `tools/task/*` untuk task checklist
 
 ### Interface baru (web/desktop)
 
@@ -791,6 +859,9 @@ Buat workspace baru di `packages/<name>/`, depend ke `@siberflow/core`. Subscrib
 ## Catatan Keamanan Singkat
 
 - File tools sandboxed ke `projectDir` (hard).
+- `read_excel` punya whitelist tambahan: boleh baca path absolut di dalam `uploadDir` (tmp upload dir, per-session, mode 0700). Tool file lain tidak terima field `uploadDir` → tetap terkunci di project.
+- Upload Excel disimpan di `os.tmpdir()/siberflow-uploads/<sessionId>/` (bukan project) — workspace bersih, tidak ikut git. Cleanup otomatis saat `deleteSession`. Folder owner-only (mode 0700) untuk mitigasi `/tmp` world-readable di Linux multi-user.
+- `write_excel` output tetap sandbox `projectDir` — file Excel yang AI hasilkan harus di project, bukan tmp.
 - `exec` tool cwd=projectDir tapi shell bisa akses path lain (soft). OK untuk single-user dev; untuk multi-user / web public perlu permission layer.
 - API key:
   - CLI: plain text di env / `.env` (gitignored)

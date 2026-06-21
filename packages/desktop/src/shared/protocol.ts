@@ -74,6 +74,24 @@ export interface HistoryEntry {
   content: string;
 }
 
+/**
+ * An uploaded Excel file after it has been copied into the per-session upload
+ * dir (OS tmp, NOT the project dir). `read_excel` whitelists this location via
+ * the agent's `uploadDir` option.
+ */
+export interface PickedFile {
+  /** Display name (original filename). */
+  name: string;
+  /**
+   * Absolute path to the copied file in the OS tmp dir. Despite the field
+   * name (kept for protocol stability), this is an absolute path, not
+   * project-relative.
+   */
+  relPath: string;
+  /** File size in bytes. */
+  bytes: number;
+}
+
 // ---- Main → Renderer (streaming events) ----
 
 export type MainEvent =
@@ -112,6 +130,13 @@ export interface RendererCalls {
   listSessions: (projectDir?: string) => Promise<SessionSummary[]>;
   pickFolder: () => Promise<string | null>;
   setWorkdir: (folderPath: string) => Promise<void>;
+  /**
+   * Open a native multi-select file picker filtered to .xlsx, copy each chosen
+   * file into the current session's `_uploads/` sandbox dir, and return the
+   * copied file metadata. Returns `{ error }` if the session has no workdir
+   * or the copy failed; `{ files: [] }` if the user cancelled.
+   */
+  pickExcelFiles: () => Promise<{ files: PickedFile[] } | { error: string }>;
   getSettings: () => Promise<{ values: SettingsValues; hasApiKey: boolean }>;
   saveSettings: (values: SettingsValues, apiKey: string | null) => Promise<void>;
   renameSession: (id: string, name: string) => Promise<void>;

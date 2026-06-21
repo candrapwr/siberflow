@@ -1,9 +1,10 @@
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   mkdir,
   readFile,
   readdir,
+  rm,
   unlink,
   writeFile,
 } from "node:fs/promises";
@@ -13,6 +14,28 @@ import type { Session, SessionSummary, SessionUsage } from "./types.js";
 import { SESSION_FORMAT_VERSION } from "./types.js";
 
 const SESSIONS_DIR = join(homedir(), ".siberflow", "sessions");
+
+/**
+ * Root tmp dir for uploaded Excel files. Each session gets an isolated
+ * subfolder (`<this>/<sessionId>`) so uploads never touch the project dir
+ * (keeps the workspace clean, out of git) and can be removed wholesale when
+ * the session is deleted. See `uploadsDirFor` / `cleanupUploads`.
+ */
+const UPLOADS_TMP_ROOT = join(tmpdir(), "siberflow-uploads");
+
+/** Per-session upload directory inside the OS tmp dir. */
+export function uploadsDirFor(sessionId: string): string {
+  return join(UPLOADS_TMP_ROOT, sessionId);
+}
+
+/**
+ * Remove a session's uploaded files from tmp. Idempotent — no error if the
+ * folder doesn't exist. Called automatically by `deleteSession`; also safe to
+ * call directly.
+ */
+export async function cleanupUploads(sessionId: string): Promise<void> {
+  await rm(uploadsDirFor(sessionId), { recursive: true, force: true });
+}
 
 async function ensureDir(): Promise<void> {
   await mkdir(SESSIONS_DIR, { recursive: true });
@@ -118,6 +141,13 @@ export async function deleteSession(id: string): Promise<boolean> {
     await unlink(optimizedMiddlePathFor(id));
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  // Drop the session's uploaded Excel files from tmp. Best-effort: a failure
+  // here must not mask a successful session-file deletion.
+  try {
+    await cleanupUploads(id);
+  } catch {
+    /* ignore — OS will reap tmp on reboot */
   }
   return removed;
 }

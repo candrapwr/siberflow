@@ -365,6 +365,7 @@ export default function App() {
               onSend={onComposerSend}
               autoFocusKey={`${state.session.id}:${state.busy}`}
               prefill={editPrefill ?? undefined}
+              hasWorkdir={!!state.session.projectDir}
             />
           </div>
         )}

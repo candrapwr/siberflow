@@ -18,11 +18,29 @@ export type ExtToView =
   | { kind: "session_changed"; session: SessionInfo | null }
   | { kind: "usage"; usage: SessionUsage; optSaved: number }
   | { kind: "settings"; values: SettingsValues; hasApiKey: boolean; mustConfigure: boolean }
-  | { kind: "history"; messages: HistoryMessage[] };
+  | { kind: "history"; messages: HistoryMessage[] }
+  | { kind: "excel_files_picked"; files: PickedFile[] }
+  | { kind: "excel_pick_error"; message: string };
 
 export interface HistoryMessage {
   role: "user" | "assistant";
   content: string;
+}
+
+/**
+ * An uploaded Excel file after it has been copied into the per-session upload
+ * dir (OS tmp, NOT the workspace folder). `read_excel` whitelists this
+ * location via the agent's `uploadDir` option.
+ */
+export interface PickedFile {
+  /** Display name (original filename). */
+  name: string;
+  /**
+   * Absolute path to the copied file in the OS tmp dir. Despite the field
+   * name (kept for protocol stability), this is an absolute path, not
+   * workspace-relative.
+   */
+  relPath: string;
 }
 
 /** Messages from webview → extension host. */
@@ -33,7 +51,8 @@ export type ViewToExt =
   | { kind: "regenerate" }
   | { kind: "edit_last"; input: string }
   | { kind: "command"; command: "new" | "load" | "delete" | "clearAll" | "usage" | "tools" | "settings" }
-  | { kind: "save_settings"; values: SettingsValues; apiKey: string | null };
+  | { kind: "save_settings"; values: SettingsValues; apiKey: string | null }
+  | { kind: "pick_excel_files" };
 
 export type ProviderName = "deepseek" | "gemini" | "openai" | "openai-responses" | "grok" | "qwen" | "zai" | "claude";
 

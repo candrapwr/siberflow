@@ -1186,6 +1186,89 @@ kbd {
   gap: 5px;
 }
 
+/* ---------- Excel attachment chips + upload button ---------- */
+.composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 6px;
+  padding: 0 2px;
+}
+.attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 220px;
+  padding: 4px 6px 4px 8px;
+  background: color-mix(in srgb, #1d6f42 14%, var(--bg-surface-alt));
+  border: 1px solid color-mix(in srgb, #1d6f42 32%, var(--border));
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--fg);
+  animation: attach-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes attach-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.attach-chip-icon {
+  color: #1d6f42;
+  flex-shrink: 0;
+}
+.attach-chip-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.attach-chip-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.attach-chip-x:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--fg) 14%, transparent);
+  color: var(--fg);
+}
+.attach-chip-x:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.upload-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.upload-btn:hover:not(:disabled) {
+  background: var(--bg-surface-alt);
+  color: var(--fg);
+}
+.upload-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 /* ---------- Action buttons (regenerate/edit) ---------- */
 .msg.assistant .actions-bar {
   display: flex;
