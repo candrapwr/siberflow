@@ -4,6 +4,7 @@ import { cliTools } from "./cli/index.js";
 import { dbTools } from "./db/index.js";
 import { sshTools } from "./ssh/index.js";
 import { taskTools } from "./task/index.js";
+import { excelTools } from "./excel/index.js";
 
 export * from "./base.js";
 export { ToolRegistry } from "./registry.js";
@@ -12,6 +13,7 @@ export { cliTools } from "./cli/index.js";
 export { dbTools } from "./db/index.js";
 export { sshTools } from "./ssh/index.js";
 export { taskTools } from "./task/index.js";
+export { excelTools } from "./excel/index.js";
 
 export interface RegistryOptions {
   /** Register the task_update checklist tool (default false). */
@@ -26,7 +28,7 @@ export function createDefaultRegistry(opts: RegistryOptions = {}): ToolRegistry 
   const registry = new ToolRegistry();
   const tools: import("./base.js").Tool[] = [];
   if (opts.filesystem !== false) {
-    tools.push(...fileTools, ...cliTools);
+    tools.push(...fileTools, ...cliTools, ...excelTools);
   }
   tools.push(...dbTools, ...sshTools);
   if (opts.tasks) tools.push(...taskTools);
