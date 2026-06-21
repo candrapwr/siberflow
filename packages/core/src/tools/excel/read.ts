@@ -1,10 +1,11 @@
 import { readFile } from "node:fs/promises";
+import { isAbsolute } from "node:path";
 // exceljs ships as CommonJS. Under NodeNext ESM, named imports off a CJS
 // module are not statically resolvable at runtime even though the type defs
 // allow them at compile time — so import the default and destructure.
 import ExcelJS from "exceljs";
 import type { CellValue, Worksheet } from "exceljs";
-import type { Tool } from "../base.js";
+import type { Tool, ToolContext } from "../base.js";
 import { resolveWithin } from "../file/path-utils.js";
 
 const { Workbook } = ExcelJS;
@@ -57,7 +58,7 @@ export const readExcelTool: Tool = {
   },
   async execute(args, ctx) {
     const parsed = parseArgs(args);
-    const full = await resolveWithin(ctx.projectDir, parsed.path);
+    const full = await resolveExcelPath(ctx, parsed.path);
     const data = await readFile(full);
 
     const workbook = new Workbook();
@@ -124,6 +125,29 @@ export const readExcelTool: Tool = {
     return out;
   },
 };
+
+/**
+ * Resolve a read path against either the per-session upload dir (tmp, where
+ * uploaded Excels land) or the project sandbox.
+ *
+ * Upload-dir access is granted ONLY for absolute paths that land inside it —
+ * relative paths are always resolved against the project sandbox (so a stray
+ * `internal.xlsx` doesn't accidentally hit a same-named file in the upload
+ * dir). Anything that escapes both is rejected by `resolveWithin`, matching
+ * the pre-upload behavior. Only `read_excel` uses this; other file tools
+ * never see `uploadDir`.
+ */
+async function resolveExcelPath(ctx: ToolContext, p: string): Promise<string> {
+  if (ctx.uploadDir && isAbsolute(p)) {
+    try {
+      return await resolveWithin(ctx.uploadDir, p);
+    } catch {
+      // Absolute path not inside the upload dir — fall through to the project
+      // sandbox check below (which may reject it if it's also outside there).
+    }
+  }
+  return resolveWithin(ctx.projectDir, p);
+}
 
 function parseArgs(args: unknown): Args {
   if (!args || typeof args !== "object") {

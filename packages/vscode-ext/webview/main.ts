@@ -3,6 +3,7 @@ import type {
   ExtToView,
   ViewToExt,
   BannerInfo,
+  PickedFile,
   SessionInfo,
   SettingsValues,
 } from "../src/protocol.js";
@@ -27,6 +28,8 @@ interface UIState {
   currentTools: Map<number, ToolElements>;
   busy: boolean;
   stopping: boolean;
+  /** Excel files staged for the next send (copied into the workspace sandbox). */
+  attachments: PickedFile[];
 }
 
 interface ToolElements {
@@ -57,6 +60,7 @@ const state: UIState = {
   currentTools: new Map(),
   busy: false,
   stopping: false,
+  attachments: [],
 };
 
 /**
@@ -84,6 +88,9 @@ const ICONS = {
   usage: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>`,
   trash: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>`,
   tool: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>`,
+  paperclip: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>`,
+  fileExcel: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h8"/><path d="M12 13v4"/></svg>`,
+  x: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`,
 };
 
 // Element references so updates can target panels without wiping #messages.
@@ -433,8 +440,33 @@ function showSettingsModal(
 function renderComposer(): HTMLElement {
   const el = document.createElement("div");
   el.className = "composer";
+
+  // Attachment chips container — populated by updateAttachments(). Sits above
+  // the composer shell so staged files are visible while the user types.
+  const attachWrap = document.createElement("div");
+  attachWrap.className = "composer-attachments";
+  attachWrap.id = "composer-attachments";
+  el.appendChild(attachWrap);
+
   const shell = document.createElement("div");
   shell.className = "composer-shell";
+
+  // Excel upload button (paperclip). Opens a native multi-select .xlsx picker
+  // handled by the extension host; the host copies files into the workspace
+  // sandbox and replies with excel_files_picked.
+  const uploadBtn = document.createElement("button");
+  uploadBtn.className = "upload-btn";
+  uploadBtn.id = "upload-btn";
+  uploadBtn.type = "button";
+  uploadBtn.title = "Upload file Excel (.xlsx)";
+  uploadBtn.setAttribute("aria-label", "Upload file Excel");
+  uploadBtn.innerHTML = ICONS.paperclip;
+  uploadBtn.onclick = () => {
+    if (state.busy) return;
+    vscode.postMessage({ kind: "pick_excel_files" });
+  };
+  shell.appendChild(uploadBtn);
+
   const ta = document.createElement("textarea");
   ta.placeholder = "Message…";
   ta.title = "Enter to send · Shift+Enter for newline";
@@ -443,6 +475,11 @@ function renderComposer(): HTMLElement {
   ta.addEventListener("input", () => {
     ta.style.height = "auto";
     ta.style.height = Math.min(ta.scrollHeight, 200) + "px";
+    // Re-evaluate send-button enabled state on every keystroke.
+    const btn = document.getElementById("send-btn") as HTMLButtonElement | null;
+    if (btn && !state.busy) {
+      btn.disabled = ta.value.trim().length === 0 && state.attachments.length === 0;
+    }
   });
   ta.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -463,8 +500,45 @@ function renderComposer(): HTMLElement {
   hint.className = "composer-hint";
   hint.id = "composer-hint";
   el.appendChild(hint);
+  updateAttachments();
   updateComposerState();
   return el;
+}
+
+/** Re-render the attachment chip strip from `state.attachments`. */
+function updateAttachments(): void {
+  const wrap = document.getElementById("composer-attachments");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  for (let i = 0; i < state.attachments.length; i++) {
+    const f = state.attachments[i]!;
+    const chip = document.createElement("span");
+    chip.className = "attach-chip";
+    chip.title = f.relPath;
+    const icon = document.createElement("span");
+    icon.className = "attach-chip-icon";
+    icon.innerHTML = ICONS.fileExcel;
+    const name = document.createElement("span");
+    name.className = "attach-chip-name";
+    name.textContent = f.name;
+    const x = document.createElement("button");
+    x.className = "attach-chip-x";
+    x.type = "button";
+    x.title = "Hapus";
+    x.setAttribute("aria-label", `Hapus ${f.name}`);
+    x.innerHTML = ICONS.x;
+    const idx = i;
+    x.onclick = () => {
+      if (state.busy) return;
+      state.attachments.splice(idx, 1);
+      updateAttachments();
+      updateComposerState();
+    };
+    chip.appendChild(icon);
+    chip.appendChild(name);
+    chip.appendChild(x);
+    wrap.appendChild(chip);
+  }
 }
 
 function submit(): void {
@@ -472,16 +546,23 @@ function submit(): void {
   const ta = document.getElementById("input") as HTMLTextAreaElement | null;
   if (!ta) return;
   const text = ta.value.trim();
-  if (!text) return;
+  const hasAttachments = state.attachments.length > 0;
+  if (!text && !hasAttachments) return;
+  // Fold staged Excel attachments into the prompt: list their relative paths
+  // and instruct the agent to read them via read_excel. Mirrors the desktop
+  // composer's buildPromptWithAttachments.
+  const composed = buildPromptWithAttachments(text, state.attachments);
   ta.value = "";
   ta.style.height = "auto";
+  state.attachments = [];
+  updateAttachments();
   // If we came from "Edit", the host must rewind the Agent's old turn before
   // re-sending — otherwise the stale turn stays in Agent history (and gets
   // persisted on the next save, then reappears on session reload). The DOM
   // was already rewound at click time; the host now does the same to state.
   const wasEditing = editingLast;
   editingLast = false;
-  appendUserMessage(text);
+  appendUserMessage(composed);
   // Reset the task panel for the new turn. The previous turn's checklist
   // is stale; the model will repopulate via task_update if it decides to
   // maintain one this turn.
@@ -491,7 +572,21 @@ function submit(): void {
   }
   showPending();
   setBusy(true);
-  vscode.postMessage({ kind: wasEditing ? "edit_last" : "send", input: text });
+  vscode.postMessage({ kind: wasEditing ? "edit_last" : "send", input: composed });
+}
+
+/**
+ * Compose the user's typed instruction with any attached Excel files into a
+ * single prompt string. When attachments are present, a header block lists
+ * each file's relative path and tells the agent to read them via `read_excel`.
+ * If the user typed nothing, a sensible default instruction is supplied so the
+ * turn isn't blank. Mirrors the desktop Composer's helper.
+ */
+function buildPromptWithAttachments(text: string, files: PickedFile[]): string {
+  if (files.length === 0) return text;
+  const fileList = files.map((f) => `- ${f.relPath}`).join("\n");
+  const instruction = text.length > 0 ? text : "Baca file Excel ini dengan read_excel lalu analisa dan rangkum isinya.";
+  return `Saya upload file Excel berikut, sudah tersimpan di folder project:\n${fileList}\n\nTolong baca dengan tool read_excel lalu: ${instruction}`;
 }
 
 function setBusy(b: boolean): void {
@@ -517,19 +612,24 @@ function requestStop(): void {
 function updateComposerState(): void {
   const btn = document.getElementById("send-btn") as HTMLButtonElement | null;
   const ta = document.getElementById("input") as HTMLTextAreaElement | null;
+  const uploadBtn = document.getElementById("upload-btn") as HTMLButtonElement | null;
   const hint = document.getElementById("composer-hint") as HTMLDivElement | null;
   if (btn) {
-    btn.disabled = false;
     btn.classList.toggle("stop", state.busy);
     if (state.busy) {
+      btn.disabled = false;
       btn.title = state.stopping ? "Stopping..." : "Stop generation";
       btn.textContent = state.stopping ? "..." : "Stop";
     } else {
+      // Enable send when there's typed text OR staged attachments.
+      const hasText = ta ? ta.value.trim().length > 0 : false;
+      btn.disabled = !hasText && state.attachments.length === 0;
       btn.title = "Send (Enter)";
       btn.innerHTML = ICONS.send;
     }
   }
   if (ta) ta.disabled = state.busy;
+  if (uploadBtn) uploadBtn.disabled = state.busy;
   if (hint) {
     hint.innerHTML = state.busy
       ? state.stopping
@@ -1160,6 +1260,16 @@ window.addEventListener("message", (ev) => {
       syncEmptyState();
       scrollToBottom();
       refreshActionBar();
+      break;
+    case "excel_files_picked":
+      if (msg.files.length > 0) {
+        state.attachments.push(...msg.files);
+        updateAttachments();
+        updateComposerState();
+      }
+      break;
+    case "excel_pick_error":
+      showNotice("error", msg.message);
       break;
   }
 });

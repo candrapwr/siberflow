@@ -29,6 +29,12 @@ export interface AgentOptions {
   maxIterations?: number;
   /** Sandbox root that file tools and exec are restricted to. */
   projectDir?: string;
+  /**
+   * Optional per-session tmp dir that `read_excel` may read uploaded files
+   * from (outside the project sandbox). Other file tools ignore this. When
+   * unset, `read_excel` can only read files inside `projectDir`.
+   */
+  uploadDir?: string;
   /** Optional context optimization (default: disabled). */
   contextOptimize?: ContextOptimizeConfig;
   /** Enable task checklist injection (the task_update tool must also be registered). */
@@ -79,6 +85,7 @@ export class Agent {
     this.ctx = {
       projectDir: opts.projectDir ?? process.cwd(),
       ...(this.tasksEnabled ? { taskStore: this.taskStore } : {}),
+      ...(opts.uploadDir ? { uploadDir: opts.uploadDir } : {}),
     };
 
     if (opts.systemPrompt) {

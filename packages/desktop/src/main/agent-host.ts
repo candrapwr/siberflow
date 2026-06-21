@@ -2,6 +2,8 @@
 // streaming events to the renderer via MainEvent. This is the desktop
 // equivalent of the VSCode extension's ChatViewProvider (chat-panel.ts).
 
+import { copyFile, mkdir, stat } from "node:fs/promises";
+import { basename, join } from "node:path";
 import {
   Agent,
   buildSystemPrompt,
@@ -17,6 +19,7 @@ import {
   saveSession,
   saveSessionSync,
   SESSION_FORMAT_VERSION,
+  uploadsDirFor,
   type Provider,
   type Session,
   type Task,
@@ -27,6 +30,7 @@ import type {
   CurrentSessionInfo,
   HistoryEntry,
   MainEvent,
+  PickedFile,
   SessionSummary,
   SettingsValues,
   UsageInfo,
@@ -92,6 +96,25 @@ function deriveSessionName(input: string): string {
   // Capitalize the first character.
   name = name.charAt(0).toUpperCase() + name.slice(1);
   return name || "New chat";
+}
+
+/**
+ * Sanitize an uploaded filename for safe storage inside the project sandbox:
+ * keep alphanumerics, dot, dash, underscore; collapse everything else to a
+ * dash; de-duplicate against `used` by appending `-2`, `-3`, … before `.xlsx`.
+ */
+function sanitizeFileName(original: string, used: Set<string>): string {
+  const lower = original.toLowerCase();
+  const dot = lower.lastIndexOf(".");
+  const stem = dot > 0 ? lower.slice(0, dot) : lower;
+  const cleanedStem = stem.replace(/[^a-z0-9._-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "file";
+  let candidate = `${cleanedStem}.xlsx`;
+  let n = 2;
+  while (used.has(candidate)) {
+    candidate = `${cleanedStem}-${n}.xlsx`;
+    n++;
+  }
+  return candidate;
 }
 
 export class AgentHost {
@@ -251,6 +274,10 @@ export class AgentHost {
       summaryMode: this.summaryModeActive(),
     });
     const workdir = this.current?.projectDir;
+    // uploadDir is the per-session tmp dir where uploaded Excels live. Pass it
+    // so read_excel can whitelist reads from there even though it's outside
+    // the project sandbox.
+    const uploadDir = this.current ? uploadsDirFor(this.current.id) : undefined;
     return new Agent({
       provider: this.provider,
       registry: this.registry,
@@ -259,6 +286,7 @@ export class AgentHost {
       // projectDir is optional now — pass undefined when no workdir so the
       // agent won't sandbox to a random cwd.
       ...(workdir ? { projectDir: workdir } : {}),
+      ...(uploadDir ? { uploadDir } : {}),
       contextOptimize: this.optimizeConfig(),
       tasksEnabled: this.settings.tasks,
       autoContinue: this.settings.autoContinue,
@@ -336,6 +364,53 @@ export class AgentHost {
     this.rebuildAgent();
     this.postReady();
     void this.broadcastSessionList();
+  }
+
+  /** The current session's working directory, or null when there is none. */
+  getWorkdir(): string | null {
+    return this.current?.projectDir || null;
+  }
+
+  /**
+   * Copy a list of source file paths into the session's per-session upload dir
+   * in the OS tmp folder (NOT the project dir — keeps the workspace clean and
+   * out of git). Filenames are sanitized; collisions are de-duplicated with a
+   * short suffix. Only `.xlsx` files are accepted. Returns metadata with the
+   * absolute destination path so the agent can pass it to `read_excel`, which
+   * whitelists this dir via the agent's `uploadDir` option. The folder is
+   * removed automatically when the session is deleted.
+   *
+   * Unlike file writes, uploads don't require a project workdir — they live in
+   * tmp. But `read_excel` still needs the project sandbox for relative-path
+   * reads, so a missing workdir just means relative reads won't resolve.
+   */
+  async copyUploads(srcPaths: string[]): Promise<PickedFile[]> {
+    if (!this.current) {
+      throw new Error("Tidak ada session aktif.");
+    }
+    const destDir = uploadsDirFor(this.current.id);
+    // mode 0o700: owner-only, so other users on a shared Linux box can't read
+    // uploaded Excels out of /tmp.
+    await mkdir(destDir, { recursive: true, mode: 0o700 });
+
+    const usedNames = new Set<string>();
+    const out: PickedFile[] = [];
+    for (const src of srcPaths) {
+      const original = basename(src);
+      if (!original.toLowerCase().endsWith(".xlsx")) {
+        throw new Error(`File "${original}" bukan .xlsx. Hanya Excel yang didukung.`);
+      }
+      const safe = sanitizeFileName(original, usedNames);
+      usedNames.add(safe);
+      const dest = join(destDir, safe);
+      await copyFile(src, dest);
+      const stats = await stat(dest);
+      // relPath is the ABSOLUTE tmp path — read_excel resolves absolute paths
+      // against the upload dir whitelist. (Field name kept for protocol
+      // stability; semantically it's an absolute path now.)
+      out.push({ name: original, relPath: dest, bytes: stats.size });
+    }
+    return out;
   }
 
   async deleteSessionById(id: string): Promise<void> {

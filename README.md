@@ -184,12 +184,39 @@ cd packages/desktop && npm run rebuild
 - **Streaming response** — token muncul real-time, support markdown
 - **File dan shell tools** — `read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`, `exec`
 - **Database query tool** — `db_query` mendukung `mysql`, `postgresql`, dan `sqlite`; query bebas, optional `params`, SQLite path tetap dibatasi ke project dir
+- **Excel spreadsheet tools** — `read_excel` / `write_excel` untuk `.xlsx` multi-sheet dengan output table/json dan styling (theme preset, zebra rows, freeze header, number format). File Excel dari upload UI disimpan di **OS tmp dir** (bukan project) — workspace tetap bersih, tidak ikut ke git
 - **Task checklist** — opt-in via env / settings; AI maintain checklist multi-step yang bisa di-resume setelah Ctrl+C atau session restart
 - **Context optimization** — buang tool history dari turn lama (default aktif); current task tetap utuh. Dua mode via `SIBERFLOW_CONTEXT_OPTIMIZE_MODE`: `drop` (buang total, default) atau `summary` (sisakan tag `[SUMMARY]` berisi *signature* per tool — nama + identifier ringkas seperti `exec("df -h")` / `write_file("src/foo.ts")`; payload berat dan result tetap dibuang). Defense-in-depth: provider & serialization selalu menjamin assistant message punya content atau tool_calls (fix error 400 DeepSeek)
 - **Auto-continue** — sambung otomatis respons yang kepotong max_tokens
 - **Silent task_update** — tool `task_update` tetap dieksekusi tapi tidak ditampilkan di transcript (CLI, VSCode, Desktop); efeknya hanya terlihat di task checklist
+- **Upload Excel dari chat (Desktop & VSCode)** — tombol paperclip di composer buka file picker `.xlsx` (multi-select); file disalin ke tmp per-session, prompt otomatis menyuruh AI baca via `read_excel`. Chip attachment dengan tombol hapus per file
 - **Multi-session** — sesi tersimpan per project, picker saat startup
 - **Debug tracing** — env `SIBERFLOW_DEBUG=true` untuk log HTTP/finish_reason/usage
+
+## Excel tools (`read_excel` / `write_excel`)
+
+Domain tool terpisah di `packages/core/src/tools/excel/`, pakai library `exceljs` (pure JS, no native addon → aman untuk build Electron cross-platform). Terdaftar di registry di bawah flag `filesystem` — otomatis dimatikan saat session tanpa working directory (sama seperti `read_file`/`exec`).
+
+### `read_excel`
+
+Baca workbook `.xlsx`. Output table (markdown, default) atau JSON (presisi numerik). Bisa baca satu sheet spesifik (parameter `sheet`) atau semua sheet sekaligus. Tipe data dipertahankan: angka tetap number, tanggal → ISO string, formula → result. Safety caps: `maxRows` default 500 per sheet, total output 200K chars.
+
+### `write_excel`
+
+Buat/overwrite workbook `.xlsx` multi-sheet dari map `sheets: { SheetName: [rowObjects] }`. Default sudah styling rapi (theme `professional`: header bold + biru + freeze + zebra + auto-width). Styling custom ramah AI:
+
+- `theme`: `professional` / `zebra` / `minimal` / `colorful`
+- `header`: `{ bold, background, color }` (warna pakai nama `blue`/`lightgray` atau hex `#4472C4`)
+- `zebraRows`, `freezeHeader`, `autoWidth` (toggle boolean)
+- `numberFormats`: map kolom → named format (`currency`, `date`, `percent`, `integer`, `decimal`) atau format Excel custom
+
+Tanggal di args (datang sebagai ISO string via JSON) otomatis dikonversi balik ke Date cell. Date-only `2025-01-01` parse sebagai local midnight (tidak geser timezone).
+
+### Upload Excel dari UI (Desktop & VSCode)
+
+Tombol paperclip 📎 di composer → file picker native `.xlsx` multi-select → file disalin ke **`os.tmpdir()/siberflow-uploads/<sessionId>/`** (per-session, mode 0700) → prompt otomatis digabung dengan list path file → AI pakai `read_excel`. Project folder tidak tersentuh. Saat session di-delete, folder tmp session otomatis dibersihkan (hook di `deleteSession`).
+
+**Keamanan**: hanya `read_excel` yang whitelist upload dir (via `ToolContext.uploadDir`); tool file lain (`read_file`, `write_file`, `exec`, dll) tetap sandbox ke `projectDir` dan tidak bisa baca tmp.
 
 ## Developer docs
 

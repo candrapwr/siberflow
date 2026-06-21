@@ -76,6 +76,27 @@ export function registerIpc(): void {
     host!.setWorkdir(folderPath);
   });
 
+  ipcMain.handle("siberflow:pickExcelFiles", async () => {
+    if (!host!.getWorkdir()) {
+      return { error: "Pilih folder project dulu sebelum upload file." } as const;
+    }
+    const focused = BrowserWindow.getFocusedWindow() ?? mainWindow;
+    const result = await dialog.showOpenDialog(focused!, {
+      title: "Pilih file Excel",
+      filters: [{ name: "Excel Workbook", extensions: ["xlsx"] }],
+      properties: ["openFile", "multiSelections"],
+    });
+    if (result.canceled || result.filePaths.length === 0) {
+      return { files: [] } as const;
+    }
+    try {
+      const files = await host!.copyUploads(result.filePaths);
+      return { files } as const;
+    } catch (err) {
+      return { error: (err as Error).message } as const;
+    }
+  });
+
   ipcMain.handle("siberflow:getSettings", () => {
     return host!.getSettings();
   });

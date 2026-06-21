@@ -1,4 +1,6 @@
 import * as vscode from "vscode";
+import { copyFile, mkdir, stat } from "node:fs/promises";
+import { basename, join } from "node:path";
 import {
   Agent,
   buildSystemPrompt,
@@ -16,6 +18,7 @@ import {
   saveSessionSync,
   SESSION_FORMAT_VERSION,
   optimizeContext,
+  uploadsDirFor,
   type Provider,
   type Session,
   type Task,
@@ -26,6 +29,7 @@ import type {
   ExtToView,
   HistoryMessage,
   OptimizeMode,
+  PickedFile,
   ProviderName,
   SessionInfo,
   SettingsValues,
@@ -145,7 +149,72 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "save_settings":
         await this.saveSettings(msg.values, msg.apiKey);
         break;
+      case "pick_excel_files":
+        await this.pickExcelFiles();
+        break;
     }
+  }
+
+  /**
+   * Open a multi-select .xlsx file picker, copy each chosen file into the
+   * workspace's `_uploads/` sandbox, and notify the webview with the resulting
+   * relative paths (or an error message if it failed). Mirrors the desktop
+   * app's `pickExcelFiles` IPC handler.
+   */
+  private async pickExcelFiles(): Promise<void> {
+    if (this.turnAbort) {
+      this.post({ kind: "info", message: "Tunggu turn selesai sebelum upload." });
+      return;
+    }
+    const uris = await vscode.window.showOpenDialog({
+      title: "Pilih file Excel",
+      filters: { "Excel Workbook": ["xlsx"] },
+      canSelectMany: true,
+      openLabel: "Upload",
+    });
+    if (!uris || uris.length === 0) return; // user cancelled
+    try {
+      const files = await this.copyUploads(uris);
+      this.post({ kind: "excel_files_picked", files });
+    } catch (err) {
+      this.post({ kind: "excel_pick_error", message: (err as Error).message });
+    }
+  }
+
+  /**
+   * Copy source file URIs into the session's per-session upload dir in the OS
+   * tmp folder (NOT the workspace — keeps the project clean and out of git).
+   * Returns metadata with absolute destination paths so the agent can pass
+   * them to `read_excel`, which whitelists this dir via the agent's `uploadDir`
+   * option. The folder is removed automatically when the session is deleted.
+   * Requires `this.current` to be set (so we know which session owns the dir).
+   */
+  private async copyUploads(srcUris: vscode.Uri[]): Promise<PickedFile[]> {
+    if (!this.current) {
+      throw new Error("Tidak ada session aktif.");
+    }
+    const destDir = uploadsDirFor(this.current.id);
+    // mode 0o700: owner-only, so other users on a shared Linux box can't read
+    // uploaded Excels out of /tmp.
+    await mkdir(destDir, { recursive: true, mode: 0o700 });
+    const usedNames = new Set<string>();
+    const out: PickedFile[] = [];
+    for (const uri of srcUris) {
+      const original = basename(uri.fsPath);
+      if (!original.toLowerCase().endsWith(".xlsx")) {
+        throw new Error(`File "${original}" bukan .xlsx. Hanya Excel yang didukung.`);
+      }
+      const safe = sanitizeFileName(original, usedNames);
+      usedNames.add(safe);
+      const dest = join(destDir, safe);
+      await copyFile(uri.fsPath, dest);
+      await stat(dest); // sanity check it landed
+      // relPath is the ABSOLUTE tmp path — read_excel resolves absolute paths
+      // against the upload dir whitelist. (Field name kept for protocol
+      // stability; semantically it's an absolute path now.)
+      out.push({ name: original, relPath: dest });
+    }
+    return out;
   }
 
   // -------- init / settings --------
@@ -281,12 +350,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       tasksEnabled: this.settings.tasks,
       summaryMode: this.summaryModeActive(),
     });
+    // uploadDir is the per-session tmp dir where uploaded Excels live. Pass it
+    // so read_excel can whitelist reads from there even though it's outside
+    // the project sandbox.
+    const uploadDir = this.current ? uploadsDirFor(this.current.id) : undefined;
     return new Agent({
       provider: this.provider,
       registry: this.registry,
       model,
       systemPrompt,
       projectDir: this.projectDir,
+      ...(uploadDir ? { uploadDir } : {}),
       contextOptimize: this.optimizeConfig(),
       tasksEnabled: this.settings.tasks,
       autoContinue: this.settings.autoContinue,
@@ -759,6 +833,25 @@ function readSettings(): SettingsValues {
     debug: cfg.get<boolean>("debug", false),
     maxIterations: cfg.get<number>("maxIterations", 50),
   };
+}
+
+/**
+ * Sanitize an uploaded filename for safe storage inside the workspace sandbox:
+ * keep alphanumerics, dot, dash, underscore; collapse everything else to a
+ * dash; de-duplicate against `used` by appending `-2`, `-3`, … before `.xlsx`.
+ */
+function sanitizeFileName(original: string, used: Set<string>): string {
+  const lower = original.toLowerCase();
+  const dot = lower.lastIndexOf(".");
+  const stem = dot > 0 ? lower.slice(0, dot) : lower;
+  const cleanedStem = stem.replace(/[^a-z0-9._-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "file";
+  let candidate = `${cleanedStem}.xlsx`;
+  let n = 2;
+  while (used.has(candidate)) {
+    candidate = `${cleanedStem}-${n}.xlsx`;
+    n++;
+  }
+  return candidate;
 }
 
 function secretKeyFor(provider: ProviderName): string {
@@ -1305,6 +1398,84 @@ body {
   padding: 0 3px;
   line-height: 1.5;
 }
+
+/* ---------- Excel attachment chips + upload button ---------- */
+.composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 6px;
+  padding: 0 2px;
+}
+.attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 200px;
+  padding: 4px 6px 4px 8px;
+  background: color-mix(in srgb, #1d6f42 14%, var(--sf-surface-alt));
+  border: 1px solid color-mix(in srgb, #1d6f42 32%, var(--sf-border));
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--vscode-foreground);
+  animation: sf-enter 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.attach-chip .attach-chip-icon {
+  width: 13px;
+  height: 13px;
+  color: #1d6f42;
+  flex-shrink: 0;
+}
+.attach-chip .attach-chip-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.attach-chip .attach-chip-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  color: var(--sf-muted);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.attach-chip .attach-chip-x:hover {
+  background: color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
+  color: var(--vscode-foreground);
+}
+.upload-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--sf-radius-xs);
+  color: var(--sf-muted);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.upload-btn:hover:not(:disabled) {
+  background: var(--vscode-list-hoverBackground);
+  color: var(--vscode-foreground);
+}
+.upload-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.upload-btn svg { display: block; }
 
 /* ---------- Settings modal ---------- */
 .modal-backdrop {
