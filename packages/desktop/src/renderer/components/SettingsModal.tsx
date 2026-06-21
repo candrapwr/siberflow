@@ -18,6 +18,7 @@ const TOGGLE_TOOLS = [
   { name: "sftp", label: "sftp", group: "SSH" },
   { name: "read_excel", label: "read_excel", group: "Excel" },
   { name: "write_excel", label: "write_excel", group: "Excel" },
+  { name: "write_excel_script", label: "write_excel_script", group: "Excel" },
 ] as const;
 
 interface SettingsModalProps {
