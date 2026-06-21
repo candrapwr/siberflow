@@ -348,6 +348,11 @@ function showSettingsModal(
         <label>Max iterations per turn</label>
         <input type="number" id="cfg-max" min="1" max="500">
       </div>
+      <div class="form-row">
+        <label>Request delay (ms)</label>
+        <input type="number" id="cfg-delay" min="0" max="60000">
+        <div class="form-help">Jeda sebelum setiap request ke AI (anti rate-limit / block). 0 = tanpa delay. Default 1500 (1.5 detik).</div>
+      </div>
     </div>
     <div class="form-section">
       <div class="form-section-title">Context optimization</div>
@@ -391,6 +396,7 @@ function showSettingsModal(
   (modal.querySelector("#cfg-hidetools") as HTMLInputElement).checked = values.hideTools;
   (modal.querySelector("#cfg-debug") as HTMLInputElement).checked = values.debug;
   (modal.querySelector("#cfg-max") as HTMLInputElement).value = String(values.maxIterations);
+  (modal.querySelector("#cfg-delay") as HTMLInputElement).value = String(values.requestDelayMs);
 
   providerSelect.addEventListener("change", () => {
     modelInput.value = "";
@@ -411,6 +417,10 @@ function showSettingsModal(
       1,
       parseInt((modal.querySelector("#cfg-max") as HTMLInputElement).value, 10) || 50,
     );
+    const requestDelayMs = Math.max(
+      0,
+      parseInt((modal.querySelector("#cfg-delay") as HTMLInputElement).value, 10) || 0,
+    );
 
     // null = leave existing key unchanged. "" = explicit clear. Non-empty = update.
     const apiKey: string | null = apiKeyRaw.length === 0 ? null : apiKeyRaw;
@@ -427,6 +437,7 @@ function showSettingsModal(
         hideTools,
         debug,
         maxIterations,
+        requestDelayMs,
       },
       apiKey,
     });

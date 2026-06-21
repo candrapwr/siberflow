@@ -100,6 +100,17 @@ export const SettingsModal = memo(function SettingsModal({
               onChange={(e) => set("maxIterations", Number(e.target.value))}
             />
           </div>
+          <div className="form-row">
+            <label>Request delay (ms)</label>
+            <input
+              type="number"
+              min={0}
+              max={60000}
+              value={form.requestDelayMs}
+              onChange={(e) => set("requestDelayMs", Number(e.target.value))}
+            />
+            <div className="form-help">Jeda sebelum setiap request ke AI (anti rate-limit / block). 0 = tanpa delay. Default 1500 (1.5 detik).</div>
+          </div>
         </div>
 
         <div className="form-section">

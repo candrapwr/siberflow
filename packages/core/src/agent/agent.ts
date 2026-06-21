@@ -27,6 +27,13 @@ export interface AgentOptions {
   model?: string;
   systemPrompt?: string;
   maxIterations?: number;
+  /**
+   * Milliseconds to wait before each request to the LLM (anti rate-limit, so
+   * fast tool-call loops don't trip provider throttling). 0 = no delay.
+   * The agent itself defaults to 0; the config/settings layers (CLI env,
+   * VSCode/Desktop settings) supply the user-facing default of 1500ms.
+   */
+  requestDelayMs?: number;
   /** Sandbox root that file tools and exec are restricted to. */
   projectDir?: string;
   /**
@@ -67,6 +74,7 @@ export class Agent {
   private readonly registry: ToolRegistry;
   private readonly model: string;
   private readonly maxIterations: number;
+  private readonly requestDelayMs: number;
   private readonly ctx: ToolContext;
   private readonly contextOpt: ContextOptimizeConfig;
   private readonly tasksEnabled: boolean;
@@ -79,6 +87,7 @@ export class Agent {
     this.registry = opts.registry;
     this.model = opts.model ?? opts.provider.defaultModel;
     this.maxIterations = opts.maxIterations ?? 16;
+    this.requestDelayMs = opts.requestDelayMs ?? 0;
     this.contextOpt = opts.contextOptimize ?? DEFAULT_OPTIMIZE_CONFIG;
     this.tasksEnabled = opts.tasksEnabled ?? false;
     this.autoContinue = opts.autoContinue ?? true;
@@ -283,6 +292,14 @@ export class Agent {
     usage?: UsageStats;
   }> {
     throwIfAborted(events.signal);
+    // Anti-rate-limit: pause briefly before hitting the provider. Every LLM
+    // request goes through runStream (initial, auto-continue, tool-call
+    // iterations), so a single delay here throttles them all. Respects abort
+    // so Stop/Ctrl+C cancels the turn immediately even mid-delay.
+    if (this.requestDelayMs > 0) {
+      debug(`⏳ delay ${this.requestDelayMs}ms before request`);
+      await sleep(this.requestDelayMs, events.signal);
+    }
 
     let assistant: AssistantMessage | null = null;
     let finishReason: FinishReason = "other";
@@ -354,6 +371,30 @@ function createAbortError(): Error {
   const err = new Error("Request aborted");
   err.name = "AbortError";
   return err;
+}
+
+/**
+ * Promise-based delay that can be cancelled mid-flight via an AbortSignal.
+ * Used to throttle LLM requests (anti rate-limit) without blocking Stop /
+ * Ctrl+C: if the user aborts while we're sleeping, the promise rejects with
+ * an AbortError so the turn rollbacks immediately.
+ */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(createAbortError());
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(createAbortError());
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function isAbortError(err: unknown): boolean {

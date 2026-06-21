@@ -68,6 +68,8 @@ export interface SettingsValues {
   hideTools: boolean;
   debug: boolean;
   maxIterations: number;
+  /** Milliseconds to wait before each LLM request (anti rate-limit). 0 = off. */
+  requestDelayMs: number;
 }
 
 export interface BannerInfo {
