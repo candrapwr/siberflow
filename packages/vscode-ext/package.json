@@ -1,6 +1,6 @@
 {
   "name": "siberflow-chat",
-  "version": "0.5.19",
+  "version": "0.5.20",
   "displayName": "Siberflow",
   "description": "AI chat sidebar with multi-provider, tool calling, sandboxed file ops, and task checklists.",
   "publisher": "DatasiberLab",
@@ -141,6 +141,20 @@
           "type": "number",
           "default": 1500,
           "description": "Delay (ms) before each request to the LLM to avoid rate-limiting. 0 = off."
+        },
+        "siberflow.enabledTools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "read_file",
+            "write_file",
+            "edit_file",
+            "copy_file",
+            "list_dir"
+          ],
+          "description": "Which tools are registered for the AI. Disabled tools aren't sent in the prompt. Default: file operations only."
         },
         "siberflow.debug": {
           "type": "boolean",

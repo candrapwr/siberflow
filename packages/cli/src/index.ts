@@ -22,7 +22,10 @@ async function main(): Promise<void> {
     apiKey: config.apiKey,
     ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
   });
-  const registry = createDefaultRegistry({ tasks: config.tasksEnabled });
+  const registry = createDefaultRegistry({
+    tasks: config.tasksEnabled,
+    enabledTools: config.enabledTools,
+  });
   const model = config.model ?? provider.defaultModel;
 
   await runRepl({

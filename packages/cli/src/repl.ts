@@ -38,6 +38,7 @@ export interface ReplOptions {
   autoContinue: boolean;
   maxIterations: number;
   hideTools: boolean;
+  requestDelayMs: number;
 }
 
 export async function runRepl(opts: ReplOptions): Promise<void> {
@@ -60,6 +61,7 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
     tasksEnabled: opts.tasksEnabled,
     autoContinue: opts.autoContinue,
     maxIterations: opts.maxIterations,
+    requestDelayMs: opts.requestDelayMs,
   });
 
   const ctx: SessionContext = {

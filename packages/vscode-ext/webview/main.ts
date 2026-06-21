@@ -20,6 +20,8 @@ interface UIState {
   session: SessionInfo | null;
   hideTools: boolean;
   tasksEnabled: boolean;
+  /** Tool names enabled in settings (drives composer upload toggle). */
+  enabledTools: string[];
   tasks: Task[];
   /** Element of the currently streaming assistant message (or null). */
   currentAssistant: HTMLElement | null;
@@ -54,6 +56,7 @@ const state: UIState = {
   session: null,
   hideTools: false,
   tasksEnabled: false,
+  enabledTools: ["read_file", "write_file", "edit_file", "copy_file", "list_dir"],
   tasks: [],
   currentAssistant: null,
   currentAssistantText: "",
@@ -280,6 +283,22 @@ function closePopovers(): void {
   document.querySelectorAll(".popover").forEach((p) => p.remove());
 }
 
+/** Tool toggle entries. task_update is excluded — it's gated by the `tasks`
+ * checkbox (task-checklist feature flag), not a per-tool toggle. */
+const TOGGLE_TOOLS = [
+  { name: "read_file", label: "read_file", group: "File" },
+  { name: "write_file", label: "write_file", group: "File" },
+  { name: "edit_file", label: "edit_file", group: "File" },
+  { name: "copy_file", label: "copy_file", group: "File" },
+  { name: "list_dir", label: "list_dir", group: "File" },
+  { name: "exec", label: "exec", group: "Shell" },
+  { name: "db_query", label: "db_query", group: "Database" },
+  { name: "ssh_exec", label: "ssh_exec", group: "SSH" },
+  { name: "sftp", label: "sftp", group: "SSH" },
+  { name: "read_excel", label: "read_excel", group: "Excel" },
+  { name: "write_excel", label: "write_excel", group: "Excel" },
+];
+
 function showSettingsModal(
   values: SettingsValues,
   hasApiKey: boolean,
@@ -355,6 +374,11 @@ function showSettingsModal(
       </div>
     </div>
     <div class="form-section">
+      <div class="form-section-title">Tools <span style="font-weight:normal;opacity:0.7">(disabled tools aren't sent to the AI)</span></div>
+      <div class="tools-grid" id="cfg-tools"></div>
+      <div class="form-help">Default: file operations only. Enable exec/db/ssh/excel as needed. task_update is controlled by the checkbox above and can't be disabled individually.</div>
+    </div>
+    <div class="form-section">
       <div class="form-section-title">Context optimization</div>
       <div class="form-row inline">
         <label for="cfg-optimize">Context optimization (drop/summary)</label>
@@ -398,6 +422,30 @@ function showSettingsModal(
   (modal.querySelector("#cfg-max") as HTMLInputElement).value = String(values.maxIterations);
   (modal.querySelector("#cfg-delay") as HTMLInputElement).value = String(values.requestDelayMs);
 
+  // Build per-tool checkboxes. Each toggle adds/removes the tool name from the
+  // enabledTools array carried by the form state.
+  const toolsContainer = modal.querySelector("#cfg-tools") as HTMLElement;
+  toolsContainer.innerHTML = "";
+  const enabledSet = new Set(values.enabledTools);
+  for (const t of TOGGLE_TOOLS) {
+    const lbl = document.createElement("label");
+    lbl.className = "tool-toggle";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.dataset.tool = t.name;
+    cb.checked = enabledSet.has(t.name);
+    const name = document.createElement("span");
+    name.className = "tool-toggle-name";
+    name.textContent = t.label;
+    const grp = document.createElement("span");
+    grp.className = "tool-toggle-group";
+    grp.textContent = t.group;
+    lbl.appendChild(cb);
+    lbl.appendChild(name);
+    lbl.appendChild(grp);
+    toolsContainer.appendChild(lbl);
+  }
+
   providerSelect.addEventListener("change", () => {
     modelInput.value = "";
   });
@@ -421,6 +469,10 @@ function showSettingsModal(
       0,
       parseInt((modal.querySelector("#cfg-delay") as HTMLInputElement).value, 10) || 0,
     );
+    // Collect checked tool names from the tools grid.
+    const enabledTools = Array.from(
+      modal.querySelectorAll<HTMLInputElement>("#cfg-tools input[type='checkbox']:checked"),
+    ).map((cb) => cb.dataset.tool!);
 
     // null = leave existing key unchanged. "" = explicit clear. Non-empty = update.
     const apiKey: string | null = apiKeyRaw.length === 0 ? null : apiKeyRaw;
@@ -438,6 +490,7 @@ function showSettingsModal(
         debug,
         maxIterations,
         requestDelayMs,
+        enabledTools,
       },
       apiKey,
     });
@@ -640,7 +693,15 @@ function updateComposerState(): void {
     }
   }
   if (ta) ta.disabled = state.busy;
-  if (uploadBtn) uploadBtn.disabled = state.busy;
+  if (uploadBtn) {
+    const excelEnabled = state.enabledTools.includes("read_excel");
+    uploadBtn.disabled = state.busy || !excelEnabled;
+    uploadBtn.title = !excelEnabled
+      ? "Aktifkan read_excel di Tools settings untuk upload Excel"
+      : state.busy
+        ? "Tunggu turn selesai"
+        : "Upload file Excel (.xlsx)";
+  }
   if (hint) {
     hint.innerHTML = state.busy
       ? state.stopping
@@ -1165,6 +1226,7 @@ window.addEventListener("message", (ev) => {
       state.session = msg.session;
       state.hideTools = msg.hideTools;
       state.tasksEnabled = msg.tasksEnabled;
+      state.enabledTools = msg.enabledTools;
       if (mounted) {
         updateTopbar();
         updateTaskPanel();
@@ -1251,6 +1313,8 @@ window.addEventListener("message", (ev) => {
         }
         mount();
       }
+      // Keep the composer upload toggle in sync with the latest tool set.
+      state.enabledTools = msg.values.enabledTools;
       showSettingsModal(msg.values, msg.hasApiKey, msg.mustConfigure);
       break;
     case "history":

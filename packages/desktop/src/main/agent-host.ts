@@ -254,6 +254,7 @@ export class AgentHost {
     this.registry = createDefaultRegistry({
       tasks: this.settings.tasks,
       filesystem: hasWorkdir,
+      enabledTools: new Set(this.settings.enabledTools),
     });
     this.agent = this.buildAgent();
     if (this.current) {
@@ -658,6 +659,7 @@ export class AgentHost {
       session: this.sessionInfo(),
       hideTools: this.settings.hideTools,
       tasksEnabled: this.settings.tasks,
+      enabledTools: this.settings.enabledTools,
     });
     if (this.current && this.current.messages.length > 0) {
       this.emit({ type: "history", messages: filterHistory(this.current.messages) });

@@ -2,7 +2,7 @@ import type { SessionUsage, Task } from "@siberflow/core";
 
 /** Messages from extension host → webview. */
 export type ExtToView =
-  | { kind: "ready"; banner: BannerInfo; session: SessionInfo | null; hideTools: boolean; tasksEnabled: boolean }
+  | { kind: "ready"; banner: BannerInfo; session: SessionInfo | null; hideTools: boolean; tasksEnabled: boolean; enabledTools: string[] }
   | { kind: "assistant_start" }
   | { kind: "assistant_content"; delta: string }
   | { kind: "iteration_end" }
@@ -70,6 +70,8 @@ export interface SettingsValues {
   maxIterations: number;
   /** Milliseconds to wait before each LLM request (anti rate-limit). 0 = off. */
   requestDelayMs: number;
+  /** Tool names enabled for the agent. Default: file ops only. */
+  enabledTools: string[];
 }
 
 export interface BannerInfo {

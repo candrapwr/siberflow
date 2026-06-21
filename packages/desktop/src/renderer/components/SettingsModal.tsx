@@ -4,6 +4,22 @@ import { memo, useState } from "react";
 import { ipc } from "../ipc.js";
 import { DEFAULT_SETTINGS, type SettingsValues } from "@shared/protocol";
 
+/** Tool toggle entries. task_update is excluded — it's gated by the `tasks`
+ * checkbox above (the task-checklist feature flag), not a per-tool toggle. */
+const TOGGLE_TOOLS = [
+  { name: "read_file", label: "read_file", group: "File" },
+  { name: "write_file", label: "write_file", group: "File" },
+  { name: "edit_file", label: "edit_file", group: "File" },
+  { name: "copy_file", label: "copy_file", group: "File" },
+  { name: "list_dir", label: "list_dir", group: "File" },
+  { name: "exec", label: "exec", group: "Shell" },
+  { name: "db_query", label: "db_query", group: "Database" },
+  { name: "ssh_exec", label: "ssh_exec", group: "SSH" },
+  { name: "sftp", label: "sftp", group: "SSH" },
+  { name: "read_excel", label: "read_excel", group: "Excel" },
+  { name: "write_excel", label: "write_excel", group: "Excel" },
+] as const;
+
 interface SettingsModalProps {
   values: SettingsValues;
   hasApiKey: boolean;
@@ -21,6 +37,14 @@ export const SettingsModal = memo(function SettingsModal({
   const [apiKey, setApiKey] = useState("");
   const set = <K extends keyof SettingsValues>(key: K, val: SettingsValues[K]) =>
     setForm((f) => ({ ...f, [key]: val }));
+  /** Toggle a tool name in/out of the enabledTools array. */
+  const toggleTool = (name: string) =>
+    setForm((f) => ({
+      ...f,
+      enabledTools: f.enabledTools.includes(name)
+        ? f.enabledTools.filter((t) => t !== name)
+        : [...f.enabledTools, name],
+    }));
 
   const save = () => {
     // null = leave key unchanged; non-empty = update; empty = clear.
@@ -128,6 +152,30 @@ export const SettingsModal = memo(function SettingsModal({
               <option value="drop">drop</option>
               <option value="summary">summary</option>
             </select>
+          </div>
+        </div>
+
+        <div className="form-section">
+          <div className="form-section-title">
+            Tools <span className="form-section-hint">(disabled tools aren't sent to the AI)</span>
+          </div>
+          <div className="tools-grid">
+            {TOGGLE_TOOLS.map((t) => (
+              <label key={t.name} className="tool-toggle">
+                <input
+                  type="checkbox"
+                  checked={form.enabledTools.includes(t.name)}
+                  onChange={() => toggleTool(t.name)}
+                />
+                <span className="tool-toggle-name">{t.label}</span>
+                <span className="tool-toggle-group">{t.group}</span>
+              </label>
+            ))}
+          </div>
+          <div className="form-help">
+            Default: file operations only. Enable exec/db/ssh/excel as needed.
+            Task checklist (task_update) is controlled by the checkbox above and
+            can't be disabled individually.
           </div>
         </div>
 
