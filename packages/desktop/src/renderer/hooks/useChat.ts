@@ -120,6 +120,23 @@ function updateLastTurn(
   return out;
 }
 
+/**
+ * Remove the trailing assistant turn if it has NO visible content: no text
+ * blocks and no non-hidden tool blocks. This handles the common case where a
+ * tool-call iteration only emitted hidden `task_update` calls — without this,
+ * the empty turn would render its `thinking-dots` placeholder forever and a
+ * new empty turn would stack on top at the next iteration. Non-empty turns
+ * (real text or visible tool calls) are always preserved.
+ */
+function dropTrailingEmptyAssistantTurn(msgs: DisplayMessage[]): DisplayMessage[] {
+  const last = msgs[msgs.length - 1];
+  if (!last || last.role !== "assistant") return msgs;
+  const hasVisible = last.blocks.some(
+    (b) => !(b.kind === "tool" && b.tool.name === "__hidden__"),
+  );
+  return hasVisible ? msgs : msgs.slice(0, -1);
+}
+
 function reducer(state: ChatState, action: Action): ChatState {
   if (action.type === "reset") {
     return {
@@ -325,9 +342,16 @@ function reducer(state: ChatState, action: Action): ChatState {
       };
 
     case "iteration-end":
-      // iteration-end fires after each assistant message; the NEXT
-      // assistant-start creates a fresh turn. No segment manipulation needed.
-      return state;
+      // iteration-end fires after each assistant message in a tool-call loop;
+      // the next assistant-start will push a fresh turn. If the just-finished
+      // turn is empty (e.g. the model only emitted hidden `task_update` calls
+      // and no text), drop it so its thinking-dots placeholder doesn't linger
+      // and stack across iterations. A non-empty turn (has visible text or
+      // tool blocks) is kept as-is.
+      return {
+        ...state,
+        messages: dropTrailingEmptyAssistantTurn(state.messages),
+      };
 
     case "assistant-end":
       return {

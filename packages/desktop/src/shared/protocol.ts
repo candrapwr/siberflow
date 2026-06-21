@@ -26,6 +26,8 @@ export interface SettingsValues {
   hideTools: boolean;
   debug: boolean;
   maxIterations: number;
+  /** Milliseconds to wait before each LLM request (anti rate-limit). 0 = off. */
+  requestDelayMs: number;
 }
 
 export const DEFAULT_SETTINGS: SettingsValues = {
@@ -38,6 +40,7 @@ export const DEFAULT_SETTINGS: SettingsValues = {
   hideTools: true,
   debug: false,
   maxIterations: 50,
+  requestDelayMs: 1500,
 };
 
 /** Info shown in the topbar / sidebar. */

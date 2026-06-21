@@ -291,6 +291,7 @@ export class AgentHost {
       tasksEnabled: this.settings.tasks,
       autoContinue: this.settings.autoContinue,
       maxIterations: this.settings.maxIterations,
+      requestDelayMs: this.settings.requestDelayMs,
     });
   }
 

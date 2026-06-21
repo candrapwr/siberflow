@@ -263,6 +263,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       cfg.update("hideTools", values.hideTools, target),
       cfg.update("debug", values.debug, target),
       cfg.update("maxIterations", values.maxIterations, target),
+      cfg.update("requestDelayMs", values.requestDelayMs, target),
     ]);
 
     if (apiKey !== null) {
@@ -365,6 +366,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       tasksEnabled: this.settings.tasks,
       autoContinue: this.settings.autoContinue,
       maxIterations: this.settings.maxIterations,
+      requestDelayMs: this.settings.requestDelayMs,
     });
   }
 
@@ -832,6 +834,7 @@ function readSettings(): SettingsValues {
     hideTools: cfg.get<boolean>("hideTools", false),
     debug: cfg.get<boolean>("debug", false),
     maxIterations: cfg.get<number>("maxIterations", 50),
+    requestDelayMs: cfg.get<number>("requestDelayMs", 1500),
   };
 }
 

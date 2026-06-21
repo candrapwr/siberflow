@@ -1,6 +1,6 @@
 {
   "name": "siberflow-chat",
-  "version": "0.5.18",
+  "version": "0.5.19",
   "displayName": "Siberflow",
   "description": "AI chat sidebar with multi-provider, tool calling, sandboxed file ops, and task checklists.",
   "publisher": "DatasiberLab",
@@ -136,6 +136,11 @@
         "siberflow.maxIterations": {
           "type": "number",
           "default": 50
+        },
+        "siberflow.requestDelayMs": {
+          "type": "number",
+          "default": 1500,
+          "description": "Delay (ms) before each request to the LLM to avoid rate-limiting. 0 = off."
         },
         "siberflow.debug": {
           "type": "boolean",

@@ -14,6 +14,8 @@ export interface SiberflowConfig {
   autoContinue: boolean;
   maxIterations: number;
   hideTools: boolean;
+  /** Milliseconds to wait before each LLM request (anti rate-limit). 0 = off. */
+  requestDelayMs: number;
 }
 
 export function loadConfigFromEnv(
@@ -36,6 +38,7 @@ export function loadConfigFromEnv(
     tasksEnabled: env.SIBERFLOW_TASKS === "true",
     autoContinue: env.SIBERFLOW_AUTO_CONTINUE !== "false",
     maxIterations: resolveMaxIterations(env),
+    requestDelayMs: resolveRequestDelay(env),
     hideTools: env.SIBERFLOW_HIDE_TOOLS === "true",
     ...(env.SIBERFLOW_MODEL ? { model: env.SIBERFLOW_MODEL } : {}),
     ...(env.SIBERFLOW_BASE_URL ? { baseUrl: env.SIBERFLOW_BASE_URL } : {}),
@@ -64,6 +67,19 @@ function resolveMaxIterations(env: NodeJS.ProcessEnv): number {
   const raw = env.SIBERFLOW_MAX_ITERATIONS;
   const parsed = raw ? Number.parseInt(raw, 10) : NaN;
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 50;
+}
+
+/**
+ * Delay (ms) before each LLM request — throttles fast tool-call loops so the
+ * provider doesn't rate-limit / block. Default 1500 (1.5s). Set
+ * `SIBERFLOW_REQUEST_DELAY_MS=0` to disable. Negative/garbage values fall back
+ * to the default.
+ */
+function resolveRequestDelay(env: NodeJS.ProcessEnv): number {
+  const raw = env.SIBERFLOW_REQUEST_DELAY_MS;
+  if (raw === undefined) return 1500;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 1500;
 }
 
 function resolveProjectDir(env: NodeJS.ProcessEnv): string {
