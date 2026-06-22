@@ -105,10 +105,6 @@ export const SettingsModal = memo(function SettingsModal({
         <div className="form-section">
           <div className="form-section-title">Agent</div>
           <div className="form-row inline">
-            <label>Enable task checklist</label>
-            <input type="checkbox" checked={form.tasks} onChange={(e) => set("tasks", e.target.checked)} />
-          </div>
-          <div className="form-row inline">
             <label>Auto-continue cut-off responses</label>
             <input type="checkbox" checked={form.autoContinue} onChange={(e) => set("autoContinue", e.target.checked)} />
           </div>

@@ -23,7 +23,6 @@ async function main(): Promise<void> {
     ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
   });
   const registry = createDefaultRegistry({
-    tasks: config.tasksEnabled,
     enabledTools: config.enabledTools,
   });
   const model = config.model ?? provider.defaultModel;
@@ -34,7 +33,7 @@ async function main(): Promise<void> {
     model,
     projectDir: config.projectDir,
     contextOptimize: config.contextOptimize,
-    tasksEnabled: config.tasksEnabled,
+    enabledToolNames: registry.list().map((t) => t.name),
     autoContinue: config.autoContinue,
     maxIterations: config.maxIterations,
     requestDelayMs: config.requestDelayMs,

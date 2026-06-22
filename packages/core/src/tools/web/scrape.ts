@@ -1,7 +1,7 @@
 import { fork } from "node:child_process";
 import { existsSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import type { Tool } from "../base.js";
@@ -13,17 +13,83 @@ import { ensureChromium } from "./ensure-chromium.js";
  * by absolute path — we resolve it here and inject into the worker source.
  *
  * We deliberately avoid `import.meta.url` so esbuild can bundle into CJS
- * (the VSCode extension) without warnings: in a bundled CJS file,
- * import.meta.url is empty, and resolving playwright-core relative to it
- * would fail. Instead we anchor resolution to the user's working directory,
- * which always has node_modules reachable (either the repo root for CLI /
- * dev, or the package install dir for the bundled VSCode extension).
+ * (the VSCode extension) without warnings. Instead we try a list of candidate
+ * base directories that are known to have `node_modules` reachable in each
+ * deployment:
+ *   1. This module's own directory (dist/tools/web → ../../.. = core pkg root)
+ *      — works for CLI and dev where core's node_modules is the monorepo hoist.
+ *   2. process.cwd() — CLI launched from the repo root; VSCode extension host
+ *      launched from the workspace folder.
+ *   3. process.execPath dir — Electron's app binary; for a packaged Mac app
+ *      that's Contents/MacOS/, and node_modules lives at
+ *      Contents/Resources/app/node_modules.
+ *   4. process.resourcesPath (Electron-only) — extraResources root.
+ *
+ * `require.resolve(..., { paths })` walks up from each candidate looking for
+ * node_modules, so we just feed it the candidate dirs directly.
  */
 function resolvePlaywrightCorePath(): string {
-  // Build a CommonJS require anchored at the cwd's package.json. createRequire
-  // works under real ESM and is preserved by esbuild's CJS output.
-  const r = createRequire(pathToFileURL(join(process.cwd(), "package.json")).href);
-  return r.resolve("playwright-core");
+  // Collect candidate directories whose node_modules tree may contain
+  // playwright-core.
+  const candidates: string[] = [];
+
+  // 1. This module's directory — go up 3 levels (dist/tools/web → core pkg
+  //    root) to reach the hoisted node_modules in a monorepo.
+  try {
+    // createRequire with a dummy file URL anchored here lets us resolve as
+    // if from this module, without needing import.meta.url.
+    const r = createRequire(join(__scrapeDir(), "package.json"));
+    return r.resolve("playwright-core");
+  } catch { /* not found from here — try next candidate */ }
+
+  // 2-4. Walk a list of runtime-known paths.
+  candidates.push(process.cwd());
+  if (process.execPath) candidates.push(dirname(process.execPath));
+  // resourcesPath is Electron-only; undefined in CLI/VSCode, which is fine.
+  const resourcesPath = (process as { resourcesPath?: string }).resourcesPath;
+  if (resourcesPath) candidates.push(resourcesPath);
+
+  for (const base of candidates) {
+    try {
+      const resolved = require_resolve("playwright-core", [base]);
+      if (resolved) return resolved;
+    } catch { /* keep trying */ }
+  }
+
+  throw new Error(
+    "could not locate playwright-core on disk. " +
+      "If running a packaged app, ensure playwright-core is bundled in node_modules.",
+  );
+}
+
+/**
+ * require.resolve with a paths option. Uses a module-scoped `require`
+ * obtained via createRequire so it works under real ESM (where the global
+ * `require` is not defined). The `paths` option lets us probe specific base
+ * directories without anchoring a createRequire per candidate.
+ */
+const moduleRequire = createRequire(import.meta.url);
+function require_resolve(spec: string, paths: string[]): string | undefined {
+  try {
+    return moduleRequire.resolve(spec, { paths }) as string;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Best-effort directory of this source file, without relying on
+ * import.meta.url (empty in bundled CJS). Falls back to process.cwd().
+ */
+function __scrapeDir(): string {
+  // In real ESM, import.meta.url would give us this. In bundled CJS
+  // (VSCode extension), __dirname is available. In neither, fall back to cwd.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const g = globalThis as any;
+    if (typeof g.__dirname === "string") return g.__dirname;
+  } catch { /* ignore */ }
+  return process.cwd();
 }
 
 interface Args {

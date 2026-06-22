@@ -224,7 +224,6 @@ export class AgentHost {
           ? values.model.trim()
           : createProvider(values.provider, { apiKey: this.apiKey }).defaultModel;
       this.current.updatedAt = new Date().toISOString();
-      if (!values.tasks) delete this.current.tasks;
       saveSessionSync(this.current);
     }
 
@@ -252,14 +251,13 @@ export class AgentHost {
     // directory. Sessions without a workdir keep db/ssh/task tools only.
     const hasWorkdir = !!this.current?.projectDir;
     this.registry = createDefaultRegistry({
-      tasks: this.settings.tasks,
       filesystem: hasWorkdir,
       enabledTools: new Set(this.settings.enabledTools),
     });
     this.agent = this.buildAgent();
     if (this.current) {
       this.agent.loadHistory(this.current.messages);
-      if (this.settings.tasks && this.current.tasks?.length) {
+      if (this.current.tasks?.length) {
         this.agent.loadTasks(this.current.tasks);
       }
     }
@@ -271,8 +269,8 @@ export class AgentHost {
     const model = modelOverride.length > 0 ? modelOverride : this.provider.defaultModel;
     const systemPrompt = buildSystemPrompt({
       interface: "vscode",
-      tasksEnabled: this.settings.tasks,
       summaryMode: this.summaryModeActive(),
+      enabledToolNames: this.registry.list().map((t) => t.name),
     });
     const workdir = this.current?.projectDir;
     // uploadDir is the per-session tmp dir where uploaded Excels live. Pass it
@@ -289,7 +287,7 @@ export class AgentHost {
       ...(workdir ? { projectDir: workdir } : {}),
       ...(uploadDir ? { uploadDir } : {}),
       contextOptimize: this.optimizeConfig(),
-      tasksEnabled: this.settings.tasks,
+      tasksEnabled: true,
       autoContinue: this.settings.autoContinue,
       maxIterations: this.settings.maxIterations,
       requestDelayMs: this.settings.requestDelayMs,
@@ -315,6 +313,12 @@ export class AgentHost {
 
   startNewSession(folderPath: string | null, name: string | null): CurrentSessionInfo {
     if (!this.provider) throw new Error("provider not ready");
+    // Inherit the workdir from the previous session when the caller didn't
+    // specify one (folderPath === null). This keeps the common single-project
+    // workflow frictionless: New chat reuses the folder the user already
+    // picked, instead of forcing them to pick it again. An explicit "" from
+    // the caller means "start empty".
+    const inheritedWorkdir = folderPath === null ? (this.current?.projectDir || null) : folderPath;
     this.agent = this.buildAgent();
     const now = new Date().toISOString();
     const model =
@@ -325,7 +329,7 @@ export class AgentHost {
       version: SESSION_FORMAT_VERSION,
       id: newSessionId(),
       name,
-      projectDir: folderPath ?? "",
+      projectDir: inheritedWorkdir ?? "",
       provider: this.provider.name,
       model,
       createdAt: now,
@@ -608,9 +612,8 @@ export class AgentHost {
       model,
       updatedAt: new Date().toISOString(),
       messages: [...this.agent.history()],
-      ...(this.settings.tasks ? { tasks: [...this.agent.getTasks()] } : {}),
+      tasks: [...this.agent.getTasks()],
     };
-    if (!this.settings.tasks) delete session.tasks;
     await saveSession(session);
     this.current = session;
     this.writeOptimizedView();
@@ -658,13 +661,13 @@ export class AgentHost {
       banner: this.banner(),
       session: this.sessionInfo(),
       hideTools: this.settings.hideTools,
-      tasksEnabled: this.settings.tasks,
+      tasksEnabled: true,
       enabledTools: this.settings.enabledTools,
     });
     if (this.current && this.current.messages.length > 0) {
       this.emit({ type: "history", messages: filterHistory(this.current.messages) });
     }
-    if (this.settings.tasks && this.agent) {
+    if (this.agent) {
       this.emit({ type: "tasks", tasks: this.agent.getTasks() as Task[] });
     }
     this.emitUsage();

@@ -18,9 +18,12 @@ export { excelTools } from "./excel/index.js";
 export { webTools } from "./web/index.js";
 
 export interface RegistryOptions {
-  /** Register the task_update checklist tool (default false). When true,
-   * task_update is ALWAYS registered — it bypasses `enabledTools` because it's
-   * the task-checklist feature flag, not a per-tool toggle. */
+  /**
+   * task_update is a built-in tool and is ALWAYS registered (it cannot be
+   * disabled — it's a core part of the agent UX, not an opt-in feature).
+   * This flag is kept only for backward compatibility with callers; the
+   * default is true and callers should not pass false.
+   */
   tasks?: boolean;
   /** Register filesystem + shell tools (file ops, exec). Disable when the
    * session has no working directory so the agent can't touch the local disk.
@@ -32,7 +35,7 @@ export interface RegistryOptions {
    * (`DEFAULT_ENABLED_TOOLS`). exec / db_query / ssh_exec / sftp /
    * read_excel / write_excel default OFF — opt in via settings/env to keep the
    * prompt lean and the blast radius small. `task_update` ignores this filter
-   * (it's gated by `tasks`).
+   * (it is always registered).
    */
   enabledTools?: Set<string>;
 }
@@ -65,8 +68,9 @@ export function createDefaultRegistry(opts: RegistryOptions = {}): ToolRegistry 
   for (const tool of [...dbTools, ...sshTools, ...webTools]) {
     if (enabled.has(tool.name)) registry.register(tool);
   }
-  // task_update bypasses enabledTools — it's controlled solely by `tasks`.
-  if (opts.tasks) {
+  // task_update is always registered — it's a built-in tool (default true,
+  // callers should not pass false; the flag exists only for compat).
+  if (opts.tasks !== false) {
     for (const tool of taskTools) registry.register(tool);
   }
   return registry;
