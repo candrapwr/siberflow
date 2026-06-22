@@ -1,6 +1,6 @@
 {
   "name": "siberflow-desktop",
-  "version": "26.07.2202",
+  "version": "26.07.2203",
   "description": "Siberflow desktop app",
   "productName": "Siberflow",
   "type": "module",
@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@siberflow/core": "0.1.0",
+    "playwright-core": "^1.61.0",
     "prism-react-renderer": "^2.4.1",
     "prismjs": "^1.30.0",
     "react": "^18.3.1",

@@ -354,10 +354,6 @@ function showSettingsModal(
     <div class="form-section">
       <div class="form-section-title">Agent</div>
       <div class="form-row inline">
-        <label for="cfg-tasks">Enable task checklist</label>
-        <input type="checkbox" id="cfg-tasks">
-      </div>
-      <div class="form-row inline">
         <label for="cfg-autocontinue">Auto-continue cut-off responses</label>
         <input type="checkbox" id="cfg-autocontinue">
       </div>
@@ -415,7 +411,7 @@ function showSettingsModal(
   const modelInput = modal.querySelector("#cfg-model") as HTMLInputElement;
   providerSelect.value = values.provider;
   modelInput.value = values.model;
-  (modal.querySelector("#cfg-tasks") as HTMLInputElement).checked = values.tasks;
+  // (cfg-tasks checkbox removed — task_update is now always-on, not toggleable)
   (modal.querySelector("#cfg-optimize") as HTMLInputElement).checked = values.contextOptimize;
   (modal.querySelector("#cfg-optmode") as HTMLSelectElement).value = values.contextOptimizeMode;
   (modal.querySelector("#cfg-autocontinue") as HTMLInputElement).checked = values.autoContinue;
@@ -457,7 +453,6 @@ function showSettingsModal(
     const provider = providerSelect.value as SettingsValues["provider"];
     const apiKeyRaw = (modal.querySelector("#cfg-apikey") as HTMLInputElement).value;
     const model = modelInput.value;
-    const tasks = (modal.querySelector("#cfg-tasks") as HTMLInputElement).checked;
     const contextOptimize = (modal.querySelector("#cfg-optimize") as HTMLInputElement).checked;
     const contextOptimizeMode = (modal.querySelector("#cfg-optmode") as HTMLSelectElement).value as "drop" | "summary";
     const autoContinue = (modal.querySelector("#cfg-autocontinue") as HTMLInputElement).checked;
@@ -484,7 +479,6 @@ function showSettingsModal(
       values: {
         provider,
         model,
-        tasks,
         contextOptimize,
         contextOptimizeMode,
         autoContinue,

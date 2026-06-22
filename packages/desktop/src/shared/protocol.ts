@@ -19,7 +19,6 @@ export type ProviderName =
 export interface SettingsValues {
   provider: ProviderName;
   model: string;
-  tasks: boolean;
   contextOptimize: boolean;
   contextOptimizeMode: "drop" | "summary";
   autoContinue: boolean;
@@ -35,7 +34,6 @@ export interface SettingsValues {
 export const DEFAULT_SETTINGS: SettingsValues = {
   provider: "deepseek",
   model: "",
-  tasks: true,
   contextOptimize: true,
   contextOptimizeMode: "summary",
   autoContinue: true,

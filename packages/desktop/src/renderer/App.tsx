@@ -344,7 +344,7 @@ export default function App() {
         </div>
 
         {/* Floating task panel — top-right of the chat area (only with active session) */}
-        {state.session && state.tasksEnabled && state.tasks.length > 0 && (
+        {state.session && state.tasks.length > 0 && (
           <TaskPanel tasks={state.tasks} taskPlan={state.taskPlan} />
         )}
 

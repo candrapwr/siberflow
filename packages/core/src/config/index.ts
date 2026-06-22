@@ -11,7 +11,6 @@ export interface SiberflowConfig {
   baseUrl?: string;
   projectDir: string;
   contextOptimize: ContextOptimizeConfig;
-  tasksEnabled: boolean;
   autoContinue: boolean;
   maxIterations: number;
   hideTools: boolean;
@@ -38,7 +37,6 @@ export function loadConfigFromEnv(
     apiKey,
     projectDir: resolveProjectDir(env),
     contextOptimize: resolveContextOptimize(env),
-    tasksEnabled: env.SIBERFLOW_TASKS === "true",
     autoContinue: env.SIBERFLOW_AUTO_CONTINUE !== "false",
     maxIterations: resolveMaxIterations(env),
     requestDelayMs: resolveRequestDelay(env),
@@ -90,8 +88,10 @@ function resolveRequestDelay(env: NodeJS.ProcessEnv): number {
  * Which tool names to register for the agent. Default: the five file
  * operations (read/write/edit/copy/list). Set `SIBERFLOW_TOOLS` to a
  * comma-separated list to override, e.g. `read_file,exec,db_query`.
- * `task_update` is never controlled here — it's gated by `SIBERFLOW_TASKS`.
- * An empty string yields an empty set (no tools; only task_update if enabled).
+ * `task_update` is never controlled here — it is always registered (it's a
+ * built-in tool, not user-toggleable).
+ * An empty string yields an empty set (no opt-in tools; task_update still
+ * registers).
  */
 function resolveEnabledTools(env: NodeJS.ProcessEnv): Set<string> {
   const raw = env.SIBERFLOW_TOOLS;

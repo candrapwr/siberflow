@@ -256,7 +256,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     await Promise.all([
       cfg.update("provider", values.provider, target),
       cfg.update("model", values.model, target),
-      cfg.update("tasks", values.tasks, target),
       cfg.update("contextOptimize", values.contextOptimize, target),
       cfg.update("contextOptimizeMode", values.contextOptimizeMode, target),
       cfg.update("autoContinue", values.autoContinue, target),
@@ -305,9 +304,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           ? values.model.trim()
           : createProvider(values.provider, { apiKey: this.apiKey }).defaultModel;
       this.current.updatedAt = new Date().toISOString();
-      if (!values.tasks) {
-        delete this.current.tasks;
-      } else if (prevSettings.tasks && this.agent) {
+      if (this.agent) {
         this.current.tasks = [...this.agent.getTasks()];
       }
       saveSessionSync(this.current);
@@ -333,13 +330,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       apiKey: this.apiKey,
     });
     this.registry = createDefaultRegistry({
-      tasks: this.settings.tasks,
       enabledTools: new Set(this.settings.enabledTools),
     });
     this.agent = this.buildAgent();
     if (this.current) {
       this.agent.loadHistory(this.current.messages);
-      if (this.settings.tasks && this.current.tasks?.length) {
+      if (this.current.tasks?.length) {
         this.agent.loadTasks(this.current.tasks);
       }
     }
@@ -352,8 +348,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       modelOverride.length > 0 ? modelOverride : this.provider.defaultModel;
     const systemPrompt = buildSystemPrompt({
       interface: "vscode",
-      tasksEnabled: this.settings.tasks,
       summaryMode: this.summaryModeActive(),
+      enabledToolNames: this.registry.list().map((t) => t.name),
     });
     // uploadDir is the per-session tmp dir where uploaded Excels live. Pass it
     // so read_excel can whitelist reads from there even though it's outside
@@ -367,7 +363,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       projectDir: this.projectDir,
       ...(uploadDir ? { uploadDir } : {}),
       contextOptimize: this.optimizeConfig(),
-      tasksEnabled: this.settings.tasks,
+      tasksEnabled: true,
       autoContinue: this.settings.autoContinue,
       maxIterations: this.settings.maxIterations,
       requestDelayMs: this.settings.requestDelayMs,
@@ -401,7 +397,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       banner: this.banner(),
       session: this.sessionInfo(),
       hideTools: this.settings.hideTools,
-      tasksEnabled: this.settings.tasks,
+      tasksEnabled: true,
       enabledTools: this.settings.enabledTools,
     });
     if (this.current && this.current.messages.length > 0) {
@@ -410,7 +406,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         messages: filterHistory(this.current.messages),
       });
     }
-    if (this.settings.tasks && this.agent) {
+    if (this.agent) {
       this.post({ kind: "tasks", tasks: this.agent.getTasks() as Task[] });
     }
   }
@@ -445,7 +441,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
     this.agent.loadHistory(session.messages);
-    if (this.settings.tasks && session.tasks?.length) {
+    if (session.tasks?.length) {
       this.agent.loadTasks(session.tasks);
     }
     this.current = session;
@@ -625,11 +621,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       model,
       updatedAt: new Date().toISOString(),
       messages: [...this.agent.history()],
-      ...(this.settings.tasks ? { tasks: [...this.agent.getTasks()] } : {}),
+      tasks: [...this.agent.getTasks()],
     };
-    if (!this.settings.tasks) {
-      delete session.tasks;
-    }
     await saveSession(session);
     this.current = session;
     if (this.settings.contextOptimize) {
@@ -656,7 +649,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (name === undefined) return;
     this.startNewSession(name.trim().length > 0 ? name.trim() : null);
     this.post({ kind: "session_changed", session: this.sessionInfo() });
-    if (this.settings.tasks) this.post({ kind: "tasks", tasks: [] });
+    this.post({ kind: "tasks", tasks: [] });
   }
 
   private async cmdLoad(): Promise<void> {
@@ -678,7 +671,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!session) return;
     this.agent = this.buildAgent();
     this.agent.loadHistory(session.messages);
-    if (this.settings.tasks && session.tasks?.length) {
+    if (session.tasks?.length) {
       this.agent.loadTasks(session.tasks);
     }
     this.current = session;
@@ -708,7 +701,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.current = null;
       this.agent = this.buildAgent();
       this.post({ kind: "session_changed", session: null });
-      if (this.settings.tasks) this.post({ kind: "tasks", tasks: [] });
+      this.post({ kind: "tasks", tasks: [] });
     }
     this.post({ kind: "info", message: `Deleted session "${target.name ?? target.id}"` });
   }
@@ -729,7 +722,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.current = null;
     this.agent = this.buildAgent();
     this.post({ kind: "session_changed", session: null });
-    if (this.settings.tasks) this.post({ kind: "tasks", tasks: [] });
+    this.post({ kind: "tasks", tasks: [] });
     this.post({ kind: "info", message: `Cleared ${removed} session(s)` });
   }
 
@@ -832,7 +825,6 @@ function readSettings(): SettingsValues {
   return {
     provider: cfg.get<ProviderName>("provider", "deepseek"),
     model: cfg.get<string>("model", ""),
-    tasks: cfg.get<boolean>("tasks", false),
     contextOptimize: cfg.get<boolean>("contextOptimize", true),
     contextOptimizeMode: cfg.get<OptimizeMode>("contextOptimizeMode", "summary"),
     autoContinue: cfg.get<boolean>("autoContinue", true),

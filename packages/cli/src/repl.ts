@@ -34,7 +34,7 @@ export interface ReplOptions {
   model: string;
   projectDir: string;
   contextOptimize: ContextOptimizeConfig;
-  tasksEnabled: boolean;
+  enabledToolNames: string[];
   autoContinue: boolean;
   maxIterations: number;
   hideTools: boolean;
@@ -47,8 +47,8 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
     (opts.contextOptimize.mode ?? "summary") === "summary";
   const systemPrompt = buildSystemPrompt({
     interface: "terminal",
-    tasksEnabled: opts.tasksEnabled,
     summaryMode,
+    enabledToolNames: opts.enabledToolNames,
   });
 
   const agent = new Agent({
@@ -58,7 +58,7 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
     systemPrompt,
     projectDir: opts.projectDir,
     contextOptimize: opts.contextOptimize,
-    tasksEnabled: opts.tasksEnabled,
+    tasksEnabled: true,
     autoContinue: opts.autoContinue,
     maxIterations: opts.maxIterations,
     requestDelayMs: opts.requestDelayMs,
@@ -71,7 +71,7 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
     model: opts.model,
     current: null,
     contextOptimize: opts.contextOptimize,
-    tasksEnabled: opts.tasksEnabled,
+    tasksEnabled: true,
     hideTools: opts.hideTools,
     optStats: { collapsedTurns: 0, bytesSaved: 0 },
   };
@@ -232,7 +232,7 @@ async function promptSessionName(
 function applyChoice(ctx: SessionContext, choice: SessionChoice): void {
   if (choice.type === "loaded") {
     ctx.agent.loadHistory(choice.session.messages);
-    if (ctx.tasksEnabled && choice.session.tasks?.length) {
+    if (choice.session.tasks?.length) {
       ctx.agent.loadTasks(choice.session.tasks);
     }
     ctx.current = choice.session;
@@ -299,7 +299,7 @@ function buildSessionFromAgent(ctx: SessionContext, id: string): Session {
     updatedAt: now,
     messages: [...ctx.agent.history()],
     usage: existing?.usage ?? emptyUsage(),
-    ...(ctx.tasksEnabled ? { tasks: [...ctx.agent.getTasks()] } : {}),
+    tasks: [...ctx.agent.getTasks()],
   };
 }
 

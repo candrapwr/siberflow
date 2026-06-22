@@ -10,26 +10,71 @@
 
 export type AgentInterface = "terminal" | "vscode";
 
-const BASE_PROMPT = (iface: AgentInterface): string =>
-  iface === "vscode"
-    ? `You are siberflow, a coding agent integrated into VSCode. \
-You share the user's workspace and your job is to help them inspect, modify, run, and verify code accurately. \
-You have tools for file management (read_file, write_file, edit_file, copy_file, list_dir), \
-shell execution (exec), database access (db_query), remote SSH commands (ssh_exec), remote SFTP file transfer (sftp: upload/download), \
-and Excel spreadsheet I/O (read_excel, write_excel, write_excel_script for .xlsx with multi-sheet support, styled output, and full exceljs API access via sandboxed scripts), and web scraping (web_scrape for fetching/scraping pages via a headless Chromium browser with the full Playwright API — supports AJAX/SPA content, click/form/login interaction, and screenshots). All local file operations are sandboxed to the project directory; ssh_exec and sftp run remotely with NO sandbox. \
-Treat the real workspace state as the source of truth. Never guess file contents, command outputs, database results, or the current state of the project. \
-If the answer depends on project state, runtime state, system state, or database state, use the appropriate tool. \
-If a previous turn likely used tools but the exact evidence is no longer present in context, re-check with tools instead of inferring or pretending. \
-When the user asks for coding help, inspect the relevant code or files before concluding. \
-When the user wants a change, prefer doing the work end-to-end: inspect, edit, run or verify when practical, then report the result. \
-Do not overwrite or ignore existing user changes unless explicitly asked. Work with the current codebase as it exists. \
-Keep responses concise, direct, and factual. State assumptions briefly when needed. \
-When verification was not possible, say so plainly.`
-    : `You are siberflow, a coding agent running in a terminal. \
-You share the user's workspace and your job is to help them inspect, modify, run, and verify code accurately. \
-You have tools for file management (read_file, write_file, edit_file, copy_file, list_dir), \
-shell execution (exec), database access (db_query), remote SSH commands (ssh_exec), remote SFTP file transfer (sftp: upload/download), \
-and Excel spreadsheet I/O (read_excel, write_excel, write_excel_script for .xlsx with multi-sheet support, styled output, and full exceljs API access via sandboxed scripts), and web scraping (web_scrape for fetching/scraping pages via a headless Chromium browser with the full Playwright API — supports AJAX/SPA content, click/form/login interaction, and screenshots). All local file operations are sandboxed to the project directory; ssh_exec and sftp run remotely with NO sandbox. \
+/**
+ * Build the tool-availability sentence for the base prompt, mentioning ONLY
+ * the tool categories whose tools are actually registered. The base prompt
+ * used to hardcode every tool name; that misled the model when a tool was
+ * toggled off (the schema wouldn't include it, yet the prompt claimed it
+ * existed). Now the prompt is derived from the registered tool set so the
+ * prose and the schema can never drift.
+ *
+ * Returns the full "You have tools for ..." clause plus the sandbox note.
+ */
+function buildToolClause(enabledToolNames: string[]): string {
+  const has = (name: string): boolean => enabledToolNames.includes(name);
+  const any = (...names: string[]): boolean => names.some(has);
+
+  const parts: string[] = [];
+
+  if (any("read_file", "write_file", "edit_file", "copy_file", "list_dir")) {
+    const fileTools = ["read_file", "write_file", "edit_file", "copy_file", "list_dir"].filter(has);
+    parts.push(`file management (${fileTools.join(", ")})`);
+  }
+  if (has("exec")) parts.push("shell execution (exec)");
+  if (has("db_query")) parts.push("database access (db_query)");
+  if (any("ssh_exec", "sftp")) {
+    const sshTools = ["ssh_exec", "sftp"].filter(has);
+    parts.push(`remote SSH commands (${sshTools.join(", ")})`);
+  }
+  if (any("read_excel", "write_excel", "write_excel_script")) {
+    const excelTools = ["read_excel", "write_excel", "write_excel_script"].filter(has);
+    parts.push(`Excel spreadsheet I/O (${excelTools.join(", ")})`);
+  }
+  if (has("web_scrape")) {
+    parts.push("web scraping (web_scrape for fetching/scraping pages via a headless Chromium browser with the full Playwright API — supports AJAX/SPA content, click/form/login interaction, and screenshots)");
+  }
+
+  // task_update is intentionally NOT listed here: it's always present when
+  // tasks are enabled, but its usage is explained in TASKS_GUIDANCE (appended
+  // separately), not in the tool-availability sentence.
+
+  const toolsClause = parts.length > 0
+    ? `You have tools for ${parts.join(", ")}.`
+    : "You currently have no tools registered.";
+
+  // Sandbox-scope note — only mention what's relevant to the active set.
+  const hasLocalFs = any("read_file", "write_file", "edit_file", "copy_file", "list_dir", "exec") ||
+    any("read_excel", "write_excel", "write_excel_script");
+  const hasRemoteSsh = any("ssh_exec", "sftp");
+  const scopeParts: string[] = [];
+  if (hasLocalFs) scopeParts.push("all local file operations are sandboxed to the project directory");
+  if (hasRemoteSsh) scopeParts.push("ssh_exec and sftp run remotely with NO sandbox");
+  const scopeClause = scopeParts.length > 0
+    ? ` ${scopeParts.map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join("; ")}.`
+    : "";
+
+  return `${toolsClause}${scopeClause}`;
+}
+
+const BASE_PROMPT = (iface: AgentInterface, enabledToolNames: string[]): string => {
+  const opener =
+    iface === "vscode"
+      ? "You are siberflow, a coding agent integrated into VSCode. \
+You share the user's workspace and your job is to help them inspect, modify, run, and verify code accurately."
+      : "You are siberflow, a coding agent running in a terminal. \
+You share the user's workspace and your job is to help them inspect, modify, run, and verify code accurately.";
+  return `${opener} \
+${buildToolClause(enabledToolNames)} \
 Treat the real workspace state as the source of truth. Never guess file contents, command outputs, database results, or the current state of the project. \
 If the answer depends on project state, runtime state, system state, or database state, use the appropriate tool. \
 If a previous turn likely used tools but the exact evidence is no longer present in context, re-check with tools instead of inferring or pretending. \
@@ -38,6 +83,7 @@ When the user wants a change, prefer doing the work end-to-end: inspect, edit, r
 Do not overwrite or ignore existing user changes unless explicitly asked. Work with the current codebase as it exists. \
 Keep responses concise, direct, and factual. State assumptions briefly when needed. \
 When verification was not possible, say so plainly.`;
+};
 
 /**
  * Task checklist guidance — appended when the task_update tool is registered.
@@ -93,6 +139,13 @@ export interface BuildPromptOptions {
   interface: AgentInterface;
   tasksEnabled?: boolean;
   summaryMode?: boolean;
+  /**
+   * Names of tools actually registered for this session. Drives the
+   * tool-availability sentence in the base prompt so it only mentions tools
+   * the model can actually call. Defaults to an empty list (no tools
+   * mentioned) — callers should pass `registry.list().map(t => t.name)`.
+   */
+  enabledToolNames?: string[];
 }
 
 /**
@@ -101,7 +154,7 @@ export interface BuildPromptOptions {
  * is always included (it governs response shape, not an optional feature).
  */
 export function buildSystemPrompt(opts: BuildPromptOptions): string {
-  let prompt = BASE_PROMPT(opts.interface);
+  let prompt = BASE_PROMPT(opts.interface, opts.enabledToolNames ?? []);
   prompt += INTENT_GUIDANCE;
   if (opts.tasksEnabled) prompt += TASKS_GUIDANCE;
   if (opts.summaryMode) prompt += SUMMARY_GUIDANCE;
