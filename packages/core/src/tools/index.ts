@@ -5,6 +5,7 @@ import { dbTools } from "./db/index.js";
 import { sshTools } from "./ssh/index.js";
 import { taskTools } from "./task/index.js";
 import { excelTools } from "./excel/index.js";
+import { webTools } from "./web/index.js";
 
 export * from "./base.js";
 export { ToolRegistry } from "./registry.js";
@@ -14,6 +15,7 @@ export { dbTools } from "./db/index.js";
 export { sshTools } from "./ssh/index.js";
 export { taskTools } from "./task/index.js";
 export { excelTools } from "./excel/index.js";
+export { webTools } from "./web/index.js";
 
 export interface RegistryOptions {
   /** Register the task_update checklist tool (default false). When true,
@@ -59,8 +61,8 @@ export function createDefaultRegistry(opts: RegistryOptions = {}): ToolRegistry 
   for (const tool of fsCandidates) {
     if (hasFs && enabled.has(tool.name)) registry.register(tool);
   }
-  // db / ssh tools don't need a workdir — register by user preference only.
-  for (const tool of [...dbTools, ...sshTools]) {
+  // db / ssh / web tools don't need a workdir — register by user preference only.
+  for (const tool of [...dbTools, ...sshTools, ...webTools]) {
     if (enabled.has(tool.name)) registry.register(tool);
   }
   // task_update bypasses enabledTools — it's controlled solely by `tasks`.

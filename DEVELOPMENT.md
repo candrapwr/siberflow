@@ -54,16 +54,21 @@ siberflow/
     │       │   ├── excel/
     │       │   │   ├── read.ts    # read_excel — multi-sheet, table/json output
     │       │   │   ├── write.ts   # write_excel — multi-sheet, styled output
+    │       │   │   ├── script.ts  # write_excel_script — full exceljs API via vm sandbox
     │       │   │   ├── styles.ts  # theme presets, named colors, number formats
     │       │   │   └── index.ts   # excelTools[]
     │       │   ├── ssh/
     │       │   │   ├── exec.ts    # ssh_exec — remote shell over SSH2
     │       │   │   ├── sftp.ts    # sftp — remote file transfer
     │       │   │   └── index.ts
+    │       │   ├── web/
+    │       │   │   ├── scrape.ts  # web_scrape — headless Chromium via Playwright (child_process worker)
+    │       │   │   ├── ensure-chromium.ts  # download-on-first-use helper
+    │       │   │   └── index.ts   # webTools[]
     │       │   ├── task/
     │       │   │   ├── update.ts  # task_update tool (opt-in via SIBERFLOW_TASKS)
     │       │   │   └── index.ts
-    │       │   └── index.ts       # createDefaultRegistry({ tasks?, filesystem? })
+    │       │   └── index.ts       # createDefaultRegistry({ tasks?, filesystem?, enabledTools? })
     │       ├── session/
     │       │   ├── types.ts       # Session, SessionSummary, SESSION_FORMAT_VERSION
     │       │   └── store.ts       # save/load/list/delete/clear + uploadsDirFor/cleanupUploads
@@ -199,15 +204,18 @@ interface ToolContext {
 
 Tool return string yang akan dikirim balik ke LLM sebagai `tool` message content. Throw `Error` untuk kegagalan — `ToolRegistry.execute()` yang menangkap & convert ke "Error: ..." string.
 
-Default registry saat ini memuat enam kategori tool:
+Default registry saat ini memuat tujuh kategori tool:
 - file tools: `read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`
 - cli tool: `exec`
 - database tool: `db_query` (MySQL / PostgreSQL / SQLite)
-- excel tools: `read_excel`, `write_excel` (multi-sheet `.xlsx`, styled output)
+- excel tools: `read_excel`, `write_excel`, `write_excel_script` (multi-sheet `.xlsx`, styled output + full exceljs API via vm sandbox)
 - ssh tools: `ssh_exec` (remote shell via SSH2), `sftp` (remote file transfer)
-- task tool: `task_update` (opt-in via `tasks: true` — silent di semua interface)
+- web tools: `web_scrape` (headless Chromium via Playwright, child_process worker)
+- task tool: `task_update` (opt-in via `tasks: true` — silent di semua interface, bypass enabledTools)
 
-File + cli + excel tools terdaftar hanya saat `filesystem !== false` (session punya working directory). db / ssh / task tools selalu terdaftar.
+**Per-tool toggle (`enabledTools`)**: tool selain file ops default OFF — opt-in via settings/env supaya prompt ringan + blast-radius security kecil. File + cli + excel tools juga gated `filesystem: true` (butuh workdir). db / ssh / web tools terdaftar tanpa workdir. `task_update` bypass enabledTools (gated `tasks`).
+
+Default enabled: `read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir` saja (`DEFAULT_ENABLED_TOOLS` di `tools/index.ts`). Enable lain via settings atau `SIBERFLOW_TOOLS` env (CLI).
 
 ### Database tool
 
@@ -323,6 +331,55 @@ Algoritma:
 Setiap tool file (read/write/edit/copy/list) wajib lewat `resolveWithin` sebelum operasi fs.
 
 `read_excel` adalah pengecualian: pakai `resolveExcelPath(ctx, path)` yang **cuma allow path absolut di dalam `ctx.uploadDir`** (tmp upload dir), lalu fallback ke `resolveWithin(ctx.projectDir, ...)`. Path relatif selalu resolve ke projectDir — tidak bisa nekat baca file upload lewat nama relatif. `write_excel` pakai `resolveWithin` biasa (output Excel harus di project).
+
+### `write_excel_script` (full exceljs API via vm sandbox)
+
+Untuk layout Excel kompleks (merge cells, multi-level header, conditional formatting, chart, autofilter, dll) yang gak bisa di-handle `write_excel` (data mode). AI tulis function JavaScript `(wb, ExcelJS) => { ... }` yang dijalankan di **sandbox `node:vm`** terkunci:
+
+- Context cuma expose `wb` (workbook) + `ExcelJS` + minimal globals (Math/JSON/Date/dll)
+- `require`/`process`/`fs`/`global`/`globalThis` di-shadow jadi `undefined`
+- `codeGeneration: { strings: false, wasm: false }` disable `eval` + `Function` constructor
+- Timeout 5 detik untuk infinite loop
+
+**Pola worker** yang penting: compile + invoke script dalam **satu `runInContext`** call (embed script sebagai static source text dalam wrapper IIFE), BUKAN return function dari sandbox lalu invoke di host. Kalau di-invoke di host, timeout vm gak cover execution — infinite loop gak ke-kill (bug yang sudah di-fix). Lihat `tools/excel/script.ts` untuk pattern lengkap.
+
+### Web scraping (`web_scrape`)
+
+Tool scraping/interaksi halaman web via headless Chromium (Playwright). Pakai dependency `playwright-core` (zero native deps; Chromium di-download terpisah). Terdaftar di bucket network-only (sama seperti `db`/`ssh`) — gak butuh workdir.
+
+**Cara kerja**:
+1. `ensureChromium()` cek cache; kalau belum ada, spawn `npx playwright install chromium` (download ~150MB ke OS cache, satu kali)
+2. Tool spawn **child process worker** via `fork()` — worker source di-embed sebagai string di `scrape.ts`, ditulis ke `<tmpdir>/siberflow-scrape-worker.mjs` saat runtime (supaya work di bundled CJS context yang gak punya `import.meta.url`)
+3. Worker launch Chromium headless, `page.goto(url)` kalau ada, eval script Playwright AI-supplied `async ({page, browser}) => {...}`, kirim result via IPC `process.send(...)`
+4. Host tunggu result atau kill worker via `killTree(pid)` (`process.kill(-pid)` Unix / `taskkill /T` Windows — reuse pattern dari `cli/exec.ts`)
+5. Output di-truncate 200K chars
+
+**Kenapa child_process, bukan vm sandbox?** Playwright async-only (`await page.goto()`). `vm.runInContext` sync dan blocking — gak bisa `await`. Timeout async code di vm unreliable (sudah di-alami di `write_excel_script` infinite loop). Child process isolation lebih clean: worker gak punya akses host memory/session/AgentHost; env minimal (PATH, HOME, PLAYWRIGHT_BROWSERS_PATH); worst case script AI menulis kode malicious → worker crash/isolated → gak affect host.
+
+**Resolved path**: worker import `playwright-core` via absolute path (di-resolve di host pakai `createRequire(pathToFileURL(cwd/package.json))`, inject ke worker source). Karena worker di temp dir tanpa `node_modules`, bare `import "playwright-core"` gak resolve.
+
+### Per-tool toggle (`enabledTools`)
+
+Tool selain file ops default OFF untuk prompt ringan + blast-radius security kecil. Filter di `createDefaultRegistry({ enabledTools: Set<string> })`:
+
+- File + cli + excel tools: gated **keduanya** `hasFs && enabled.has(name)` — butuh workdir DAN user opt-in
+- db + ssh + web tools: gated **hanya** `enabled.has(name)` — network tools, gak butuh workdir
+- `task_update`: bypass `enabledTools`, gated `tasks` (master switch task checklist)
+
+Default: `DEFAULT_ENABLED_TOOLS = { read_file, write_file, edit_file, copy_file, list_dir }`. Setting via:
+- CLI: `SIBERFLOW_TOOLS=name1,name2` env (lihat `.env.example`)
+- VSCode: setting `siberflow.enabledTools` (array) + grid checkbox di settings UI (`TOGGLE_TOOLS` const)
+- Desktop: settings modal → section "Tools" (grid checkbox, sama pattern `TOGGLE_TOOLS`)
+
+UI toggle conditional pattern: Composer upload button (paperclip) disable + tooltip saat `read_excel` tidak di-enable — cek `state.enabledTools.includes("read_excel")`. Sama untuk tool UI lain yang depend availability.
+
+### Request delay (`requestDelayMs`)
+
+Jeda sebelum setiap request ke LLM, anti rate-limit saat loop tool-call cepat. Diterapkan di **satu titik**: `runStream()` di `agent/agent.ts` (titik tunggal tempat `provider.chatStream()` dipanggil — otomatis throttle initial + auto-continue + tool-call iteration). Abortable: `sleep(ms, signal)` listen `AbortSignal` → reject `AbortError` → turn rollback (history + tasks).
+
+Default 1500ms (config layer + `DEFAULT_SETTINGS`), 0 di core level. Setting:
+- CLI: `SIBERFLOW_REQUEST_DELAY_MS` env
+- VSCode/Desktop: settings UI field "Request delay (ms)"
 
 Tool `exec` cwd-nya `projectDir`, tapi shell command bisa secara teknis akses path lain (`$HOME`, `cd /tmp`, dll). Sandbox keras hanya untuk file tools. Untuk hard isolation perlu container.
 
@@ -745,7 +802,7 @@ Sama seperti VSCode extension — settings tersimpan lokal, bukan env:
 ### Bundling
 
 [electron.vite.config.ts](packages/desktop/electron.vite.config.ts) — tiga output via `electron-vite`:
-- `out/main/index.js` — main process (esbuild, external native modules `ssh2`/`sqlite3`/`pg`/`mysql2`)
+- `out/main/index.js` — main process (esbuild, external native modules `ssh2`/`sqlite3`/`pg`/`mysql2`/`playwright-core`/`chromium-bidi`/`fsevents`)
 - `out/preload/index.mjs` — preload bridge
 - `out/renderer/` — Vite + React (HMR saat dev)
 
@@ -842,15 +899,18 @@ Setelah file provider dibuat:
    ```
 2. Tambah ke array di `<category>/index.ts` (atau buat kategori baru di `tools/index.ts`).
 
-**Wajib** sandbox semua path user-provided lewat `resolveWithin` (atau `resolveExcelPath` kalau tool butuh akses upload dir selain project).
+**Wajib** sandbox semua path user-provided lewat `resolveWithin` (atau `resolveExcelPath` kalau tool butuh akses upload dir selain project). Kalau tool run kode user-supplied (exceljs/Playwright), pakai vm sandbox (`tools/excel/script.ts` pattern) atau child_process isolation (`tools/web/scrape.ts` pattern) — jangan pernah `eval` langsung di host process.
 
 Contoh kategori yang sudah ada di repo:
 - `tools/file/*` untuk operasi filesystem
 - `tools/cli/*` untuk shell command
 - `tools/db/*` untuk akses database
-- `tools/excel/*` untuk spreadsheet `.xlsx` (read pakai `resolveExcelPath` agar bisa baca upload dir; write tetap `resolveWithin` project)
+- `tools/excel/*` untuk spreadsheet `.xlsx` (read pakai `resolveExcelPath` agar bisa baca upload dir; write tetap `resolveWithin` project; script mode pakai vm sandbox untuk full exceljs API)
 - `tools/ssh/*` untuk remote shell & SFTP
+- `tools/web/*` untuk web scraping via headless Chromium (child_process worker, download Chromium on first use)
 - `tools/task/*` untuk task checklist
+
+Kalau tool baru butuh opt-in (default OFF), tambah nama tool ke `TOGGLE_TOOLS` array di `SettingsModal.tsx` (Desktop) + `webview/main.ts` (VSCode) + list di `.env.example`. Filter otomatis lewat `enabledTools` di `createDefaultRegistry`.
 
 ### Interface baru (web/desktop)
 
@@ -862,6 +922,9 @@ Buat workspace baru di `packages/<name>/`, depend ke `@siberflow/core`. Subscrib
 - `read_excel` punya whitelist tambahan: boleh baca path absolut di dalam `uploadDir` (tmp upload dir, per-session, mode 0700). Tool file lain tidak terima field `uploadDir` → tetap terkunci di project.
 - Upload Excel disimpan di `os.tmpdir()/siberflow-uploads/<sessionId>/` (bukan project) — workspace bersih, tidak ikut git. Cleanup otomatis saat `deleteSession`. Folder owner-only (mode 0700) untuk mitigasi `/tmp` world-readable di Linux multi-user.
 - `write_excel` output tetap sandbox `projectDir` — file Excel yang AI hasilkan harus di project, bukan tmp.
+- `write_excel_script` run kode AI-supplied di `node:vm` sandbox terkunci: `require`/`process`/`fs`/`eval`/`Function` di-block, timeout 5 detik. Compile + invoke dalam satu `runInContext` supaya timeout cover infinite loop.
+- `web_scrape` run kode AI-supplied (Playwright) di **child process worker terisolasi** (bukan vm — Playwright async gak kompatibel). Worker gak punya akses host memory/session/AgentHost; env minimal (gak leak secrets); timeout kill process tree. Chromium di-download on first use ke OS cache.
+- Per-tool toggle (`enabledTools`): tool berbahaya (`exec`, `db_query`, `ssh_exec`, `web_scrape`, dll) default OFF — opt-in via settings/env supaya blast-radius security kecil walau AI coba pakai.
 - `exec` tool cwd=projectDir tapi shell bisa akses path lain (soft). OK untuk single-user dev; untuk multi-user / web public perlu permission layer.
 - API key:
   - CLI: plain text di env / `.env` (gitignored)

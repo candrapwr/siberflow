@@ -184,16 +184,19 @@ cd packages/desktop && npm run rebuild
 - **Streaming response** — token muncul real-time, support markdown
 - **File dan shell tools** — `read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`, `exec`
 - **Database query tool** — `db_query` mendukung `mysql`, `postgresql`, dan `sqlite`; query bebas, optional `params`, SQLite path tetap dibatasi ke project dir
-- **Excel spreadsheet tools** — `read_excel` / `write_excel` untuk `.xlsx` multi-sheet dengan output table/json dan styling (theme preset, zebra rows, freeze header, number format). File Excel dari upload UI disimpan di **OS tmp dir** (bukan project) — workspace tetap bersih, tidak ikut ke git
+- **Excel spreadsheet tools** — `read_excel` / `write_excel` / `write_excel_script` untuk `.xlsx` multi-sheet dengan output table/json dan styling (theme preset, zebra rows, freeze header, number format). `write_excel_script` memberi akses penuh API `exceljs` (merge cells, conditional formatting, chart, autofilter, dll) via sandbox `node:vm`. File Excel dari upload UI disimpan di **OS tmp dir** (bukan project) — workspace tetap bersih, tidak ikut ke git
+- **Web scraping tool** — `web_scrape` scrape/interaksi halaman web via headless Chromium (Playwright). Mendukung AJAX/SPA (render JS), klik/form/login, screenshot. Script Playwright dijalankan di child process worker terisolasi dengan timeout kill. Chromium diunduh on first use (~150MB, satu kali). Default OFF (opt-in)
+- **Per-tool toggle** — aktif/nonaktifkan tool individual via settings/env (`SIBERFLOW_TOOLS`). Default hanya 5 file ops aktif; `exec`/`db_query`/`ssh`/`excel`/`web_scrape` opt-in untuk prompt ringan + blast-radius security kecil
+- **Request delay (anti rate-limit)** — jeda sebelum setiap request ke AI (default 1500ms, bisa 0) untuk mencegah provider block saat loop tool-call cepat. Set via env (`SIBERFLOW_REQUEST_DELAY_MS`) atau settings UI
 - **Task checklist** — opt-in via env / settings; AI maintain checklist multi-step yang bisa di-resume setelah Ctrl+C atau session restart
 - **Context optimization** — buang tool history dari turn lama (default aktif); current task tetap utuh. Dua mode via `SIBERFLOW_CONTEXT_OPTIMIZE_MODE`: `drop` (buang total, default) atau `summary` (sisakan tag `[SUMMARY]` berisi *signature* per tool — nama + identifier ringkas seperti `exec("df -h")` / `write_file("src/foo.ts")`; payload berat dan result tetap dibuang). Defense-in-depth: provider & serialization selalu menjamin assistant message punya content atau tool_calls (fix error 400 DeepSeek)
 - **Auto-continue** — sambung otomatis respons yang kepotong max_tokens
 - **Silent task_update** — tool `task_update` tetap dieksekusi tapi tidak ditampilkan di transcript (CLI, VSCode, Desktop); efeknya hanya terlihat di task checklist
-- **Upload Excel dari chat (Desktop & VSCode)** — tombol paperclip di composer buka file picker `.xlsx` (multi-select); file disalin ke tmp per-session, prompt otomatis menyuruh AI baca via `read_excel`. Chip attachment dengan tombol hapus per file
+- **Upload Excel dari chat (Desktop & VSCode)** — tombol paperclip di composer buka file picker `.xlsx` (multi-select); file disalin ke tmp per-session, prompt otomatis menyuruh AI baca via `read_excel`. Chip attachment dengan tombol hapus per file. Tombol disable otomatis saat `read_excel` tidak di-enable di settings
 - **Multi-session** — sesi tersimpan per project, picker saat startup
 - **Debug tracing** — env `SIBERFLOW_DEBUG=true` untuk log HTTP/finish_reason/usage
 
-## Excel tools (`read_excel` / `write_excel`)
+## Excel tools (`read_excel` / `write_excel` / `write_excel_script`)
 
 Domain tool terpisah di `packages/core/src/tools/excel/`, pakai library `exceljs` (pure JS, no native addon → aman untuk build Electron cross-platform). Terdaftar di registry di bawah flag `filesystem` — otomatis dimatikan saat session tanpa working directory (sama seperti `read_file`/`exec`).
 
@@ -212,11 +215,37 @@ Buat/overwrite workbook `.xlsx` multi-sheet dari map `sheets: { SheetName: [rowO
 
 Tanggal di args (datang sebagai ISO string via JSON) otomatis dikonversi balik ke Date cell. Date-only `2025-01-01` parse sebagai local midnight (tidak geser timezone).
 
+### `write_excel_script` (full exceljs API)
+
+Untuk layout kompleks yang butuh akses penuh API `exceljs` — merge cells, multi-level header, conditional formatting, chart, autofilter, frozen panes, column grouping, protection, dll. AI tulis function JavaScript `(wb, ExcelJS) => { ... }` yang kita eksekusi di **sandbox `node:vm`** (locked-down: `require`/`process`/`fs`/`eval`/`Function` di-block, timeout 5 detik). Worker pattern: compile + invoke dalam satu `runInContext` supaya timeout cover infinite loop. Pilih tool ini kalau `write_excel` (data mode) terlalu terbatas; kalau cuma tabel simple, `write_excel` lebih reliable.
+
 ### Upload Excel dari UI (Desktop & VSCode)
 
 Tombol paperclip 📎 di composer → file picker native `.xlsx` multi-select → file disalin ke **`os.tmpdir()/siberflow-uploads/<sessionId>/`** (per-session, mode 0700) → prompt otomatis digabung dengan list path file → AI pakai `read_excel`. Project folder tidak tersentuh. Saat session di-delete, folder tmp session otomatis dibersihkan (hook di `deleteSession`).
 
 **Keamanan**: hanya `read_excel` yang whitelist upload dir (via `ToolContext.uploadDir`); tool file lain (`read_file`, `write_file`, `exec`, dll) tetap sandbox ke `projectDir` dan tidak bisa baca tmp.
+
+## Web scraping (`web_scrape`)
+
+Tool scraping/interaksi halaman web via headless Chromium (Playwright). Default **OFF** — enable via settings (Desktop/VSCode) atau `SIBERFLOW_TOOLS` env (CLI).
+
+**Cara kerja**: AI tulis function Playwright `async ({ page, browser }) => { ... }` → tool spawn **child process worker terisolasi** (bukan vm sandbox — Playwright async gak kompatibel) → worker launch Chromium headless → run script → return result string. Worker di-kill kalau timeout (`timeoutMs` default 30s, max 60s). Reuse pattern kill tree dari `exec` (`process.kill(-pid)` Unix / `taskkill /T` Windows).
+
+**Chromium**: diunduh on first use (~150MB, satu kali) ke OS cache (`~/Library/Caches/ms-playwright` mac, `~/.cache/ms-playwright` linux). Installer tetap kecil. Subsequent launch langsung jalan.
+
+**Output**: capped 200K chars (sama pattern `exec`/`db_query`). Tool description arahkan AI extract data spesifik (`$$eval`/`textContent`) daripada return raw HTML.
+
+## Per-tool toggle (enabledTools)
+
+Aktif/nonaktifkan tool individual supaya tool yang gak dipakai gak membebani prompt (~200-300 token per disabled tool) + blast-radius security lebih ketat. Default: **hanya 5 file ops** aktif (`read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`). `exec`/`db_query`/`ssh_exec`/`sftp`/`read_excel`/`write_excel`/`write_excel_script`/`web_scrape` default OFF — opt-in.
+
+`task_update` selalu nyala kalau `tasks` enabled (bypass enabledTools — itu master switch task checklist feature, bukan per-tool toggle).
+
+| Interface | Cara set |
+|---|---|
+| **CLI** | env `SIBERFLOW_TOOLS=read_file,write_file,edit_file,copy_file,list_dir,web_scrape` (comma-separated) |
+| **VSCode** | setting `siberflow.enabledTools` (array) + grid checkbox di settings UI |
+| **Desktop** | Settings modal → section "Tools" (grid 12+ checkbox, group by kategori) |
 
 ## Developer docs
 

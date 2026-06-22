@@ -19,6 +19,7 @@ const TOGGLE_TOOLS = [
   { name: "read_excel", label: "read_excel", group: "Excel" },
   { name: "write_excel", label: "write_excel", group: "Excel" },
   { name: "write_excel_script", label: "write_excel_script", group: "Excel" },
+  { name: "web_scrape", label: "web_scrape", group: "Web" },
 ] as const;
 
 interface SettingsModalProps {
