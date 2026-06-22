@@ -9,7 +9,7 @@ export default defineConfig({
       rollupOptions: {
         // Native modules must stay external — they are rebuilt for Electron's
         // ABI and cannot be bundled. @siberflow/core is bundled in.
-        external: ["ssh2", "sqlite3", "pg", "mysql2", "cpu-features"],
+        external: ["ssh2", "sqlite3", "pg", "mysql2", "cpu-features", "playwright-core"],
       },
     },
     resolve: {
