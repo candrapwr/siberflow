@@ -5,7 +5,7 @@ import { dbTools } from "./db/index.js";
 import { sshTools } from "./ssh/index.js";
 import { taskTools } from "./task/index.js";
 import { excelTools } from "./excel/index.js";
-import { webTools } from "./web/index.js";
+import { browserTools } from "./browser/index.js";
 import { interactionTools } from "./interaction/index.js";
 
 export * from "./base.js";
@@ -16,7 +16,7 @@ export { dbTools } from "./db/index.js";
 export { sshTools } from "./ssh/index.js";
 export { taskTools } from "./task/index.js";
 export { excelTools } from "./excel/index.js";
-export { webTools } from "./web/index.js";
+export { browserTools } from "./browser/index.js";
 export { interactionTools } from "./interaction/index.js";
 
 export interface RegistryOptions {
@@ -66,8 +66,8 @@ export function createDefaultRegistry(opts: RegistryOptions = {}): ToolRegistry 
   for (const tool of fsCandidates) {
     if (hasFs && enabled.has(tool.name)) registry.register(tool);
   }
-  // db / ssh / web tools don't need a workdir — register by user preference only.
-  for (const tool of [...dbTools, ...sshTools, ...webTools]) {
+  // db / ssh / browser tools don't need a workdir — register by user preference only.
+  for (const tool of [...dbTools, ...sshTools, ...browserTools]) {
     if (enabled.has(tool.name)) registry.register(tool);
   }
   // task_update is always registered — it's a built-in tool (default true,
