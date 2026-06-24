@@ -61,11 +61,10 @@ const extension = {
   platform: "node",
   format: "cjs",
   target: "node20",
-  // playwright-core is a large platform-specific package that does its own
-  // dynamic requires (chromium-bidi, optional fsevents). It must stay
-  // external so esbuild doesn't try to bundle it — the tool loads it via
+  // puppeteer-core is a large package that does dynamic requires. It must
+  // stay external so esbuild doesn't try to bundle it — the tool loads it via
   // require() at runtime from node_modules, just like sqlite3/ssh2.
-  external: ["vscode", "playwright-core", "chromium-bidi", "fsevents"],
+  external: ["vscode", "puppeteer-core"],
 };
 
 const webview = {

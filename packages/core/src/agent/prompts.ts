@@ -40,8 +40,8 @@ function buildToolClause(enabledToolNames: string[]): string {
     const excelTools = ["read_excel", "write_excel", "write_excel_script"].filter(has);
     parts.push(`Excel spreadsheet I/O (${excelTools.join(", ")})`);
   }
-  if (has("web_scrape")) {
-    parts.push("web scraping (web_scrape for fetching/scraping pages via a headless Chromium browser with the full Playwright API — supports AJAX/SPA content, click/form/login interaction, and screenshots)");
+  if (has("run_browser")) {
+    parts.push("headless browser automation (run_browser for navigating/scraping/interacting with pages via the user's installed Chrome/Edge using the Puppeteer API — supports AJAX/SPA content, form fill, login, screenshots)");
   }
   if (has("ask_user")) {
     parts.push("user interaction (ask_user to ask the user a question when you need confirmation, a choice, or free-form input)");

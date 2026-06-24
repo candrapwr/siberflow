@@ -3,10 +3,9 @@ productName: Siberflow
 directories:
   buildResources: build
   output: dist
-# asar disabled: the app bundles playwright-core (dynamic requires to
-# chromium-bidi) and native addons (sqlite3, ssh2) that don't behave reliably
-# inside an asar archive. Disabling avoids asarUnpack glob issues with the
-# workspace symlink layout. The size cost is negligible.
+# asar disabled: the app bundles puppeteer-core (dynamic requires) and native
+# addons (sqlite3, ssh2) that don't behave reliably inside an asar archive.
+# Disabling avoids asarUnpack glob issues with the workspace symlink layout.
 asar: false
 files:
   - out/**/*
