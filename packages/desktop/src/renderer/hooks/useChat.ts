@@ -57,6 +57,14 @@ interface ChatState {
   taskPlan: Task[] | null;
   /** Tool names currently enabled in settings (drives composer upload toggle). */
   enabledTools: string[];
+  /** Active ask_user prompt from the agent (renders a modal); null when none. */
+  askUserPrompt: {
+    id: string;
+    question: string;
+    choices: string[];
+    allowFreeText: boolean;
+    defaultChoice?: string;
+  } | null;
   busy: boolean;
   stopping: boolean;
   notices: Array<{ id: number; kind: "info" | "error" | "warn"; text: string }>;
@@ -80,6 +88,7 @@ const initial: ChatState = {
   tasks: [],
   taskPlan: null,
   enabledTools: ["read_file", "write_file", "edit_file", "copy_file", "list_dir"],
+  askUserPrompt: null,
   busy: false,
   stopping: false,
   notices: [],
@@ -93,6 +102,7 @@ type Action =
   | { type: "user-send"; content: string }
   | { type: "regenerate" }
   | { type: "edit-last"; content: string }
+  | { type: "clear-ask-user" }
   | { type: "event"; event: MainEvent };
 
 // Monotonic id generators (kept module-level; ids only need to be unique).
@@ -206,6 +216,10 @@ function reducer(state: ChatState, action: Action): ChatState {
       messages: [...msgs, { role: "user", content: action.content }],
       showActions: false,
     };
+  }
+
+  if (action.type === "clear-ask-user") {
+    return { ...state, askUserPrompt: null };
   }
 
   const e = action.event;
@@ -399,6 +413,18 @@ function reducer(state: ChatState, action: Action): ChatState {
         notices: [...state.notices, { id: ++noticeSeq, kind: "error", text: e.message }],
       };
 
+    case "ask-user":
+      return {
+        ...state,
+        askUserPrompt: {
+          id: e.id,
+          question: e.question,
+          choices: e.choices,
+          allowFreeText: e.allowFreeText,
+          ...(e.defaultChoice ? { defaultChoice: e.defaultChoice } : {}),
+        },
+      };
+
     default:
       return state;
   }
@@ -437,5 +463,10 @@ export function useChat() {
     dispatch({ type: "edit-last", content });
   }, []);
 
-  return { state, dismissNotice, sendMessage, clearForRegenerate, editLast };
+  /** Clear the active ask_user prompt (called by the modal after the user answers). */
+  const clearAskUserPrompt = useCallback(() => {
+    dispatch({ type: "clear-ask-user" });
+  }, []);
+
+  return { state, dismissNotice, sendMessage, clearForRegenerate, editLast, clearAskUserPrompt };
 }

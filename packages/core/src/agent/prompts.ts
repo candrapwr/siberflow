@@ -43,6 +43,9 @@ function buildToolClause(enabledToolNames: string[]): string {
   if (has("web_scrape")) {
     parts.push("web scraping (web_scrape for fetching/scraping pages via a headless Chromium browser with the full Playwright API — supports AJAX/SPA content, click/form/login interaction, and screenshots)");
   }
+  if (has("ask_user")) {
+    parts.push("user interaction (ask_user to ask the user a question when you need confirmation, a choice, or free-form input)");
+  }
 
   // task_update is intentionally NOT listed here: it's always present when
   // tasks are enabled, but its usage is explained in TASKS_GUIDANCE (appended
