@@ -19,6 +19,8 @@ const api: RendererCalls = {
   pickFolder: () => ipcRenderer.invoke("siberflow:pickFolder"),
   setWorkdir: (folderPath) => ipcRenderer.invoke("siberflow:setWorkdir", folderPath),
   pickExcelFiles: () => ipcRenderer.invoke("siberflow:pickExcelFiles"),
+  answerUser: (id, status, answer) =>
+    ipcRenderer.invoke("siberflow:answerUser", id, status, answer),
   getSettings: () => ipcRenderer.invoke("siberflow:getSettings"),
   saveSettings: (values, apiKey) =>
     ipcRenderer.invoke("siberflow:saveSettings", values, apiKey),

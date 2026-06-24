@@ -20,7 +20,8 @@ export type ExtToView =
   | { kind: "settings"; values: SettingsValues; hasApiKey: boolean; mustConfigure: boolean }
   | { kind: "history"; messages: HistoryMessage[] }
   | { kind: "excel_files_picked"; files: PickedFile[] }
-  | { kind: "excel_pick_error"; message: string };
+  | { kind: "excel_pick_error"; message: string }
+  | { kind: "ask_user"; id: string; question: string; choices: string[]; allowFreeText: boolean; defaultChoice?: string };
 
 export interface HistoryMessage {
   role: "user" | "assistant";
@@ -52,7 +53,8 @@ export type ViewToExt =
   | { kind: "edit_last"; input: string }
   | { kind: "command"; command: "new" | "load" | "delete" | "clearAll" | "usage" | "tools" | "settings" }
   | { kind: "save_settings"; values: SettingsValues; apiKey: string | null }
-  | { kind: "pick_excel_files" };
+  | { kind: "pick_excel_files" }
+  | { kind: "answer_user"; id: string; status: "answer" | "cancel"; answer: string };
 
 export type ProviderName = "deepseek" | "gemini" | "openai" | "openai-responses" | "grok" | "qwen" | "zai" | "claude";
 

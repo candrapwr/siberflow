@@ -1460,6 +1460,92 @@ kbd {
   font-size: 11px;
 }
 
+/* ---------- ask_user modal ---------- */
+.ask-user-modal {
+  max-width: 420px;
+  width: 90%;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.ask-user-question {
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  color: var(--fg);
+}
+.ask-user-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ask-user-choice-btn {
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  background: var(--bg-surface-alt);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.ask-user-choice-btn:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.ask-user-freetext {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ask-user-freetext textarea {
+  width: 100%;
+  resize: vertical;
+  padding: 8px 10px;
+  background: var(--bg-surface-alt);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+.ask-user-freetext textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.ask-user-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 2px;
+}
+.ask-user-submit-btn {
+  padding: 5px 16px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ask-user-submit-btn:disabled { opacity: 0.4; cursor: default; }
+.ask-user-cancel-btn {
+  padding: 5px 14px;
+  background: transparent;
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ask-user-cancel-btn:hover {
+  background: var(--bg-surface-alt);
+  color: var(--fg);
+}
+
 /* ---------- Notices ---------- */
 .notice {
   padding: 7px 10px;

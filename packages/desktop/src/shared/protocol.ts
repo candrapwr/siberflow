@@ -118,7 +118,8 @@ export type MainEvent =
   | { type: "max-iterations"; limit: number }
   | { type: "usage"; usage: UsageInfo }
   | { type: "info"; message: string }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  | { type: "ask-user"; id: string; question: string; choices: string[]; allowFreeText: boolean; defaultChoice?: string };
 
 // ---- Renderer → Main (invoked calls) ----
 
@@ -141,6 +142,12 @@ export interface RendererCalls {
    * or the copy failed; `{ files: [] }` if the user cancelled.
    */
   pickExcelFiles: () => Promise<{ files: PickedFile[] } | { error: string }>;
+  /**
+   * Respond to an ask_user prompt. `status` is "answer" (user picked/typed)
+   * or "cancel" (user dismissed). Resolves once the host has unblocked the
+   * awaiting tool.
+   */
+  answerUser: (id: string, status: "answer" | "cancel", answer: string) => Promise<void>;
   getSettings: () => Promise<{ values: SettingsValues; hasApiKey: boolean }>;
   saveSettings: (values: SettingsValues, apiKey: string | null) => Promise<void>;
   renameSession: (id: string, name: string) => Promise<void>;

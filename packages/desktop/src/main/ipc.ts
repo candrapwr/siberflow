@@ -112,6 +112,13 @@ export function registerIpc(): void {
     await host!.renameSession(id, name);
   });
 
+  ipcMain.handle(
+    "siberflow:answerUser",
+    async (_e, id: string, status: "answer" | "cancel", answer: string) => {
+      host!.resolveUserAnswer(id, status, answer);
+    },
+  );
+
   ipcMain.handle("siberflow:getUsage", () => {
     return host!.getUsage();
   });

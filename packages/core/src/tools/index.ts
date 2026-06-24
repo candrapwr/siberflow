@@ -6,6 +6,7 @@ import { sshTools } from "./ssh/index.js";
 import { taskTools } from "./task/index.js";
 import { excelTools } from "./excel/index.js";
 import { webTools } from "./web/index.js";
+import { interactionTools } from "./interaction/index.js";
 
 export * from "./base.js";
 export { ToolRegistry } from "./registry.js";
@@ -16,6 +17,7 @@ export { sshTools } from "./ssh/index.js";
 export { taskTools } from "./task/index.js";
 export { excelTools } from "./excel/index.js";
 export { webTools } from "./web/index.js";
+export { interactionTools } from "./interaction/index.js";
 
 export interface RegistryOptions {
   /**
@@ -73,5 +75,7 @@ export function createDefaultRegistry(opts: RegistryOptions = {}): ToolRegistry 
   if (opts.tasks !== false) {
     for (const tool of taskTools) registry.register(tool);
   }
+  // Interaction tools (ask_user) are always registered — core to the agent UX.
+  for (const tool of interactionTools) registry.register(tool);
   return registry;
 }

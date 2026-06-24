@@ -14,6 +14,7 @@ import { UserMessage, AssistantMessage } from "./components/Message.js";
 import { TaskPanel } from "./components/TaskPanel.js";
 import { EmptyState } from "./components/EmptyState.js";
 import { SettingsModal } from "./components/SettingsModal.js";
+import { AskUserModal } from "./components/AskUserModal.js";
 import { ArrowDownIcon, FolderIcon } from "./components/icons.js";
 import type { SettingsValues } from "@shared/protocol";
 
@@ -31,7 +32,7 @@ function basename(p: string): string {
 }
 
 export default function App() {
-  const { state, dismissNotice, sendMessage, clearForRegenerate, editLast } = useChat();
+  const { state, dismissNotice, sendMessage, clearForRegenerate, editLast, clearAskUserPrompt } = useChat();
   const sessions = useSessions();
   const [showSettings, setShowSettings] = useState(false);
   const [settingsData, setSettingsData] = useState<{
@@ -382,6 +383,10 @@ export default function App() {
             setSettingsData(null);
           }}
         />
+      )}
+
+      {state.askUserPrompt && (
+        <AskUserModal prompt={state.askUserPrompt} onClose={clearAskUserPrompt} />
       )}
     </div>
   );

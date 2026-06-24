@@ -42,6 +42,13 @@ export interface AgentOptions {
    * unset, `read_excel` can only read files inside `projectDir`.
    */
   uploadDir?: string;
+  /**
+   * Ask-the-user callback injected into the tool context. When set, the
+   * `ask_user` tool can call it to block on a user response (modal dialog in
+   * the host UI). Omit for non-interactive hosts (CLI) where ask_user falls
+   * back to a no-op message.
+   */
+  askUser?: ToolContext["askUser"];
   /** Optional context optimization (default: disabled). */
   contextOptimize?: ContextOptimizeConfig;
   /** Enable task checklist injection (the task_update tool must also be registered). */
@@ -95,6 +102,7 @@ export class Agent {
       projectDir: opts.projectDir ?? process.cwd(),
       ...(this.tasksEnabled ? { taskStore: this.taskStore } : {}),
       ...(opts.uploadDir ? { uploadDir: opts.uploadDir } : {}),
+      ...(opts.askUser ? { askUser: opts.askUser } : {}),
     };
 
     if (opts.systemPrompt) {

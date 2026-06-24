@@ -286,12 +286,52 @@ export class AgentHost {
       // agent won't sandbox to a random cwd.
       ...(workdir ? { projectDir: workdir } : {}),
       ...(uploadDir ? { uploadDir } : {}),
+      askUser: (req) => this.askUserViaRenderer(req),
       contextOptimize: this.optimizeConfig(),
       tasksEnabled: true,
       autoContinue: this.settings.autoContinue,
       maxIterations: this.settings.maxIterations,
       requestDelayMs: this.settings.requestDelayMs,
     });
+  }
+
+  /**
+   * Pending ask_user prompts keyed by id. Each entry holds the resolve/reject
+   * pair for the promise the tool is awaiting on. Cleared when the renderer
+   * posts back via resolveUserAnswer.
+   */
+  private pendingUserQuestions = new Map<
+    string,
+    { resolve: (resp: { status: "answer" | "cancel"; answer: string }) => void }
+  >();
+
+  /** Emit an ask_user event to the renderer and await its response. */
+  private askUserViaRenderer(req: {
+    question: string;
+    choices?: string[];
+    allowFreeText?: boolean;
+    defaultChoice?: string;
+  }): Promise<{ status: "answer" | "cancel"; answer: string }> {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return new Promise((resolve) => {
+      this.pendingUserQuestions.set(id, { resolve });
+      this.emit({
+        type: "ask-user",
+        id,
+        question: req.question,
+        choices: req.choices ?? [],
+        allowFreeText: req.allowFreeText ?? false,
+        ...(req.defaultChoice ? { defaultChoice: req.defaultChoice } : {}),
+      });
+    });
+  }
+
+  /** Called from the IPC handler when the renderer posts the user's answer. */
+  resolveUserAnswer(id: string, status: "answer" | "cancel", answer: string): void {
+    const entry = this.pendingUserQuestions.get(id);
+    if (!entry) return;
+    this.pendingUserQuestions.delete(id);
+    entry.resolve({ status, answer });
   }
 
   private summaryModeActive(): boolean {

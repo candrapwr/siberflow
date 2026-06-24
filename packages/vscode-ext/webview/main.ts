@@ -1342,8 +1342,105 @@ window.addEventListener("message", (ev) => {
     case "excel_pick_error":
       showNotice("error", msg.message);
       break;
+    case "ask_user":
+      showAskUserModal(msg);
+      break;
   }
 });
+
+/**
+ * Render the ask_user modal overlay. Shows the question, optional choices,
+ * optional free-text input, and a Batal button. Posts the answer back via
+ * `answer_user`; the extension host resolves the promise the tool awaits on.
+ */
+function showAskUserModal(msg: {
+  id: string;
+  question: string;
+  choices: string[];
+  allowFreeText: boolean;
+  defaultChoice?: string;
+}): void {
+  // Remove any existing modal first (defensive — shouldn't happen).
+  document.getElementById("ask-user-overlay")?.remove();
+
+  const overlay = document.createElement("div");
+  overlay.id = "ask-user-overlay";
+  overlay.className = "ask-user-overlay";
+
+  const modal = document.createElement("div");
+  modal.className = "ask-user-modal";
+
+  const questionEl = document.createElement("div");
+  questionEl.className = "ask-user-question";
+  questionEl.textContent = msg.question;
+  modal.appendChild(questionEl);
+
+  const showChoices = msg.choices.length > 0;
+  const showFreeText = msg.allowFreeText || !showChoices;
+
+  const close = (status: "answer" | "cancel", answer: string) => {
+    vscode.postMessage({ kind: "answer_user", id: msg.id, status, answer });
+    overlay.remove();
+  };
+
+  if (showChoices) {
+    const choicesWrap = document.createElement("div");
+    choicesWrap.className = "ask-user-choices";
+    for (const choice of msg.choices) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "ask-user-choice-btn";
+      btn.textContent = choice;
+      btn.onclick = () => close("answer", choice);
+      choicesWrap.appendChild(btn);
+    }
+    modal.appendChild(choicesWrap);
+  }
+
+  let freeTextTa: HTMLTextAreaElement | null = null;
+  if (showFreeText) {
+    const wrap = document.createElement("div");
+    wrap.className = "ask-user-freetext";
+    const ta = document.createElement("textarea");
+    ta.placeholder = msg.defaultChoice ?? "Ketik jawaban…";
+    ta.rows = 2;
+    if (msg.defaultChoice) ta.value = msg.defaultChoice;
+    ta.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey && ta.value.trim().length > 0) {
+        e.preventDefault();
+        close("answer", ta.value.trim());
+      }
+    });
+    wrap.appendChild(ta);
+    modal.appendChild(wrap);
+    freeTextTa = ta;
+    setTimeout(() => ta.focus(), 0);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "ask-user-actions";
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.className = "ask-user-cancel-btn";
+  cancelBtn.textContent = "Batal";
+  cancelBtn.onclick = () => close("cancel", "");
+  actions.appendChild(cancelBtn);
+  if (showFreeText && freeTextTa) {
+    const submit = document.createElement("button");
+    submit.type = "button";
+    submit.className = "ask-user-submit-btn";
+    submit.textContent = "Kirim";
+    const ta = freeTextTa;
+    submit.onclick = () => {
+      if (ta.value.trim().length > 0) close("answer", ta.value.trim());
+    };
+    actions.appendChild(submit);
+  }
+  modal.appendChild(actions);
+
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+}
 
 // Kick off the handshake
 vscode.postMessage({ kind: "init" });

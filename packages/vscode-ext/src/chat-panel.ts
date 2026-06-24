@@ -152,6 +152,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "pick_excel_files":
         await this.pickExcelFiles();
         break;
+      case "answer_user":
+        this.resolveUserAnswer(msg.id, msg.status, msg.answer);
+        break;
     }
   }
 
@@ -362,12 +365,47 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       systemPrompt,
       projectDir: this.projectDir,
       ...(uploadDir ? { uploadDir } : {}),
+      askUser: (req) => this.askUserViaWebview(req),
       contextOptimize: this.optimizeConfig(),
       tasksEnabled: true,
       autoContinue: this.settings.autoContinue,
       maxIterations: this.settings.maxIterations,
       requestDelayMs: this.settings.requestDelayMs,
     });
+  }
+
+  /** Pending ask_user prompts keyed by id. */
+  private pendingUserQuestions = new Map<
+    string,
+    { resolve: (resp: { status: "answer" | "cancel"; answer: string }) => void }
+  >();
+
+  private askUserViaWebview(req: {
+    question: string;
+    choices?: string[];
+    allowFreeText?: boolean;
+    defaultChoice?: string;
+  }): Promise<{ status: "answer" | "cancel"; answer: string }> {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return new Promise((resolve) => {
+      this.pendingUserQuestions.set(id, { resolve });
+      this.post({
+        kind: "ask_user",
+        id,
+        question: req.question,
+        choices: req.choices ?? [],
+        allowFreeText: req.allowFreeText ?? false,
+        ...(req.defaultChoice ? { defaultChoice: req.defaultChoice } : {}),
+      });
+    });
+  }
+
+  /** Resolve a pending ask_user prompt (called when the webview posts back). */
+  private resolveUserAnswer(id: string, status: "answer" | "cancel", answer: string): void {
+    const entry = this.pendingUserQuestions.get(id);
+    if (!entry) return;
+    this.pendingUserQuestions.delete(id);
+    entry.resolve({ status, answer });
   }
 
   /** Whether summary-mode optimization is currently in effect. */
@@ -1754,5 +1792,105 @@ body {
     transition: none !important;
   }
   .messages { scroll-behavior: auto; }
+}
+
+/* ---------- ask_user modal ---------- */
+.ask-user-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: sf-enter 150ms ease;
+}
+.ask-user-modal {
+  background: var(--vscode-editor-background);
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-md, 8px);
+  padding: 18px 20px;
+  max-width: 420px;
+  width: 90%;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.ask-user-question {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--vscode-foreground);
+  white-space: pre-wrap;
+}
+.ask-user-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ask-user-choice-btn {
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  background: var(--vscode-list-inactiveSelectionBackground, var(--sf-surface-alt));
+  color: var(--vscode-foreground);
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-sm, 4px);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.ask-user-choice-btn:hover {
+  background: var(--vscode-list-hoverBackground);
+  border-color: var(--sf-accent);
+}
+.ask-user-freetext {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ask-user-freetext textarea {
+  width: 100%;
+  resize: vertical;
+  padding: 8px 10px;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-sm, 4px);
+  font-family: var(--vscode-editor-font-family);
+  font-size: 12px;
+}
+.ask-user-freetext textarea:focus {
+  outline: none;
+  border-color: var(--sf-accent);
+}
+.ask-user-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 2px;
+}
+.ask-user-submit-btn {
+  padding: 5px 16px;
+  background: var(--vscode-button-background, #0e639c);
+  color: var(--vscode-button-foreground, #fff);
+  border: none;
+  border-radius: var(--sf-radius-sm, 4px);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ask-user-submit-btn:disabled { opacity: 0.4; cursor: default; }
+.ask-user-cancel-btn {
+  padding: 5px 14px;
+  background: transparent;
+  color: var(--sf-muted);
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-sm, 4px);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ask-user-cancel-btn:hover {
+  background: var(--vscode-list-hoverBackground);
+  color: var(--vscode-foreground);
 }
 `;

@@ -18,6 +18,8 @@ import {
   type ContextOptimizeConfig,
   type Session,
   type ToolRegistry,
+  type AskUserRequest,
+  type AskUserResponse,
 } from "@siberflow/core";
 import type { Provider } from "@siberflow/core";
 import { ui } from "./ui.js";
@@ -51,6 +53,8 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
     enabledToolNames: opts.enabledToolNames,
   });
 
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+
   const agent = new Agent({
     provider: opts.provider,
     registry: opts.registry,
@@ -62,6 +66,11 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
     autoContinue: opts.autoContinue,
     maxIterations: opts.maxIterations,
     requestDelayMs: opts.requestDelayMs,
+    // ask_user tool callback — prompts the user inline via readline. Supports
+    // numbered choices, free text, and cancel (Ctrl+C / empty answer).
+    askUser: async (req) => {
+      return askUserViaReadline(rl, req);
+    },
   });
 
   const ctx: SessionContext = {
@@ -84,8 +93,6 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
       projectDir: opts.projectDir,
     }),
   );
-
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
 
   const choice = await chooseSession(rl, ctx.projectDir);
   if (!choice) {
@@ -687,4 +694,78 @@ async function handleSlashCommand(
       console.log(ui.error(`unknown command: ${cmd} (try /help)`));
       return "ok";
   }
+}
+
+/**
+ * Inline ask_user prompt for CLI. Renders the question, optional numbered
+ * choices, optional free-text input, and a cancel path. Uses the existing
+ * readline interface so it integrates with the terminal UI naturally.
+ */
+async function askUserViaReadline(
+  rl: ReadlineInterface,
+  req: AskUserRequest,
+): Promise<AskUserResponse> {
+  // Render the question.
+  console.log();
+  console.log(ui.info(`🤔 ${req.question}`));
+
+  const showChoices = req.choices && req.choices.length > 0;
+  const showFreeText = req.allowFreeText || !showChoices;
+
+  // Render numbered choices.
+  if (showChoices) {
+    for (let i = 0; i < req.choices!.length; i++) {
+      console.log(ui.info(`  ${i + 1}. ${req.choices![i]}`));
+    }
+    if (showFreeText) {
+      console.log(ui.info(`  n. (type your own answer)`));
+    }
+    console.log(ui.info(`  c. cancel`));
+  }
+
+  const hint = showChoices
+    ? "Pilihan (nomor/n/c)"
+    : showFreeText
+      ? "Jawab (kosongkan untuk batal)"
+      : "Enter untuk batal";
+
+  const raw = await rl.question(`${ui.prompt()}${hint}: `);
+  const answer = raw.trim();
+
+  // Cancel: empty input or "c".
+  if (answer === "" || (showChoices && answer.toLowerCase() === "c")) {
+    console.log(ui.info("✗ dibatalkan"));
+    return { status: "cancel", answer: "" };
+  }
+
+  // Numbered choice selection.
+  if (showChoices) {
+    const n = parseInt(answer, 10);
+    if (Number.isFinite(n) && n >= 1 && n <= req.choices!.length) {
+      const picked = req.choices![n - 1]!;
+      console.log(ui.info(`✓ ${picked}`));
+      return { status: "answer", answer: picked };
+    }
+    // "n" → fall through to free text (if available).
+    if (answer.toLowerCase() !== "n") {
+      // Try to match by label (case-insensitive).
+      const matched = req.choices!.find(
+        (c) => c.toLowerCase() === answer.toLowerCase(),
+      );
+      if (matched) {
+        console.log(ui.info(`✓ ${matched}`));
+        return { status: "answer", answer: matched };
+      }
+    }
+  }
+
+  // Free text.
+  if (showFreeText && answer.length > 0) {
+    console.log(ui.info(`✓ ${answer}`));
+    return { status: "answer", answer };
+  }
+
+  // No match — treat as cancel.
+  console.log(ui.info("✗ pilihan tidak valid, dibatalkan"));
+  return { status: "cancel", answer: "" };
 }
