@@ -1,7 +1,7 @@
 import { fork } from "node:child_process";
 import { existsSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import type { Tool } from "../base.js";
@@ -25,6 +25,17 @@ const WORKER_PATH = join(tmpdir(), "siberflow-browser-worker.mjs");
  * from a temp dir (no node_modules there), so it must import puppeteer-core by
  * absolute path. We try multiple base dirs to cover CLI / Desktop (Electron) /
  * VSCode (bundled CJS) deployments.
+ *
+ * In a packaged Electron app the layout is:
+ *   Siberflow.app/Contents/MacOS/Siberflow      (process.execPath)
+ *   Siberflow.app/Contents/Resources/           (process.resourcesPath)
+ *   Siberflow.app/Contents/Resources/app/       (asar:false app root)
+ *   Siberflow.app/Contents/Resources/app/node_modules/puppeteer-core
+ *
+ * `require.resolve` with `paths` walks UP from each candidate looking for a
+ * `node_modules` dir. Since the app root is `Resources/app` (not `Resources`
+ * itself), we must include `Resources/app` as a candidate explicitly — walking
+ * up from `Resources` would skip the `app/node_modules` subtree.
  */
 function resolvePuppeteerCorePath(): string {
   try {
@@ -35,23 +46,53 @@ function resolvePuppeteerCorePath(): string {
   const candidates: string[] = [process.cwd()];
   if (process.execPath) candidates.push(dirname(process.execPath));
   const resourcesPath = (process as { resourcesPath?: string }).resourcesPath;
-  if (resourcesPath) candidates.push(resourcesPath);
-
-  for (const base of candidates) {
-    const resolved = require_resolve("puppeteer-core", [base]);
-    if (resolved) return resolved;
+  if (resourcesPath) {
+    candidates.push(resourcesPath);
+    // Electron app root — where the unpacked node_modules live.
+    candidates.push(join(resourcesPath, "app"));
+    candidates.push(join(resourcesPath, "app", "node_modules"));
   }
 
-  throw new Error("could not locate puppeteer-core on disk");
+  const entry = findPuppeteerCoreEntry(candidates);
+  if (entry) return entry;
+
+  throw new Error(
+    "could not locate puppeteer-core on disk. " +
+      "Candidates tried: " +
+      candidates.join(", "),
+  );
 }
 
-const moduleRequire = createRequire(pathToFileURL(join(process.cwd(), "package.json")).href);
-function require_resolve(spec: string, paths: string[]): string | undefined {
-  try {
-    return moduleRequire.resolve(spec, { paths }) as string;
-  } catch {
-    return undefined;
+/**
+ * Find puppeteer-core's main entry by checking each candidate base dir for
+ * node_modules/puppeteer-core, then reading the package.json "main" field.
+ * This avoids createRequire/import.meta.url issues in packaged Electron apps.
+ */
+function findPuppeteerCoreEntry(paths: string[]): string | undefined {
+  for (const rawBase of paths) {
+    // Resolve to absolute — candidates from Electron resourcesPath are already
+    // absolute, but defensive resolution handles relative paths in dev.
+    const base = resolve(rawBase);
+    // base itself might be a node_modules dir
+    const candidates = [
+      join(base, "puppeteer-core"),
+      join(base, "node_modules", "puppeteer-core"),
+    ];
+    for (const pkgDir of candidates) {
+      const pkgJsonPath = join(pkgDir, "package.json");
+      if (!existsSync(pkgJsonPath)) continue;
+      try {
+        const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf8")) as { main?: string };
+        const entry = pkg.main ?? "lib/puppeteer/puppeteer-core.js";
+        const fullPath = resolve(pkgDir, entry);
+        if (existsSync(fullPath)) return fullPath;
+        // Some versions use "cjs" entry
+        const cjsEntry = join(pkgDir, "lib", "cjs", "puppeteer", "puppeteer-core.js");
+        if (existsSync(cjsEntry)) return cjsEntry;
+      } catch { /* skip broken package.json */ }
+    }
   }
+  return undefined;
 }
 
 /**
