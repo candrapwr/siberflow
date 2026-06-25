@@ -103,20 +103,26 @@ export default function App() {
   }, [state.notices, dismissNotice]);
 
   // Keep the session list fresh and track the active session.
+  // NOTE: depend only on `state.session?.id` (a stable string), NOT on the
+  // `sessions` object — useSessions returns a new object every render, so
+  // depending on it would cause an infinite re-render loop → 100% CPU.
   useEffect(() => {
     if (state.session) {
       sessions.setActiveId(state.session.id);
     }
-  }, [state.session, sessions]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.session?.id]);
 
   // Refresh the sidebar list when the active session's name changes — this
   // picks up auto-renames (first-prompt substring) so the sidebar shows the
   // new name without a manual reload.
+  // NOTE: depend only on the name string, not the `sessions` object (see above).
   useEffect(() => {
     if (state.session?.name) {
       void sessions.refresh();
     }
-  }, [state.session?.name, sessions]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.session?.name]);
 
   // Track whether the user is pinned to the bottom of the scroll area.
   // Only auto-scroll on new content if they haven't scrolled up to read.
