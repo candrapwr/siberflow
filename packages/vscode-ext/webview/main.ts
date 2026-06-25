@@ -1360,7 +1360,6 @@ function showAskUserModal(msg: {
   allowFreeText: boolean;
   defaultChoice?: string;
 }): void {
-  // Remove any existing modal first (defensive — shouldn't happen).
   document.getElementById("ask-user-overlay")?.remove();
 
   const overlay = document.createElement("div");
@@ -1370,53 +1369,124 @@ function showAskUserModal(msg: {
   const modal = document.createElement("div");
   modal.className = "ask-user-modal";
 
+  // Header with badge.
+  const header = document.createElement("div");
+  header.className = "ask-user-header";
+  const badge = document.createElement("span");
+  badge.className = "ask-user-badge";
+  badge.textContent = "Pertanyaan";
+  header.appendChild(badge);
+  modal.appendChild(header);
+
+  // Scrollable body: question + list scroll together, header/footer fixed.
+  const body = document.createElement("div");
+  body.className = "ask-user-body";
+
+  // Question title.
   const questionEl = document.createElement("div");
   questionEl.className = "ask-user-question";
   questionEl.textContent = msg.question;
-  modal.appendChild(questionEl);
+  body.appendChild(questionEl);
 
   const showChoices = msg.choices.length > 0;
   const showFreeText = msg.allowFreeText || !showChoices;
+  const totalItems = msg.choices.length + (showFreeText ? 1 : 0);
+  const freeTextIndex = showFreeText ? msg.choices.length : -1;
 
   const close = (status: "answer" | "cancel", answer: string) => {
     vscode.postMessage({ kind: "answer_user", id: msg.id, status, answer });
     overlay.remove();
   };
 
-  if (showChoices) {
-    const choicesWrap = document.createElement("div");
-    choicesWrap.className = "ask-user-choices";
-    for (const choice of msg.choices) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "ask-user-choice-btn";
-      btn.textContent = choice;
-      btn.onclick = () => close("answer", choice);
-      choicesWrap.appendChild(btn);
-    }
-    modal.appendChild(choicesWrap);
-  }
+  // List container.
+  const list = document.createElement("div");
+  list.className = "ask-user-list";
 
-  let freeTextTa: HTMLTextAreaElement | null = null;
-  if (showFreeText) {
-    const wrap = document.createElement("div");
-    wrap.className = "ask-user-freetext";
-    const ta = document.createElement("textarea");
-    ta.placeholder = msg.defaultChoice ?? "Ketik jawaban…";
-    ta.rows = 2;
-    if (msg.defaultChoice) ta.value = msg.defaultChoice;
-    ta.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey && ta.value.trim().length > 0) {
-        e.preventDefault();
-        close("answer", ta.value.trim());
-      }
+  // State: 0..choices.length-1 = a choice; freeTextIndex = free text.
+  let selected = 0;
+  let textValue = msg.defaultChoice ?? "";
+  const items: HTMLElement[] = [];
+  let textArea: HTMLTextAreaElement | null = null;
+
+  const updateSelection = (newIdx: number) => {
+    selected = newIdx;
+    items.forEach((el, i) => {
+      el.classList.toggle("selected", i === selected);
     });
-    wrap.appendChild(ta);
-    modal.appendChild(wrap);
-    freeTextTa = ta;
-    setTimeout(() => ta.focus(), 0);
+    if (selected === freeTextIndex && textArea) {
+      // Show textarea inside the free-text item when selected.
+      if (!textArea.parentElement) {
+        items[freeTextIndex]?.appendChild(textArea);
+      }
+      setTimeout(() => textArea?.focus(), 0);
+    }
+  };
+
+  // Build choice items.
+  if (showChoices) {
+    msg.choices.forEach((choice, i) => {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "ask-user-item";
+      item.innerHTML = "";
+      const num = document.createElement("span");
+      num.className = "ask-user-num";
+      num.textContent = String(i + 1);
+      const label = document.createElement("span");
+      label.className = "ask-user-item-label";
+      label.textContent = choice;
+      item.appendChild(num);
+      item.appendChild(label);
+      item.onclick = () => {
+        updateSelection(i);
+      };
+      item.ondblclick = () => close("answer", choice);
+      list.appendChild(item);
+      items.push(item);
+    });
   }
 
+  // Build free-text item.
+  if (showFreeText) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "ask-user-item ask-user-freetext-item";
+    const num = document.createElement("span");
+    num.className = "ask-user-num";
+    num.textContent = String(msg.choices.length + 1);
+    const label = document.createElement("span");
+    label.className = "ask-user-item-label";
+    label.textContent = "Jawaban sendiri";
+    item.appendChild(num);
+    item.appendChild(label);
+
+    textArea = document.createElement("textarea");
+    textArea.className = "ask-user-text-input";
+    textArea.placeholder = msg.defaultChoice ?? "Ketik jawaban…";
+    textArea.rows = 2;
+    textArea.value = textValue;
+    textArea.addEventListener("input", () => {
+      textValue = textArea!.value;
+    });
+    textArea.addEventListener("click", (e) => e.stopPropagation());
+    textArea.addEventListener("keydown", (e) => e.stopPropagation());
+
+    item.onclick = () => updateSelection(freeTextIndex);
+    list.appendChild(item);
+    items.push(item);
+  }
+
+  body.appendChild(list);
+  modal.appendChild(body);
+  updateSelection(0);
+
+  // Keyboard hint.
+  const hint = document.createElement("div");
+  hint.className = "ask-user-hint";
+  hint.innerHTML = "<kbd>↑</kbd><kbd>↓</kbd> pilih · <kbd>Enter</kbd> konfirmasi · <kbd>Esc</kbd> batal";
+  modal.appendChild(hint);
+
+  // Footer actions.
   const actions = document.createElement("div");
   actions.className = "ask-user-actions";
   const cancelBtn = document.createElement("button");
@@ -1425,18 +1495,56 @@ function showAskUserModal(msg: {
   cancelBtn.textContent = "Batal";
   cancelBtn.onclick = () => close("cancel", "");
   actions.appendChild(cancelBtn);
-  if (showFreeText && freeTextTa) {
-    const submit = document.createElement("button");
-    submit.type = "button";
-    submit.className = "ask-user-submit-btn";
-    submit.textContent = "Kirim";
-    const ta = freeTextTa;
-    submit.onclick = () => {
-      if (ta.value.trim().length > 0) close("answer", ta.value.trim());
-    };
-    actions.appendChild(submit);
-  }
+
+  const submitBtn = document.createElement("button");
+  submitBtn.type = "button";
+  submitBtn.className = "ask-user-submit-btn";
+  submitBtn.textContent = "Kirim";
+  submitBtn.onclick = () => {
+    if (selected === freeTextIndex) {
+      if (textValue.trim().length > 0) close("answer", textValue.trim());
+    } else {
+      close("answer", msg.choices[selected] ?? "");
+    }
+  };
+  actions.appendChild(submitBtn);
   modal.appendChild(actions);
+
+  // Global keyboard handler.
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      updateSelection(Math.min(selected + 1, totalItems - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      updateSelection(Math.max(selected - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (selected === freeTextIndex) {
+        if (textValue.trim().length > 0) {
+          close("answer", textValue.trim());
+        }
+      } else {
+        close("answer", msg.choices[selected] ?? "");
+      }
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      close("cancel", "");
+    }
+  };
+  overlay.addEventListener("keydown", onKey);
+  // Make overlay focusable so keydown works.
+  overlay.tabIndex = -1;
+  setTimeout(() => overlay.focus(), 0);
+
+  // Cleanup handler when removed.
+  const observer = new MutationObserver(() => {
+    if (!document.getElementById("ask-user-overlay")) {
+      overlay.removeEventListener("keydown", onKey);
+      observer.disconnect();
+    }
+  });
+  observer.observe(document.body, { childList: true });
 
   overlay.appendChild(modal);
   document.body.appendChild(overlay);

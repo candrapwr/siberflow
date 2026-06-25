@@ -45,7 +45,7 @@ function resolvePuppeteerCorePath(): string {
   throw new Error("could not locate puppeteer-core on disk");
 }
 
-const moduleRequire = createRequire(import.meta.url);
+const moduleRequire = createRequire(pathToFileURL(join(process.cwd(), "package.json")).href);
 function require_resolve(spec: string, paths: string[]): string | undefined {
   try {
     return moduleRequire.resolve(spec, { paths }) as string;
@@ -133,32 +133,35 @@ function ensureWorkerFile(): void {
 export const runBrowserTool: Tool = {
   name: "run_browser",
   description:
-    "Drive a headless Chrome/Edge browser via the Puppeteer API to navigate, scrape, or interact " +
-    "with web pages. Use this when a page loads content via JavaScript/AJAX (so a plain fetch " +
-    "returns an empty shell), when you need to click/fill/login/wait, or when you must render a " +
-    "page before reading it. The browser is the user's installed Chrome or Edge (no download).\n\n" +
-    "PARAMETERS:\n" +
-    "- `script`: an async function expression taking ({ page, browser }). `page` is a Puppeteer " +
-    "Page (already navigated to `url` if provided). Use methods like page.click(), page.type(), " +
-    "page.waitForSelector(), page.$$eval(), page.content(), page.screenshot(). Return a string " +
-    "(or any JSON value) — it becomes the tool result.\n" +
-    "- `url` (optional): navigate here first. Omit if the script navigates itself.\n" +
-    "- `timeoutMs` (optional, default 30000, max 60000).\n\n" +
-    "EXAMPLES:\n" +
-    '  Title:  "async ({ page }) => await page.title()"\n' +
-    '  Extract:  "async ({ page }) => await page.$$eval(\'.item\', els => els.map(e => e.textContent.trim()))"\n' +
-    '  Click+wait:  "async ({ page }) => { await page.click(\'button.more\'); await page.waitForSelector(\'.loaded\'); return await page.$$eval(\'.row\', rs => rs.map(r => r.textContent)); }"\n\n' +
-    "NOTES: output capped at 200KB. If Chrome/Edge is not installed, the tool errors with a clear " +
-    "message — install Google Chrome or Microsoft Edge to use it.",
+    "Launch a real headless Chrome/Edge browser and run any Puppeteer code you write. " +
+    "You get full control — navigate, click, type, wait, evaluate, screenshot, intercept " +
+    "network, manage cookies, open multiple tabs, download files, fill & submit forms, " +
+    "log in, test flows, extract data, generate PDFs, etc. Essentially anything a human " +
+    "can do in a browser, you can automate here.\n\n" +
+    "You receive `{ page, browser }`: `page` is a Puppeteer Page already navigated to `url` " +
+    "(if you provided one); `browser` is the Browser instance so you can open more pages. " +
+    "Write Puppeteer API calls freely. Return a string or any JSON-serializable value — " +
+    "that becomes the tool result shown to you.\n\n" +
+    "TIPS:\n" +
+    "- The browser is the user's installed Chrome or Edge (no separate download).\n" +
+    "- If a site needs login, you can fill the form and submit it within the script.\n" +
+    "- Use page.waitForSelector() for content that appears after JS/AJAX runs.\n" +
+    "- Use page.$$eval() to extract arrays of data from matched elements.\n" +
+    "- IMPORTANT: `page.waitForTimeout(ms)` was REMOVED in Puppeteer v22+. To " +
+    "sleep, use `await new Promise(r => setTimeout(r, ms))` instead.\n" +
+    "- Prefer waiting for a specific selector over a fixed sleep whenever possible.\n" +
+    "- You are free to use any Puppeteer method — the sandbox is isolated per call.",
   parameters: {
     type: "object",
     properties: {
-      url: { type: "string", description: "Initial URL to navigate to before the script runs." },
+      url: { type: "string", description: "Optional initial URL to navigate to before the script runs. Omit if the script handles navigation itself." },
       script: {
         type: "string",
-        description: 'An async function expression taking ({ page, browser }). Example: "async ({ page }) => await page.title()"',
+        description:
+          'An async function expression receiving ({ page, browser }). Write any Puppeteer code. ' +
+          'Example: "async ({ page, browser }) => { await page.goto(\'https://example.com\'); return await page.title(); }"',
       },
-      timeoutMs: { type: "integer", description: "Overall timeout in ms (default 30000, max 60000).", minimum: 1000, maximum: MAX_TIMEOUT_MS },
+      timeoutMs: { type: "integer", description: "Optional overall timeout in ms (default 30000, max 60000).", minimum: 1000, maximum: MAX_TIMEOUT_MS },
     },
     required: ["script"],
     additionalProperties: false,
