@@ -58,7 +58,7 @@ export type ViewToExt =
 
 export type ProviderName = "deepseek" | "gemini" | "openai" | "openai-responses" | "grok" | "qwen" | "zai" | "claude";
 
-export type OptimizeMode = "drop" | "summary";
+export type OptimizeMode = "drop" | "summary" | "recent";
 
 export interface SettingsValues {
   provider: ProviderName;

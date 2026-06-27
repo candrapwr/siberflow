@@ -109,8 +109,10 @@ When in doubt, make a checklist — the user prefers seeing progress.
 
 /**
  * Summary-mode context optimization breadcrumb explanation — appended when
- * optimize mode is "summary" (tool-signature [SUMMARY] tags appear on past
- * user messages).
+ * the optimize mode emits `[SUMMARY]` tool-signature tags on past user
+ * messages. That covers both the "summary" mode (all past turns) and the
+ * "recent" mode (all past turns except the most recent completed one).
+ * Callers set `summaryMode = true` for either of those modes.
  */
 export const SUMMARY_GUIDANCE = `\n\n# [SUMMARY] tags in user messages
 Some user messages carry a trailing \`[SUMMARY]\` block (e.g. \`[SUMMARY]\\nexec("df -h")\\nwrite_file("src/foo.ts")\`). \

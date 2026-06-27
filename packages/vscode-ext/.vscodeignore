@@ -4,6 +4,7 @@ src/**
 webview/**
 **/tsconfig*.json
 **/esbuild.config.*
+**/scripts/**
 **/*.map
 **/*.ts
 .env
@@ -14,3 +15,6 @@ node_modules/**
 !LICENSE
 !node_modules/@siberflow/core/dist/**
 !node_modules/marked/**
+# NOTE: puppeteer-core is staged to vendor/ at package time (see
+# scripts/stage-puppeteer.mjs) because vsce ignores ALL of node_modules/
+# regardless of whitelists. Don't try to whitelist it under node_modules/.

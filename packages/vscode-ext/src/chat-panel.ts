@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { copyFile, mkdir, stat } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
   Agent,
@@ -39,6 +40,47 @@ import type { Message } from "@siberflow/core";
 
 const VERSION = "0.1.0";
 
+/**
+ * Resolve the absolute path to the puppeteer-core package directory from the
+ * extension's perspective. The host knows the extension's real install dir
+ * (extensionPath) — core does not, because in a VSCode extension process
+ * .execPath is the VSCode binary, not the extension.
+ *
+ * We try, in order:
+ *   1. <extensionPath>/vendor/puppeteer-core — packaged VSIX. The build pipeline
+ *      (scripts/stage-puppeteer.mjs) copies puppeteer-core here before `vsce
+ *      package`, because vsce ignores ALL of node_modules/.
+ *   2. <extensionPath>/node_modules/puppeteer-core — a real local install (rare
+ *      in this monorepo due to npm hoisting, but covers standalone installs).
+ *   3. Walk UP from <extensionPath> looking for a node_modules/puppeteer-core —
+ *      covers the DEBUG case, where the extension runs from its source folder
+ *      inside the workspace and puppeteer-core is hoisted to the workspace
+ *      root's node_modules/.
+ *
+ * Returns the package directory (NOT the main entry file — core reads
+ * package.json's "main" field itself), or undefined if nothing was found.
+ */
+function resolvePuppeteerCorePath(extensionPath: string): string | undefined {
+  const candidates = [
+    join(extensionPath, "vendor", "puppeteer-core"),
+    join(extensionPath, "node_modules", "puppeteer-core"),
+  ];
+  // Walk up from the extension dir to find a hoisted node_modules. This is the
+  // common DEBUG layout: <workspace>/packages/vscode-ext (extensionPath) with
+  // the dep hoisted to <workspace>/node_modules.
+  let dir = extensionPath;
+  for (let i = 0; i < 8; i++) {
+    const parent = join(dir, "..");
+    if (parent === dir) break; // reached filesystem root
+    candidates.push(join(parent, "node_modules", "puppeteer-core"));
+    dir = parent;
+  }
+  for (const c of candidates) {
+    if (existsSync(join(c, "package.json"))) return c;
+  }
+  return undefined;
+}
+
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "siberflow.chatView";
 
@@ -64,6 +106,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     this.projectDir = folder.uri.fsPath;
     this.settings = readSettings();
+    // Tell core where puppeteer-core lives. In a VSCode extension,
+    // process.execPath is the VSCode binary itself, so core's own resolution
+    // heuristics (which key off execPath / cwd) can't find it. The host is the
+    // only place that KNOWS the extension's real install dir, so we resolve the
+    // package here and hand core the absolute path via this env var.
+    // See core/src/tools/browser/browser.ts resolvePuppeteerCorePath().
+    const ppPath = resolvePuppeteerCorePath(this.ctx.extensionPath);
+    if (ppPath) {
+      process.env.SIBERFLOW_PUPPETEER_CORE_PATH = ppPath;
+    }
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -410,20 +462,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   /** Whether summary-mode optimization is currently in effect. */
   private summaryModeActive(): boolean {
+    // Breadcrumb ([SUMMARY] tags) is emitted in both "summary" and "recent"
+    // modes — they differ only in WHICH turns get compressed, not in the
+    // breadcrumb format. So the SUMMARY_GUIDANCE prompt applies to both.
     return (
       this.settings.contextOptimize &&
-      this.settings.contextOptimizeMode === "summary"
+      (this.settings.contextOptimizeMode === "summary" ||
+        this.settings.contextOptimizeMode === "recent")
     );
   }
 
   /** Build the ContextOptimizeConfig shared by the agent and persisters. */
   private optimizeConfig(): {
     enabled: boolean;
-    mode?: "drop" | "summary";
+    mode?: "drop" | "summary" | "recent";
   } {
     return {
       enabled: this.settings.contextOptimize,
-      ...(this.settings.contextOptimizeMode !== "summary"
+      ...(this.settings.contextOptimizeMode !== "recent"
         ? { mode: this.settings.contextOptimizeMode }
         : {}),
     };
@@ -864,7 +920,7 @@ function readSettings(): SettingsValues {
     provider: cfg.get<ProviderName>("provider", "deepseek"),
     model: cfg.get<string>("model", ""),
     contextOptimize: cfg.get<boolean>("contextOptimize", true),
-    contextOptimizeMode: cfg.get<OptimizeMode>("contextOptimizeMode", "summary"),
+    contextOptimizeMode: cfg.get<OptimizeMode>("contextOptimizeMode", "recent"),
     autoContinue: cfg.get<boolean>("autoContinue", true),
     hideTools: cfg.get<boolean>("hideTools", false),
     debug: cfg.get<boolean>("debug", false),

@@ -138,17 +138,18 @@ export const SettingsModal = memo(function SettingsModal({
         <div className="form-section">
           <div className="form-section-title">Context optimization</div>
           <div className="form-row inline">
-            <label>Context optimization (drop/summary)</label>
+            <label>Context optimization (drop/summary/recent)</label>
             <input type="checkbox" checked={form.contextOptimize} onChange={(e) => set("contextOptimize", e.target.checked)} />
           </div>
           <div className="form-row">
             <label>Context optimize mode</label>
             <select
               value={form.contextOptimizeMode}
-              onChange={(e) => set("contextOptimizeMode", e.target.value as "drop" | "summary")}
+              onChange={(e) => set("contextOptimizeMode", e.target.value as "drop" | "summary" | "recent")}
             >
               <option value="drop">drop</option>
               <option value="summary">summary</option>
+              <option value="recent">recent</option>
             </select>
           </div>
         </div>

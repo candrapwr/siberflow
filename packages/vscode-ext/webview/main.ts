@@ -379,7 +379,7 @@ function showSettingsModal(
     <div class="form-section">
       <div class="form-section-title">Context optimization</div>
       <div class="form-row inline">
-        <label for="cfg-optimize">Context optimization (drop/summary)</label>
+        <label for="cfg-optimize">Context optimization (drop/summary/recent)</label>
         <input type="checkbox" id="cfg-optimize">
       </div>
       <div class="form-row">
@@ -387,6 +387,7 @@ function showSettingsModal(
         <select id="cfg-optmode">
           <option value="drop">drop</option>
           <option value="summary">summary</option>
+          <option value="recent">recent</option>
         </select>
       </div>
     </div>
@@ -454,7 +455,7 @@ function showSettingsModal(
     const apiKeyRaw = (modal.querySelector("#cfg-apikey") as HTMLInputElement).value;
     const model = modelInput.value;
     const contextOptimize = (modal.querySelector("#cfg-optimize") as HTMLInputElement).checked;
-    const contextOptimizeMode = (modal.querySelector("#cfg-optmode") as HTMLSelectElement).value as "drop" | "summary";
+    const contextOptimizeMode = (modal.querySelector("#cfg-optmode") as HTMLSelectElement).value as "drop" | "summary" | "recent";
     const autoContinue = (modal.querySelector("#cfg-autocontinue") as HTMLInputElement).checked;
     const hideTools = (modal.querySelector("#cfg-hidetools") as HTMLInputElement).checked;
     const debug = (modal.querySelector("#cfg-debug") as HTMLInputElement).checked;
@@ -1107,24 +1108,8 @@ function renderEmptyState(): HTMLElement {
   el.innerHTML = `
     <div class="empty-icon">${ICONS.brand}</div>
     <div class="empty-title">How can I help?</div>
-    <div class="empty-copy">Ask for code edits, file inspection, shell commands, or database queries. Tools: file ops, <code>exec</code>, <code>db_query</code>.</div>
-    <div class="empty-actions">
-      <button class="empty-chip" data-prompt="Explain what this codebase does and its main entry points">Explain this codebase</button>
-      <button class="empty-chip" data-prompt="Review the current file for bugs and suggest improvements">Review for bugs</button>
-      <button class="empty-chip" data-prompt="Refactor the selected code for readability">Refactor my code</button>
-    </div>
+    <div class="empty-copy">Your AI pair programmer is ready. Ask anything, build anything — from quick questions to full features.</div>
   `;
-  // Wire up quick-action chips to fill the composer.
-  el.querySelectorAll(".empty-chip").forEach((chip) => {
-    chip.addEventListener("click", () => {
-      const prompt = (chip as HTMLElement).dataset.prompt ?? "";
-      const ta = document.getElementById("input") as HTMLTextAreaElement | null;
-      if (!ta) return;
-      ta.value = prompt;
-      ta.dispatchEvent(new Event("input"));
-      ta.focus();
-    });
-  });
   return el;
 }
 

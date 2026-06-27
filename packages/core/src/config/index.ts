@@ -52,17 +52,22 @@ function resolveContextOptimize(env: NodeJS.ProcessEnv): ContextOptimizeConfig {
   // want the raw, unoptimized view set SIBERFLOW_CONTEXT_OPTIMIZE=false.
   const enabled = env.SIBERFLOW_CONTEXT_OPTIMIZE !== "false";
   const mode = resolveOptimizeMode(env);
-  // Omit the mode field when it equals the default ("summary") so the
+  // Omit the mode field when it equals the default ("recent") so the
   // serialized config stays minimal; only emit it for the non-default case.
-  return { enabled, ...(mode !== "summary" ? { mode } : {}) };
+  return { enabled, ...(mode !== "recent" ? { mode } : {}) };
 }
 
 function resolveOptimizeMode(env: NodeJS.ProcessEnv): OptimizeMode {
-  // Default "summary" (signature breadcrumb). Set SIBERFLOW_CONTEXT_OPTIMIZE_MODE=drop
-  // for the more compact drop-everything behavior. Only honored when
-  // optimization is enabled; ignored otherwise.
+  // Default "recent" (signature breadcrumb, but keep the most recent
+  // completed turn's tool activity intact — compress only older turns).
+  // Other modes:
+  //   "drop"    — compact drop-everything behavior (no breadcrumb).
+  //   "summary" — signature breadcrumb on ALL past turns.
+  // Only honored when optimization is enabled; ignored otherwise.
   const raw = env.SIBERFLOW_CONTEXT_OPTIMIZE_MODE?.toLowerCase();
-  return raw === "drop" ? "drop" : "summary";
+  if (raw === "drop") return "drop";
+  if (raw === "summary") return "summary";
+  return "recent";
 }
 
 function resolveMaxIterations(env: NodeJS.ProcessEnv): number {
