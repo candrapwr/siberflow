@@ -335,15 +335,20 @@ export class AgentHost {
   }
 
   private summaryModeActive(): boolean {
+    // Breadcrumb ([SUMMARY] tags) is emitted in both "summary" and "recent"
+    // modes — they differ only in WHICH turns get compressed, not in the
+    // breadcrumb format. So the SUMMARY_GUIDANCE prompt applies to both.
     return (
-      this.settings.contextOptimize && this.settings.contextOptimizeMode === "summary"
+      this.settings.contextOptimize &&
+      (this.settings.contextOptimizeMode === "summary" ||
+        this.settings.contextOptimizeMode === "recent")
     );
   }
 
-  private optimizeConfig(): { enabled: boolean; mode?: "drop" | "summary" } {
+  private optimizeConfig(): { enabled: boolean; mode?: "drop" | "summary" | "recent" } {
     return {
       enabled: this.settings.contextOptimize,
-      ...(this.settings.contextOptimizeMode !== "summary"
+      ...(this.settings.contextOptimizeMode !== "recent"
         ? { mode: this.settings.contextOptimizeMode }
         : {}),
     };

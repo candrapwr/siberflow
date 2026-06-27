@@ -1,6 +1,6 @@
 import type { Message } from "./types.js";
 
-export type OptimizeMode = "drop" | "summary";
+export type OptimizeMode = "drop" | "summary" | "recent";
 
 export interface ContextOptimizeConfig {
   enabled: boolean;
@@ -16,7 +16,7 @@ export interface OptimizationStats {
 
 export const DEFAULT_OPTIMIZE_CONFIG: ContextOptimizeConfig = {
   enabled: true,
-  mode: "summary",
+  mode: "recent",
 };
 
 /**
@@ -27,8 +27,8 @@ export const DEFAULT_OPTIMIZE_CONFIG: ContextOptimizeConfig = {
  *
  * Layer 1: deterministic, no LLM call.
  *
- * Two modes share the same "what to drop" rule — the ONLY difference is what
- * (if anything) is left behind as a breadcrumb for the model:
+ * Three modes share the same "what to drop" rule — the difference is what
+ * (if anything) is left behind as a breadcrumb, and which turns get it:
  *
  *   drop    — remove every tool result and every assistant message that made
  *             tool calls. Keep system/user/content-only-assistant messages.
@@ -43,7 +43,23 @@ export const DEFAULT_OPTIMIZE_CONFIG: ContextOptimizeConfig = {
  *             while still telling the model WHAT was touched in that turn
  *             without leaking potentially-stale values.
  *
- * In both modes, after dropping we merge any adjacent same-role messages
+ *   recent  — like "summary" (signature breadcrumbs on dropped turns), but
+ *             keeps the MOST RECENT completed turn's tool activity UNTOUCHED
+ *             so the model still has the last tool results verbatim. Only
+ *             turns older than that last turn get compressed. Use this when
+ *             the immediately preceding tool context matters and shouldn't
+ *             be reduced to a signature yet.
+ *
+ *             When invoked, `optimizeContext` is called AFTER the current
+ *             turn's user message was pushed, so "the last completed turn"
+ *             = the second-to-last user message onward. Everything before it
+ *             is compressed (with signatures); from that user message to the
+ *             end (including the current turn, appended later as `extras`)
+ *             stays full. If there's no second-to-last user message (i.e.
+ *             this is the first or second turn), nothing is compressed and
+ *             behavior is identical to optimization disabled.
+ *
+ * In all modes, after dropping we merge any adjacent same-role messages
  * defensively (dropping a turn's tool activity can otherwise leave two
  * user or two assistant messages back to back).
  */
@@ -140,8 +156,62 @@ export function optimizeContext(
     return { messages: [...messages], stats };
   }
 
-  const mode: OptimizeMode = config.mode ?? "summary";
+  const mode: OptimizeMode = config.mode ?? "recent";
 
+  // "recent" keeps the most recent completed turn's tool activity intact and
+  // compresses (with summary signatures) everything strictly before it. The
+  // current turn's user message is the LAST message here (already pushed by
+  // the agent before calling us), so the last completed turn = everything
+  // from the second-to-last user message onward. If there's no such message
+  // (first/second turn), nothing is eligible — behave like disabled.
+  if (mode === "recent") {
+    const keepStart = findSecondLastUserIndex(messages);
+    if (keepStart === -1) {
+      return { messages: [...messages], stats };
+    }
+    const head = compressToolHistory(messages.slice(0, keepStart), "summary", stats);
+    const tail = messages.slice(keepStart);
+    // head ends in a system/user/assistant content message; tail starts with
+    // a user message — roles can't collide, so no merge needed. But run it
+    // anyway defensively (cheap, and keeps the invariant for callers).
+    return { messages: mergeAdjacent([...head, ...tail]), stats };
+  }
+
+  // drop / summary compress the entire message list.
+  return { messages: compressToolHistory(messages, mode, stats), stats };
+}
+
+/**
+ * Find the index of the SECOND-to-last user message in the list. Returns -1
+ * if there are fewer than two user messages (the caller treats that as "no
+ * turn to compress"). Used by the "recent" mode to locate where the most
+ * recent completed turn begins.
+ */
+function findSecondLastUserIndex(messages: readonly Message[]): number {
+  let count = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]!.role === "user") {
+      count++;
+      if (count === 2) return i;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Single-pass tool-activity compression shared by the drop/summary modes.
+ * `recent` calls this with mode "summary" on the prefix it wants compressed.
+ * Mutates the provided `stats` accumulator (callers merge stats back).
+ *
+ * Returns the compressed message list, with adjacent same-role messages
+ * defensively merged (dropping a turn's tool activity can otherwise leave
+ * two user or two assistant messages back to back).
+ */
+function compressToolHistory(
+  messages: readonly Message[],
+  mode: "drop" | "summary",
+  stats: OptimizationStats,
+): Message[] {
   // Pass 1: drop tool activity, collecting tool names per user turn for the
   // summary breadcrumb. `pendingUserIdx` tracks the user message that opened
   // the current turn so we can tag it once we know the full tool set.
@@ -215,8 +285,18 @@ export function optimizeContext(
   finalizePendingUser();
 
   // Pass 2: defensive merge of adjacent same-role messages.
+  return mergeAdjacent(result);
+}
+
+/**
+ * Merge adjacent same-role messages (user/user, assistant/assistant) into a
+ * single message so the output stays a valid alternating role sequence.
+ * Assistant content is guaranteed non-empty (falls back to a space) to avoid
+ * strict OpenAI-compatible servers rejecting empty assistant content.
+ */
+function mergeAdjacent(messages: readonly Message[]): Message[] {
   const merged: Message[] = [];
-  for (const m of result) {
+  for (const m of messages) {
     const last = merged[merged.length - 1];
     if (last && last.role === "user" && m.role === "user") {
       merged[merged.length - 1] = {
@@ -237,6 +317,5 @@ export function optimizeContext(
     }
     merged.push(m);
   }
-
-  return { messages: merged, stats };
+  return merged;
 }

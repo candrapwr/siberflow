@@ -51,24 +51,26 @@ siberflow/
     │       │   ├── cli/
     │       │   │   ├── exec.ts    # shell exec, cwd=projectDir
     │       │   │   └── index.ts
-    │       │   ├── excel/
-    │       │   │   ├── read.ts    # read_excel — multi-sheet, table/json output
-    │       │   │   ├── write.ts   # write_excel — multi-sheet, styled output
-    │       │   │   ├── script.ts  # write_excel_script — full exceljs API via vm sandbox
-    │       │   │   ├── styles.ts  # theme presets, named colors, number formats
-    │       │   │   └── index.ts   # excelTools[]
-    │       │   ├── ssh/
-    │       │   │   ├── exec.ts    # ssh_exec — remote shell over SSH2
-    │       │   │   ├── sftp.ts    # sftp — remote file transfer
-    │       │   │   └── index.ts
-    │       │   ├── web/
-    │       │   │   ├── scrape.ts  # web_scrape — headless Chromium via Playwright (child_process worker)
-    │       │   │   ├── ensure-chromium.ts  # download-on-first-use helper
-    │       │   │   └── index.ts   # webTools[]
-    │       │   ├── task/
-    │       │   │   ├── update.ts  # task_update tool (opt-in via SIBERFLOW_TASKS)
-    │       │   │   └── index.ts
-    │       │   └── index.ts       # createDefaultRegistry({ tasks?, filesystem?, enabledTools? })
+  │       │   ├── excel/
+  │       │   │   ├── read.ts    # read_excel — multi-sheet, table/json output
+  │       │   │   ├── write.ts   # write_excel — multi-sheet, styled output
+  │       │   │   ├── script.ts  # write_excel_script — full exceljs API via vm sandbox
+  │       │   │   ├── styles.ts  # theme presets, named colors, number formats
+  │       │   │   └── index.ts   # excelTools[]
+  │       │   ├── ssh/
+  │       │   │   ├── exec.ts    # ssh_exec — remote shell over SSH2
+  │       │   │   ├── sftp.ts    # sftp — remote file transfer
+  │       │   │   └── index.ts
+  │       │   ├── browser/
+  │       │   │   ├── browser.ts # run_browser — headless Chrome/Edge via Puppeteer (child_process worker)
+  │       │   │   └── index.ts   # browserTools[]
+  │       │   ├── interaction/
+  │       │   │   ├── ask-user.ts # ask_user — modal prompt ke user (always-on)
+  │       │   │   └── index.ts
+  │       │   ├── task/
+  │       │   │   ├── update.ts  # task_update tool (always-on)
+  │       │   │   └── index.ts
+  │       │   └── index.ts       # createDefaultRegistry({ tasks?, filesystem?, enabledTools? })
     │       ├── session/
     │       │   ├── types.ts       # Session, SessionSummary, SESSION_FORMAT_VERSION
     │       │   └── store.ts       # save/load/list/delete/clear + uploadsDirFor/cleanupUploads
@@ -204,16 +206,17 @@ interface ToolContext {
 
 Tool return string yang akan dikirim balik ke LLM sebagai `tool` message content. Throw `Error` untuk kegagalan — `ToolRegistry.execute()` yang menangkap & convert ke "Error: ..." string.
 
-Default registry saat ini memuat tujuh kategori tool:
+Default registry saat ini memuat delapan kategori tool:
 - file tools: `read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`
 - cli tool: `exec`
 - database tool: `db_query` (MySQL / PostgreSQL / SQLite)
 - excel tools: `read_excel`, `write_excel`, `write_excel_script` (multi-sheet `.xlsx`, styled output + full exceljs API via vm sandbox)
 - ssh tools: `ssh_exec` (remote shell via SSH2), `sftp` (remote file transfer)
-- web tools: `web_scrape` (headless Chromium via Playwright, child_process worker)
-- task tool: `task_update` (opt-in via `tasks: true` — silent di semua interface, bypass enabledTools)
+- browser tool: `run_browser` (headless Chrome/Edge via Puppeteer, child_process worker)
+- interaction tool: `ask_user` (modal prompt ke user di host UI — always-on)
+- task tool: `task_update` (always-on — silent di semua interface, bypass enabledTools)
 
-**Per-tool toggle (`enabledTools`)**: tool selain file ops default OFF — opt-in via settings/env supaya prompt ringan + blast-radius security kecil. File + cli + excel tools juga gated `filesystem: true` (butuh workdir). db / ssh / web tools terdaftar tanpa workdir. `task_update` bypass enabledTools (gated `tasks`).
+**Per-tool toggle (`enabledTools`)**: tool selain file ops default OFF — opt-in via settings/env supaya prompt ringan + blast-radius security kecil. File + cli + excel tools juga gated `filesystem: true` (butuh workdir). db / ssh / browser tools terdaftar tanpa workdir. `task_update` dan `ask_user` selalu ter-register (bypass `enabledTools`).
 
 Default enabled: `read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir` saja (`DEFAULT_ENABLED_TOOLS` di `tools/index.ts`). Enable lain via settings atau `SIBERFLOW_TOOLS` env (CLI).
 
@@ -343,20 +346,25 @@ Untuk layout Excel kompleks (merge cells, multi-level header, conditional format
 
 **Pola worker** yang penting: compile + invoke script dalam **satu `runInContext`** call (embed script sebagai static source text dalam wrapper IIFE), BUKAN return function dari sandbox lalu invoke di host. Kalau di-invoke di host, timeout vm gak cover execution — infinite loop gak ke-kill (bug yang sudah di-fix). Lihat `tools/excel/script.ts` untuk pattern lengkap.
 
-### Web scraping (`web_scrape`)
+### Browser tool (`run_browser`)
 
-Tool scraping/interaksi halaman web via headless Chromium (Playwright). Pakai dependency `playwright-core` (zero native deps; Chromium di-download terpisah). Terdaftar di bucket network-only (sama seperti `db`/`ssh`) — gak butuh workdir.
+Tool scraping/interaksi halaman web via **headless Chrome/Edge menggunakan Puppeteer**. Pakai dependency `puppeteer-core` (zero native deps; **tidak ada download Chromium** — pakai Chrome/Edge yang sudah terinstall di sistem user). Terdaftar di bucket network-only (sama seperti `db`/`ssh`) — gak butuh workdir.
 
 **Cara kerja**:
-1. `ensureChromium()` cek cache; kalau belum ada, spawn `npx playwright install chromium` (download ~150MB ke OS cache, satu kali)
-2. Tool spawn **child process worker** via `fork()` — worker source di-embed sebagai string di `scrape.ts`, ditulis ke `<tmpdir>/siberflow-scrape-worker.mjs` saat runtime (supaya work di bundled CJS context yang gak punya `import.meta.url`)
-3. Worker launch Chromium headless, `page.goto(url)` kalau ada, eval script Playwright AI-supplied `async ({page, browser}) => {...}`, kirim result via IPC `process.send(...)`
-4. Host tunggu result atau kill worker via `killTree(pid)` (`process.kill(-pid)` Unix / `taskkill /T` Windows — reuse pattern dari `cli/exec.ts`)
-5. Output di-truncate 200K chars
+1. Tool spawn **child process worker** via `fork()` — worker source di-embed sebagai string di `browser.ts`, ditulis ke `<tmpdir>/siberflow-browser-worker.mjs` saat runtime (supaya work di bundled CJS context yang gak punya `import.meta.url`)
+2. Worker launch Chrome atau Edge headless (channel `'chrome'` → fallback `'msedge'`), `page.goto(url)` kalau ada, eval script Puppeteer AI-supplied `async ({page, browser}) => {...}`, kirim result via IPC `process.send(...)`
+3. Host tunggu result atau kill worker via `killTree(pid)` (`process.kill(-pid)` Unix / `taskkill /T` Windows — reuse pattern dari `cli/exec.ts`)
+4. Output di-truncate 200K chars
 
-**Kenapa child_process, bukan vm sandbox?** Playwright async-only (`await page.goto()`). `vm.runInContext` sync dan blocking — gak bisa `await`. Timeout async code di vm unreliable (sudah di-alami di `write_excel_script` infinite loop). Child process isolation lebih clean: worker gak punya akses host memory/session/AgentHost; env minimal (PATH, HOME, PLAYWRIGHT_BROWSERS_PATH); worst case script AI menulis kode malicious → worker crash/isolated → gak affect host.
+**Kenapa child_process, bukan vm sandbox?** Puppeteer async-only (`await page.goto()`). `vm.runInContext` sync dan blocking — gak bisa `await`. Timeout async code di vm unreliable (sudah di-alami di `write_excel_script` infinite loop). Child process isolation lebih clean: worker gak punya akses host memory/session/AgentHost; env minimal (PATH, HOME, dll); worst case script AI menulis kode malicious → worker crash/isolated → gak affect host.
 
-**Resolved path**: worker import `playwright-core` via absolute path (di-resolve di host pakai `createRequire(pathToFileURL(cwd/package.json))`, inject ke worker source). Karena worker di temp dir tanpa `node_modules`, bare `import "playwright-core"` gak resolve.
+**Resolved path** (`resolvePuppeteerCorePath()`): worker import `puppeteer-core` via absolute `file://` URL yang di-inject ke worker source. Worker di-run dari temp dir tanpa `node_modules`, jadi bare `import "puppeteer-core"` gak resolve. Resolution order di `browser.ts`:
+1. Env var `SIBERFLOW_PUPPETEER_CORE_PATH` — override eksplisit dari host. Wajib di VSCode extension (process.execPath = VSCode binary, jadi heuristik core gak nemu). Host (`chat-panel.ts`) resolve path sendiri: cek `<extensionPath>/vendor/puppeteer-core` (VSIX packaged) → `<extensionPath>/node_modules/puppeteer-core` → walk-up parent dirs cari hoisted `node_modules/puppeteer-core` (debug mode).
+2. `createRequire(cwd)` — CLI / dev / ESM install
+3. `createRequire(import.meta.url)` — cwd-independent (packaged apps)
+4. Manual scan candidate dirs (Electron `resourcesPath`, `execPath` dir)
+
+**Packaging VSCode (penting)**: `vsce` meng-ignore seluruh `node_modules/` walau di-whitelist di `.vscodeignore`. Karena ini monorepo (npm workspaces), `puppeteer-core` ter-hoist ke root. Solusinya: script `scripts/stage-puppeteer.mjs` (hook `prepackage`/`postpackage`) copy `puppeteer-core` dari root ke `vendor/puppeteer-core` sebelum `vsce package`, hapus setelahnya. `chat-panel.ts` arahkan env var ke `<extensionPath>/vendor/puppeteer-core`.
 
 ### Per-tool toggle (`enabledTools`)
 
@@ -432,34 +440,38 @@ Ini mengatasi respons panjang yang terpotong di tengah kalimat. Untuk masalah co
 
 ### Context optimization (Layer 1)
 
-[optimize.ts](packages/core/src/agent/optimize.ts) → `optimizeContext(messages, config)` membuang seluruh jejak tool dari turn sebelumnya, menyisakan hanya **teks final assistant per turn**. Returns array baru; input tidak di-mutasi.
+[optimize.ts](packages/core/src/agent/optimize.ts) → `optimizeContext(messages, config)` membuang jejak tool dari turn sebelumnya supaya context tetap ramping. Returns array baru; input tidak di-mutasi.
 
-Dibuang:
+**Tiga mode** (`OptimizeMode`), via `SIBERFLOW_CONTEXT_OPTIMIZE_MODE`:
+
+- **`recent`** (default) — sisakan signature `[SUMMARY]` pada turn-turn lama, TAPI pertahankan **1 turn terakhir sebelum current turn tetap utuh** (tool calls + results verbatim). Hanya turn yang lebih tua dari itu dikompres. Tujuannya: konteks tool terakhir tidak hilang dulu — penting untuk workflow trial-and-error seperti `run_browser` (AI iterasi script sampai dapat yang pas, lalu pakai di turn berikutnya).
+  - Logika: cari index **second-to-last user message** (user terakhir = current turn yang sedang jalan). Semua pesan sebelumnya dikompres via mode `summary`; dari index itu sampai akhir dibiarkan utuh. Kalau user message < 2 (turn 1 atau 2) → tidak ada yang eligible → tidak ada kompresi.
+- **`summary`** — sisakan tag `[SUMMARY]` breadcrumb pada **setiap** turn lama, berisi *signature* tool per call (nama + identifier ringkas seperti `exec("df -h")` / `write_file("src/foo.ts")`). Payload berat (file content, edit patch, task list) dan tool result tetap dibuang. Model tahu APA yang disentuh tanpa leak nilai stale.
+- **`drop`** — buang tool activity total tanpa breadcrumb (paling hemat token). Model harus re-run tool kalau butuh detail.
+
+Semua mode membuang hal yang sama dari setiap turn yang dikompres:
 - Setiap `tool` result message
 - Setiap assistant message yang punya `tool_calls` (pesan intermediate "let me check X" + tool call)
 
 Disisakan: `system`, `user`, dan assistant content-only (jawaban final tiap turn).
 
-**Tanpa breadcrumb.** Versi awal sempat menaruh note `[called read_file(...) — omitted]`, tapi ternyata bikin model bingung dan **mengulang** tool call. Jadi jejak tool dihapus total — teks final assistant ("Selesai, sudah saya tulis ulang ke out.ts") yang membawa konteks ke depan.
-
-Contoh nyata: 12 message → 6 message, history jadi alternasi bersih `system → user → assistant → user → ...`.
-
-**Merge defensif**: kalau suatu turn tidak menghasilkan teks final (mis. maxIterations habis), bisa muncul dua message role sama beruntun. Pass terakhir meng-merge consecutive `user`/`assistant` jadi satu, supaya request tetap valid untuk API yang strict.
+**Merge defensif**: setelah drop, bisa muncul dua message role sama beruntun. Pass terakhir meng-merge consecutive `user`/`assistant` jadi satu (assistant content dijamin non-empty, fallback `" "` — fix error 400 DeepSeek).
 
 Penting — **scope per user turn**:
 - Optimasi dijalankan **sekali di awal `agent.send()`** (setelah user message baru di-push). Pada titik itu, semua `tool` message di history adalah dari turn-turn sebelumnya.
 - Snapshot di-lock untuk seluruh tool loop dalam turn itu. Tool result yang muncul di iterasi-iterasi berikutnya (current turn) ditambahkan sebagai `extras` dan selalu utuh.
 - Request per iterasi = `optimizedBase + extras`.
+- **`recent` mode**: current turn + 1 turn terakhir selalu utuh; turn lebih tua dikompres.
 
 Alasannya: AI butuh tool result dari iterasi sebelumnya untuk merangkai task — kalau di-truncate mid-loop, AI bisa "lupa" hasil yang baru saja dia minta. Sebaliknya, tool result dari turn sebelumnya (task yang sudah selesai) jarang dibutuhkan detailnya — assistant text sudah summarize.
 
 Properti lain:
-- **Tidak mengubah `Agent.messages`** — hanya snapshot untuk request. Session JSON tetap menyimpan history lengkap.
-- Deterministik, tanpa LLM call.
+- **Tidak mengubah `Agent.messages`** — hanya snapshot in-flight untuk request. Session JSON tetap menyimpan history lengkap. Matikan optimasi → history lengkap tersedia kembali.
+- Deterministik (Layer 1), tanpa LLM call. Bisa diperluas ke Layer 2 (LLM summary on threshold) di masa depan tanpa mengubah API.
 - Agent emit `onContextOptimized(stats)` saat ada collapse. `stats = { collapsedCount, bytesSaved }`. REPL akumulasi ke `ctx.optStats`, tampil di `/usage`.
-- Config-nya cuma `{ enabled: boolean }` — tidak ada knob lain.
+- Config: `{ enabled: boolean; mode?: OptimizeMode }`. Default `{ enabled: true, mode: "recent" }`.
 
-**Monitoring file**: saat `SIBERFLOW_CONTEXT_OPTIMIZE=true`, tiap turn yang sukses juga menulis sibling file `~/.siberflow/sessions/<id>.optimized.json` di samping main session JSON. Bentuknya sama persis dengan `Session`, tapi `messages` di-replace dengan hasil `optimizeContext()` + metadata `_view: "optimized"` dan `_generatedAt`. Berguna untuk:
+**Monitoring file**: saat `SIBERFLOW_CONTEXT_OPTIMIZE=true` (default), tiap turn yang sukses juga menulis sibling file `~/.siberflow/sessions/<id>.optimized.json` di samping main session JSON. Bentuknya sama persis dengan `Session`, tapi `messages` di-replace dengan hasil `optimizeContext()` + metadata `_view: "optimized"` dan `_generatedAt`. Berguna untuk:
 
 - Diff: `diff <id>.json <id>.optimized.json` melihat persis apa yang dibuang
 - Inspeksi: pastikan tool call/result turn lama terbuang dan current-turn tetap utuh
@@ -477,7 +489,7 @@ Aktif via `SIBERFLOW_TASKS=true`. Konsep: checklist sebagai **managed state**, b
 
 Komponen:
 - [tasks.ts](packages/core/src/agent/tasks.ts) — `Task { content, status }`, `TaskStore` (in-memory holder), `renderTaskList()`
-- [tools/task/update.ts](packages/core/src/tools/task/update.ts) — tool `task_update`: model kirim **list lengkap** (full replacement) tiap update. Hanya ter-register kalau `createDefaultRegistry({ tasks: true })`.
+- [tools/task/update.ts](packages/core/src/tools/task/update.ts) — tool `task_update`: model kirim **list lengkap** (full replacement) tiap update. Selalu ter-register (always-on tool). Switch `tasks` (default `true`) kontrol apakah checklist di-injeksi ke system prompt tiap iterasi.
 - `ToolContext.taskStore` — Agent menaruh store-nya di sini supaya tool bisa mutasi.
 
 Mekanisme di Agent:
@@ -530,9 +542,9 @@ Semua via env. CLI loader (`packages/cli/src/env.ts`) walk-up dari cwd cari `.en
 | `SIBERFLOW_MODEL` | provider default | Override model string |
 | `SIBERFLOW_BASE_URL` | provider default | Override endpoint |
 | `SIBERFLOW_PROJECT_DIR` | `INIT_CWD` → `cwd()` | Sandbox root. Absolute / relative / `~/...`. Divalidasi exists. |
-| `SIBERFLOW_CONTEXT_OPTIMIZE` | `false` | Aktifkan Layer 1 — buang tool call & result dari turn sebelumnya, sisakan teks final assistant |
-| `SIBERFLOW_CONTEXT_OPTIMIZE_MODE` | `summary` | `drop` (buang total) atau `summary` (sisakan `[SUMMARY]` breadcrumb berisi tool signature) |
-| `SIBERFLOW_TASKS` | `false` | Aktifkan task checklist (`task_update` tool + injeksi state tiap turn) |
+| `SIBERFLOW_CONTEXT_OPTIMIZE` | `true` | Aktifkan Layer 1 — buang tool call & result dari turn sebelumnya (mode lihat di bawah) |
+| `SIBERFLOW_CONTEXT_OPTIMIZE_MODE` | `recent` | `recent` (default; signature breadcrumb, sisakan 1 turn terakhir utuh), `summary` (signature breadcrumb semua turn lama), atau `drop` (buang total tanpa breadcrumb) |
+| `SIBERFLOW_TASKS` | `true` | Aktifkan task checklist (`task_update` tool + injeksi state tiap turn). `task_update` selalu ter-register walau ini `false` (default-on), switch ini kontrol injeksi checklist ke system prompt |
 | `SIBERFLOW_AUTO_CONTINUE` | `true` | Sambung otomatis respons yang kepotong limit output token (set `false` untuk matikan) |
 | `SIBERFLOW_DEBUG` | `false` | Tracing verbose ke stderr (HTTP status, raw finish_reason, usage, error, stream lifecycle) |
 | `SIBERFLOW_MAX_ITERATIONS` | `50` | Batas tool-calling iterasi per turn. Naikkan untuk task besar (scaffolding modul, dll) |
@@ -802,7 +814,7 @@ Sama seperti VSCode extension — settings tersimpan lokal, bukan env:
 ### Bundling
 
 [electron.vite.config.ts](packages/desktop/electron.vite.config.ts) — tiga output via `electron-vite`:
-- `out/main/index.js` — main process (esbuild, external native modules `ssh2`/`sqlite3`/`pg`/`mysql2`/`playwright-core`/`chromium-bidi`/`fsevents`)
+- `out/main/index.js` — main process (esbuild, external native modules `ssh2`/`sqlite3`/`pg`/`mysql2`/`puppeteer-core`/`fsevents`)
 - `out/preload/index.mjs` — preload bridge
 - `out/renderer/` — Vite + React (HMR saat dev)
 
@@ -899,7 +911,7 @@ Setelah file provider dibuat:
    ```
 2. Tambah ke array di `<category>/index.ts` (atau buat kategori baru di `tools/index.ts`).
 
-**Wajib** sandbox semua path user-provided lewat `resolveWithin` (atau `resolveExcelPath` kalau tool butuh akses upload dir selain project). Kalau tool run kode user-supplied (exceljs/Playwright), pakai vm sandbox (`tools/excel/script.ts` pattern) atau child_process isolation (`tools/web/scrape.ts` pattern) — jangan pernah `eval` langsung di host process.
+**Wajib** sandbox semua path user-provided lewat `resolveWithin` (atau `resolveExcelPath` kalau tool butuh akses upload dir selain project). Kalau tool run kode user-supplied (exceljs/Puppeteer), pakai vm sandbox (`tools/excel/script.ts` pattern) atau child_process isolation (`tools/browser/browser.ts` pattern) — jangan pernah `eval` langsung di host process.
 
 Contoh kategori yang sudah ada di repo:
 - `tools/file/*` untuk operasi filesystem
@@ -907,7 +919,7 @@ Contoh kategori yang sudah ada di repo:
 - `tools/db/*` untuk akses database
 - `tools/excel/*` untuk spreadsheet `.xlsx` (read pakai `resolveExcelPath` agar bisa baca upload dir; write tetap `resolveWithin` project; script mode pakai vm sandbox untuk full exceljs API)
 - `tools/ssh/*` untuk remote shell & SFTP
-- `tools/web/*` untuk web scraping via headless Chromium (child_process worker, download Chromium on first use)
+- `tools/browser/*` untuk scraping/interaksi web via headless Chrome/Edge Puppeteer (child_process worker, pakai browser yang sudah terinstall)
 - `tools/task/*` untuk task checklist
 
 Kalau tool baru butuh opt-in (default OFF), tambah nama tool ke `TOGGLE_TOOLS` array di `SettingsModal.tsx` (Desktop) + `webview/main.ts` (VSCode) + list di `.env.example`. Filter otomatis lewat `enabledTools` di `createDefaultRegistry`.
@@ -923,8 +935,8 @@ Buat workspace baru di `packages/<name>/`, depend ke `@siberflow/core`. Subscrib
 - Upload Excel disimpan di `os.tmpdir()/siberflow-uploads/<sessionId>/` (bukan project) — workspace bersih, tidak ikut git. Cleanup otomatis saat `deleteSession`. Folder owner-only (mode 0700) untuk mitigasi `/tmp` world-readable di Linux multi-user.
 - `write_excel` output tetap sandbox `projectDir` — file Excel yang AI hasilkan harus di project, bukan tmp.
 - `write_excel_script` run kode AI-supplied di `node:vm` sandbox terkunci: `require`/`process`/`fs`/`eval`/`Function` di-block, timeout 5 detik. Compile + invoke dalam satu `runInContext` supaya timeout cover infinite loop.
-- `web_scrape` run kode AI-supplied (Playwright) di **child process worker terisolasi** (bukan vm — Playwright async gak kompatibel). Worker gak punya akses host memory/session/AgentHost; env minimal (gak leak secrets); timeout kill process tree. Chromium di-download on first use ke OS cache.
-- Per-tool toggle (`enabledTools`): tool berbahaya (`exec`, `db_query`, `ssh_exec`, `web_scrape`, dll) default OFF — opt-in via settings/env supaya blast-radius security kecil walau AI coba pakai.
+- `run_browser` run kode AI-supplied (Puppeteer) di **child process worker terisolasi** (bukan vm — Puppeteer async gak kompatibel). Worker gak punya akses host memory/session/AgentHost; env minimal (gak leak secrets); timeout kill process tree. Pakai Chrome/Edge yang sudah terinstall di sistem (channel `'chrome'` → fallback `'msedge'`), tidak ada download Chromium. `puppeteer-core` di-resolve via env var `SIBERFLOW_PUPPETEER_CORE_PATH` (host set) atau heuristik di `resolvePuppeteerCorePath()`.
+- Per-tool toggle (`enabledTools`): tool berbahaya (`exec`, `db_query`, `ssh_exec`, `run_browser`, dll) default OFF — opt-in via settings/env supaya blast-radius security kecil walau AI coba pakai. Pengecualian: `task_update` dan `ask_user` selalu on (core UX).
 - `exec` tool cwd=projectDir tapi shell bisa akses path lain (soft). OK untuk single-user dev; untuk multi-user / web public perlu permission layer.
 - API key:
   - CLI: plain text di env / `.env` (gitignored)

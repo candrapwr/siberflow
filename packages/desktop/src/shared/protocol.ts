@@ -20,7 +20,7 @@ export interface SettingsValues {
   provider: ProviderName;
   model: string;
   contextOptimize: boolean;
-  contextOptimizeMode: "drop" | "summary";
+  contextOptimizeMode: "drop" | "summary" | "recent";
   autoContinue: boolean;
   hideTools: boolean;
   debug: boolean;
@@ -35,7 +35,7 @@ export const DEFAULT_SETTINGS: SettingsValues = {
   provider: "deepseek",
   model: "",
   contextOptimize: true,
-  contextOptimizeMode: "summary",
+  contextOptimizeMode: "recent",
   autoContinue: true,
   hideTools: true,
   debug: false,
