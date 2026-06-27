@@ -66,7 +66,7 @@ const extension = {
   // ESM-only ("type":"module") and break esbuild's CJS interop (TDZ on the
   // generated `require2` helper) when bundled into the extension's CJS output.
   // Both ship CJS builds, so Node resolves them via require() at runtime.
-  external: ["vscode", "puppeteer-core", "docx", "mammoth"],
+  external: ["vscode", "puppeteer-core", "docx", "mammoth", "pdf-lib", "pdfjs-dist"],
 };
 
 const webview = {

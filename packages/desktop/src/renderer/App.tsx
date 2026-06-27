@@ -373,7 +373,11 @@ export default function App() {
               autoFocusKey={`${state.session.id}:${state.busy}`}
               prefill={editPrefill ?? undefined}
               hasWorkdir={!!state.session.projectDir}
-              excelEnabled={state.enabledTools.includes("excel_script")}
+              docEnabled={
+                state.enabledTools.includes("excel_script") ||
+                state.enabledTools.includes("docx_script") ||
+                state.enabledTools.includes("pdf_script")
+              }
             />
           </div>
         )}

@@ -79,13 +79,17 @@ export interface HistoryEntry {
 }
 
 /**
- * An uploaded Excel file after it has been copied into the per-session upload
- * dir (OS tmp, NOT the project dir). `excel_script` whitelists this location via
- * the agent's `uploadDir` option.
+ * An uploaded document file after it has been copied into the per-session upload
+ * dir (OS tmp, NOT the project dir). `excel_script` / `docx_script` /
+ * `pdf_script` whitelists this location via the agent's `uploadDir` option.
  */
+export type DocKind = "excel" | "docx" | "pdf";
+
 export interface PickedFile {
   /** Display name (original filename). */
   name: string;
+  /** Document kind, derived from extension — drives chip icon + prompt tool. */
+  kind: DocKind;
   /**
    * Absolute path to the copied file in the OS tmp dir. Despite the field
    * name (kept for protocol stability), this is an absolute path, not
@@ -136,12 +140,12 @@ export interface RendererCalls {
   pickFolder: () => Promise<string | null>;
   setWorkdir: (folderPath: string) => Promise<void>;
   /**
-   * Open a native multi-select file picker filtered to .xlsx, copy each chosen
-   * file into the current session's `_uploads/` sandbox dir, and return the
-   * copied file metadata. Returns `{ error }` if the session has no workdir
-   * or the copy failed; `{ files: [] }` if the user cancelled.
+   * Open a native multi-select file picker filtered to .xlsx/.docx/.pdf, copy
+   * each chosen file into the current session's upload sandbox dir, and return
+   * the copied file metadata (with `kind` per file). Returns `{ error }` if the
+   * session has no workdir or the copy failed; `{ files: [] }` if cancelled.
    */
-  pickExcelFiles: () => Promise<{ files: PickedFile[] } | { error: string }>;
+  pickDocFiles: () => Promise<{ files: PickedFile[] } | { error: string }>;
   /**
    * Respond to an ask_user prompt. `status` is "answer" (user picked/typed)
    * or "cancel" (user dismissed). Resolves once the host has unblocked the

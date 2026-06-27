@@ -19,8 +19,8 @@ export type ExtToView =
   | { kind: "usage"; usage: SessionUsage; optSaved: number }
   | { kind: "settings"; values: SettingsValues; hasApiKey: boolean; mustConfigure: boolean }
   | { kind: "history"; messages: HistoryMessage[] }
-  | { kind: "excel_files_picked"; files: PickedFile[] }
-  | { kind: "excel_pick_error"; message: string }
+  | { kind: "doc_files_picked"; files: PickedFile[] }
+  | { kind: "doc_pick_error"; message: string }
   | { kind: "ask_user"; id: string; question: string; choices: string[]; allowFreeText: boolean; defaultChoice?: string };
 
 export interface HistoryMessage {
@@ -29,13 +29,17 @@ export interface HistoryMessage {
 }
 
 /**
- * An uploaded Excel file after it has been copied into the per-session upload
- * dir (OS tmp, NOT the workspace folder). `excel_script` whitelists this
- * location via the agent's `uploadDir` option.
+ * An uploaded document after it has been copied into the per-session upload
+ * dir (OS tmp, NOT the workspace folder). The `*_script` tools (excel/docx/pdf)
+ * whitelist this location via the agent's `uploadDir` option.
  */
+export type DocKind = "excel" | "docx" | "pdf";
+
 export interface PickedFile {
   /** Display name (original filename). */
   name: string;
+  /** Document kind, derived from extension — drives chip icon + prompt tool. */
+  kind: DocKind;
   /**
    * Absolute path to the copied file in the OS tmp dir. Despite the field
    * name (kept for protocol stability), this is an absolute path, not
@@ -53,7 +57,7 @@ export type ViewToExt =
   | { kind: "edit_last"; input: string }
   | { kind: "command"; command: "new" | "load" | "delete" | "clearAll" | "usage" | "tools" | "settings" }
   | { kind: "save_settings"; values: SettingsValues; apiKey: string | null }
-  | { kind: "pick_excel_files" }
+  | { kind: "pick_doc_files" }
   | { kind: "answer_user"; id: string; status: "answer" | "cancel"; answer: string };
 
 export type ProviderName = "deepseek" | "gemini" | "openai" | "openai-responses" | "grok" | "qwen" | "zai" | "claude";
