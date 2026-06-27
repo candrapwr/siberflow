@@ -30,7 +30,7 @@ export interface HistoryMessage {
 
 /**
  * An uploaded Excel file after it has been copied into the per-session upload
- * dir (OS tmp, NOT the workspace folder). `read_excel` whitelists this
+ * dir (OS tmp, NOT the workspace folder). `excel_script` whitelists this
  * location via the agent's `uploadDir` option.
  */
 export interface PickedFile {

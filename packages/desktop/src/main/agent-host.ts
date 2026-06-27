@@ -274,7 +274,7 @@ export class AgentHost {
     });
     const workdir = this.current?.projectDir;
     // uploadDir is the per-session tmp dir where uploaded Excels live. Pass it
-    // so read_excel can whitelist reads from there even though it's outside
+    // so excel_script can whitelist reads from there even though it's outside
     // the project sandbox.
     const uploadDir = this.current ? uploadsDirFor(this.current.id) : undefined;
     return new Agent({
@@ -427,12 +427,12 @@ export class AgentHost {
    * in the OS tmp folder (NOT the project dir — keeps the workspace clean and
    * out of git). Filenames are sanitized; collisions are de-duplicated with a
    * short suffix. Only `.xlsx` files are accepted. Returns metadata with the
-   * absolute destination path so the agent can pass it to `read_excel`, which
+   * absolute destination path so the agent can pass it to `excel_script`, which
    * whitelists this dir via the agent's `uploadDir` option. The folder is
    * removed automatically when the session is deleted.
    *
    * Unlike file writes, uploads don't require a project workdir — they live in
-   * tmp. But `read_excel` still needs the project sandbox for relative-path
+   * tmp. But `excel_script` still needs the project sandbox for relative-path
    * reads, so a missing workdir just means relative reads won't resolve.
    */
   async copyUploads(srcPaths: string[]): Promise<PickedFile[]> {
@@ -456,7 +456,7 @@ export class AgentHost {
       const dest = join(destDir, safe);
       await copyFile(src, dest);
       const stats = await stat(dest);
-      // relPath is the ABSOLUTE tmp path — read_excel resolves absolute paths
+      // relPath is the ABSOLUTE tmp path — excel_script resolves absolute paths
       // against the upload dir whitelist. (Field name kept for protocol
       // stability; semantically it's an absolute path now.)
       out.push({ name: original, relPath: dest, bytes: stats.size });

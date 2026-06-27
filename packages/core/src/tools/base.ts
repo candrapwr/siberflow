@@ -30,9 +30,9 @@ export interface ToolContext {
   /** Present when task tracking is enabled; used by the task_update tool. */
   taskStore?: TaskStore;
   /**
-   * Optional extra directory that `read_excel` may read uploaded files from
+   * Optional extra directory that `excel_script` may read uploaded files from
    * (typically an OS tmp dir scoped per session, so the project folder stays
-   * clean). Only `read_excel` honors this field — every other file tool stays
+   * clean). Only `excel_script` honors this field — every other file tool stays
    * sandboxed to `projectDir` and never sees uploaded files.
    */
   uploadDir?: string;

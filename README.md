@@ -184,46 +184,47 @@ cd packages/desktop && npm run rebuild
 - **Streaming response** — token muncul real-time, support markdown
 - **File dan shell tools** — `read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`, `exec`
 - **Database query tool** — `db_query` mendukung `mysql`, `postgresql`, dan `sqlite`; query bebas, optional `params`, SQLite path tetap dibatasi ke project dir
-- **Excel spreadsheet tools** — `read_excel` / `write_excel` / `write_excel_script` untuk `.xlsx` multi-sheet dengan output table/json dan styling (theme preset, zebra rows, freeze header, number format). `write_excel_script` memberi akses penuh API `exceljs` (merge cells, conditional formatting, chart, autofilter, dll) via sandbox `node:vm`. File Excel dari upload UI disimpan di **OS tmp dir** (bukan project) — workspace tetap bersih, tidak ikut ke git
+- **Excel spreadsheet tool** — `excel_script`: satu tool serbaguna untuk membaca, memodifikasi, dan membuat `.xlsx` multi-sheet via akses penuh API `exceljs` di sandbox `node:vm`. Mendukung cells, **rumus/formula**, **gambar/image** (`addImage`/`getImages`), chart, merge cells, conditional formatting, autofilter, styling, dll. AI tulis function JS `(wb, ExcelJS) => { ... return <data> }`; host yang load/write file, sandbox hanya manipulasi workbook. File Excel dari upload UI disimpan di **OS tmp dir** (bukan project) — workspace tetap bersih, tidak ikut ke git
+- **Word document tool** — `docx_script`: satu tool untuk membuat dan membaca `.docx` via library `docx` (create) + `mammoth` (read) di sandbox `node:vm`. Create mode: AI bangun dokumen deklaratif (heading, paragraf, tabel, image, bullet, styling) via `(doc, docx) => { ... }`; host serialize lewat `Packer.toBuffer`. Read mode: host convert `.docx` existing ke HTML via mammoth, teruskan ke script `(html) => { ... return data }` untuk ekstrak struktur/konten. Sandbox sync-only, host handle semua async I/O.
 - **Browser tool** — `run_browser` scrape/interaksi halaman web via headless Chrome/Edge (Puppeteer). Mendukung AJAX/SPA (render JS), klik/form/login, screenshot, intercept network, multi-tab. Script Puppeteer dijalankan di child process worker terisolasi dengan timeout kill. **Pakai Chrome/Edge yang sudah terinstall** — tidak ada download Chromium. Default OFF (opt-in)
-- **Per-tool toggle** — aktif/nonaktifkan tool individual via settings/env (`SIBERFLOW_TOOLS`). Default hanya 5 file ops aktif; `exec`/`db_query`/`ssh`/`excel`/`run_browser` opt-in untuk prompt ringan + blast-radius security kecil
+- **Per-tool toggle** — aktif/nonaktifkan tool individual via settings/env (`SIBERFLOW_TOOLS`). Default hanya 5 file ops aktif; `exec`/`db_query`/`ssh`/`excel`/`docx`/`run_browser` opt-in untuk prompt ringan + blast-radius security kecil
 - **Request delay (anti rate-limit)** — jeda sebelum setiap request ke AI (default 1500ms, bisa 0) untuk mencegah provider block saat loop tool-call cepat. Set via env (`SIBERFLOW_REQUEST_DELAY_MS`) atau settings UI
 - **Task checklist** — opt-in via env / settings; AI maintain checklist multi-step yang bisa di-resume setelah Ctrl+C atau session restart
 - **Context optimization** — buang tool history dari turn lama (default aktif); current task tetap utuh. Tiga mode via `SIBERFLOW_CONTEXT_OPTIMIZE_MODE`: `recent` (default; seperti summary, tapi sisakan 1 turn terakhir sebelum current turn tetap utuh — hanya turn yang lebih tua dikompres, jadi konteks tool terakhir tidak hilang dulu), `drop` (buang total), atau `summary` (sisakan tag `[SUMMARY]` berisi *signature* per tool — nama + identifier ringkas seperti `exec("df -h")` / `write_file("src/foo.ts")`; payload berat dan result tetap dibuang). Defense-in-depth: provider & serialization selalu menjamin assistant message punya content atau tool_calls (fix error 400 DeepSeek)
 - **Auto-continue** — sambung otomatis respons yang kepotong max_tokens
 - **Silent task_update** — tool `task_update` tetap dieksekusi tapi tidak ditampilkan di transcript (CLI, VSCode, Desktop); efeknya hanya terlihat di task checklist
-- **Upload Excel dari chat (Desktop & VSCode)** — tombol paperclip di composer buka file picker `.xlsx` (multi-select); file disalin ke tmp per-session, prompt otomatis menyuruh AI baca via `read_excel`. Chip attachment dengan tombol hapus per file. Tombol disable otomatis saat `read_excel` tidak di-enable di settings
+- **Upload Excel dari chat (Desktop & VSCode)** — tombol paperclip di composer buka file picker `.xlsx` (multi-select); file disalin ke tmp per-session, prompt otomatis menyuruh AI baca via `excel_script`. Chip attachment dengan tombol hapus per file. Tombol disable otomatis saat `excel_script` tidak di-enable di settings
 - **Multi-session** — sesi tersimpan per project, picker saat startup
 - **Debug tracing** — env `SIBERFLOW_DEBUG=true` untuk log HTTP/finish_reason/usage
 
-## Excel tools (`read_excel` / `write_excel` / `write_excel_script`)
+## Excel tool (`excel_script`)
 
-Domain tool terpisah di `packages/core/src/tools/excel/`, pakai library `exceljs` (pure JS, no native addon → aman untuk build Electron cross-platform). Terdaftar di registry di bawah flag `filesystem` — otomatis dimatikan saat session tanpa working directory (sama seperti `read_file`/`exec`).
+Domain tool di `packages/core/src/tools/excel/excel-script.ts`, pakai library `exceljs` (pure JS, no native addon → aman untuk build Electron cross-platform). Terdaftar di registry di bawah flag `filesystem` — otomatis dimatikan saat session tanpa working directory (sama seperti `read_file`/`exec`).
 
-### `read_excel`
+Satu tool untuk semua operasi Excel: **baca**, **modifikasi**, dan **buat baru**. AI menyuplai function JavaScript `(wb, ExcelJS) => { ... return <optional data> }` yang dieksekusi di sandbox `node:vm`. Host yang melakukan semua I/O file (load source + write destination); sandbox hanya memanipulasi objek workbook, jadi akses filesystem tetap ter-sandbox.
 
-Baca workbook `.xlsx`. Output table (markdown, default) atau JSON (presisi numerik). Bisa baca satu sheet spesifik (parameter `sheet`) atau semua sheet sekaligus. Tipe data dipertahankan: angka tetap number, tanggal → ISO string, formula → result. Safety caps: `maxRows` default 500 per sheet, total output 200K chars.
+### Mode operasi
 
-### `write_excel`
+- **Read existing** — beri `path` + `readOnly: true`. Workbook di-load dari disk, script membaca cell/rumus/image dari `wb` dan **return** data yang diekstrak. Return value (string/number/object/array) di-serialize ke JSON dan dikirim balik ke AI sebagai output tool, jadi AI "melihat" hasil bacaannya.
+- **Modify existing** — beri `path` (workbook di-load ke `wb`), script memutasinya, hapus `readOnly`. Workbook ditulis balik ke `path` (atau `saveAs`) setelah script selesai.
+- **Create new** — omit `path`, bangun workbook dari nol via `wb.addWorksheet(...)`, pass `saveAs` (atau `path`) sebagai destinasi. `wb` kosong baru disupply ke sandbox.
 
-Buat/overwrite workbook `.xlsx` multi-sheet dari map `sheets: { SheetName: [rowObjects] }`. Default sudah styling rapi (theme `professional`: header bold + biru + freeze + zebra + auto-width). Styling custom ramah AI:
+### Kapabilitas (full exceljs API)
 
-- `theme`: `professional` / `zebra` / `minimal` / `colorful`
-- `header`: `{ bold, background, color }` (warna pakai nama `blue`/`lightgray` atau hex `#4472C4`)
-- `zebraRows`, `freezeHeader`, `autoWidth` (toggle boolean)
-- `numberFormats`: map kolom → named format (`currency`, `date`, `percent`, `integer`, `decimal`) atau format Excel custom
+- **Rumus/formula** — cell value `{ formula, result }`: baca `cell.value.formula` / `.result`, tulis `ws.getCell('C2').value = { formula: 'SUM(A2:A10)' }`.
+- **Gambar/image** — `ws.getImages()` untuk enumerate image yang ada (buffer-nya via `wb.getImage(imageId).buffer`); tulis via `const id = wb.addImage({ buffer, extension:'png' }); ws.addImage(id, 'D2:F8')`. Catatan: sandbox mem-block `fs`, jadi untuk embed image AI harus baca bytes-nya dulu via tool lain (mis. `read_file`) lalu inline Buffer literal di script.
+- **Styling** — font, fill, border, alignment, number format, freeze panes, zebra rows, dll.
+- **Layout kompleks** — merge cells, multi-level header, conditional formatting, chart, autofilter, data validation, column grouping, protection.
 
-Tanggal di args (datang sebagai ISO string via JSON) otomatis dikonversi balik ke Date cell. Date-only `2025-01-01` parse sebagai local midnight (tidak geser timezone).
+### Keamanan sandbox
 
-### `write_excel_script` (full exceljs API)
-
-Untuk layout kompleks yang butuh akses penuh API `exceljs` — merge cells, multi-level header, conditional formatting, chart, autofilter, frozen panes, column grouping, protection, dll. AI tulis function JavaScript `(wb, ExcelJS) => { ... }` yang kita eksekusi di **sandbox `node:vm`** (locked-down: `require`/`process`/`fs`/`eval`/`Function` di-block, timeout 5 detik). Worker pattern: compile + invoke dalam satu `runInContext` supaya timeout cover infinite loop. Pilih tool ini kalau `write_excel` (data mode) terlalu terbatas; kalau cuma tabel simple, `write_excel` lebih reliable.
+Sandbox `node:vm` locked-down: `require`/`process`/`fs`/`global`/`Promise`/`eval`/`Function` di-block, `codeGeneration.strings:false`, timeout 5 detik. Script **wajib synchronous** (API exceljs yang di-expose di sandbox semua sync; semua async I/O dilakukan host). Worker pattern: compile + invoke dalam satu `runInContext` supaya timeout cover infinite loop.
 
 ### Upload Excel dari UI (Desktop & VSCode)
 
-Tombol paperclip 📎 di composer → file picker native `.xlsx` multi-select → file disalin ke **`os.tmpdir()/siberflow-uploads/<sessionId>/`** (per-session, mode 0700) → prompt otomatis digabung dengan list path file → AI pakai `read_excel`. Project folder tidak tersentuh. Saat session di-delete, folder tmp session otomatis dibersihkan (hook di `deleteSession`).
+Tombol paperclip 📎 di composer → file picker native `.xlsx` multi-select → file disalin ke **`os.tmpdir()/siberflow-uploads/<sessionId>/`** (per-session, mode 0700) → prompt otomatis digabung dengan list path file → AI pakai `excel_script`. Project folder tidak tersentuh. Saat session di-delete, folder tmp session otomatis dibersihkan (hook di `deleteSession`).
 
-**Keamanan**: hanya `read_excel` yang whitelist upload dir (via `ToolContext.uploadDir`); tool file lain (`read_file`, `write_file`, `exec`, dll) tetap sandbox ke `projectDir` dan tidak bisa baca tmp.
+**Keamanan**: hanya `excel_script` yang whitelist upload dir (via `ToolContext.uploadDir`); tool file lain (`read_file`, `write_file`, `exec`, dll) tetap sandbox ke `projectDir` dan tidak bisa baca tmp.
 
 ## Browser tool (`run_browser`)
 
@@ -235,9 +236,38 @@ Tool scraping/interaksi halaman web via headless Chrome/Edge (Puppeteer). Defaul
 
 **Output**: capped 200K chars (sama pattern `exec`/`db_query`). Tool description arahkan AI extract data spesifik (`$$eval`/`textContent`) daripada return raw HTML.
 
+## Word document tool (`docx_script`)
+
+Tool di `packages/core/src/tools/docx/docx-script.ts`, pakai library `docx` (create) dan `mammoth` (read) — keduanya pure JS, no native addon → aman untuk build Electron cross-platform. Terdaftar di registry di bawah flag `filesystem` — otomatis dimatikan saat session tanpa working directory (sama seperti `excel_script`/`read_file`/`exec`).
+
+Satu tool untuk dua operasi: **create** dokumen baru dan **read** dokumen existing. AI menyuplai function JavaScript yang dieksekusi di sandbox `node:vm`. Host melakukan semua async I/O (load, mammoth conversion, Packer serialization, write) di luar sandbox; sandbox sync-only.
+
+### Mode operasi
+
+- **Create** — pass `saveAs` (atau `path`) sebagai destinasi. Script terima `(doc, docx)` di mana `doc` adalah fresh empty `Document` dan `docx` adalah module `docx`. Script membangun dokumen via API deklaratif (`doc.addSection({...})`, `new docx.Paragraph(...)`, dll). Host serialize via `docx.Packer.toBuffer(doc)` dan tulis ke destinasi.
+- **Read** — pass `path` + `readOnly: true`. Host load `.docx`, convert ke HTML via mammoth, teruskan **HTML string** ke script `(html) => { ... return data }`. Script ekstrak apa yang dibutuhkan (heading, tabel, hitung kata, struktur) dan **return** datanya. Return value di-serialize JSON dan dikirim ke AI.
+
+### Kapabilitas (Create mode — full `docx` library API)
+
+- **Heading** — `docx.HeadingLevel.HEADING_1` sampai `HEADING_6` + `TITLE`.
+- **Text styling** — `TextRun({ text, bold, italics, underline, color: 'FF0000', size: 24, font: 'Arial' })`. Size dalam half-points (24 = 12pt). Color hex tanpa `#`.
+- **Bullet/numbering** — `Paragraph({ text, bullet: { level: 0 } })` atau numbering config.
+- **Table** — `Table({ rows: [TableRow({ children: [TableCell({ children: [Paragraph('cell')] })] })] })`, dengan styling per-cell/row.
+- **Image** — `ImageRun({ data: <Uint8Array>, transformation: { width, height } })`. Sandbox mem-block `fs` → untuk embed image, AI baca bytes dulu via tool lain (`read_file`) lalu inline Uint8Array di script.
+- **Section/layout** — page size, margin, orientation, header/footer, page break, column.
+
+### Kapabilitas (Read mode — mammoth HTML)
+
+- **Struktur semantik** — heading (`<h1>`-`<h6>`), paragraf (`<p>`), tabel (`<table>`), list (`<ul>`/`<ol>`), bold/italic (`<strong>`/`<em>`).
+- **Bukan exact formatting** — mammoth ekstrak struktur/konten, bukan styling visual (font, warna, margin tidak terbaca presisi). Ini limitasi mammoth, bukan bug.
+
+### Keamanan sandbox
+
+Sama seperti `excel_script`: sandbox `node:vm` locked-down, `require`/`process`/`fs`/`global`/`Promise`/`eval`/`Function` di-block, `codeGeneration.strings:false`, timeout 5 detik. Script wajib synchronous; semua async I/O dilakukan host di luar sandbox. Path destinasi (write) selalu sandbox `projectDir`; source path (read) whitelist `uploadDir` (uploaded files bisa dibaca).
+
 ## Per-tool toggle (enabledTools)
 
-Aktif/nonaktifkan tool individual supaya tool yang gak dipakai gak membebani prompt (~200-300 token per disabled tool) + blast-radius security lebih ketat. Default: **hanya 5 file ops** aktif (`read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`). `exec`/`db_query`/`ssh_exec`/`sftp`/`read_excel`/`write_excel`/`write_excel_script`/`run_browser` default OFF — opt-in. Pengecualian: `task_update` dan `ask_user` selalu on (core UX, tidak muncul di toggle).
+Aktif/nonaktifkan tool individual supaya tool yang gak dipakai gak membebani prompt (~200-300 token per disabled tool) + blast-radius security lebih ketat. Default: **hanya 5 file ops** aktif (`read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`). `exec`/`db_query`/`ssh_exec`/`sftp`/`excel_script`/`docx_script`/`run_browser` default OFF — opt-in. Pengecualian: `task_update` dan `ask_user` selalu on (core UX, tidak muncul di toggle).
 
 `task_update` selalu nyala kalau `tasks` enabled (bypass enabledTools — itu master switch task checklist feature, bukan per-tool toggle).
 

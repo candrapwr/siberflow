@@ -2,7 +2,7 @@
 // Also hosts the Excel (.xlsx) attachment picker: a paperclip button opens a
 // native file dialog, chosen files are copied into the project sandbox by the
 // main process, and the resulting relative paths are folded into the outgoing
-// prompt so the agent picks them up via `read_excel`.
+// prompt so the agent picks them up via `excel_script`.
 
 import { memo, useEffect, useRef, useState } from "react";
 import { ipc } from "../ipc.js";
@@ -21,9 +21,9 @@ interface ComposerProps {
   prefill?: string;
   /** Whether the active session has a working directory. Upload is disabled
    * (and attachments cleared) when false, since there's no sandbox to copy
-   * files into and `read_excel` wouldn't be registered anyway. */
+   * files into and `excel_script` wouldn't be registered anyway. */
   hasWorkdir?: boolean;
-  /** Whether read_excel is enabled in settings. The upload button is disabled
+  /** Whether excel_script is enabled in settings. The upload button is disabled
    * (with a tooltip hint) when false, since uploaded files can't be read. */
   excelEnabled?: boolean;
 }
@@ -129,7 +129,7 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
   const uploadTitle = !hasWorkdir
     ? "Pilih folder project dulu sebelum upload"
     : !excelEnabled
-      ? "Aktifkan read_excel di Tools settings untuk upload Excel"
+      ? "Aktifkan excel_script di Tools settings untuk upload Excel"
       : uploading
         ? "Menyalin file…"
         : "Upload file Excel (.xlsx)";
@@ -195,7 +195,7 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
 /**
  * Compose the user's typed instruction with any attached Excel files into a
  * single prompt string. The attachment block lists each file's relative path
- * and instructs the agent to read them via `read_excel`. If the user typed
+   * and instructs the agent to read them via `excel_script`. If the user typed
  * nothing, a sensible default instruction is supplied so the turn isn't blank.
  *
  * Kept in sync with the VSCode webview's equivalent helper.
@@ -203,6 +203,6 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
 export function buildPromptWithAttachments(text: string, files: PickedFile[]): string {
   if (files.length === 0) return text;
   const fileList = files.map((f) => `- ${f.relPath}`).join("\n");
-  const instruction = text.length > 0 ? text : "Baca file Excel ini dengan read_excel lalu analisa dan rangkum isinya.";
-  return `Saya upload file Excel berikut, sudah tersimpan di folder project:\n${fileList}\n\nTolong baca dengan tool read_excel lalu: ${instruction}`;
+  const instruction = text.length > 0 ? text : "Baca file Excel ini dengan excel_script lalu analisa dan rangkum isinya.";
+  return `Saya upload file Excel berikut, sudah tersimpan di folder project:\n${fileList}\n\nTolong baca dengan tool excel_script lalu: ${instruction}`;
 }

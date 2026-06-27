@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
-import type { Tool } from "../base.js";
+import type { Tool, ToolContext } from "../base.js";
 
 interface Args {
   script: string;
@@ -256,7 +256,10 @@ export const runBrowserTool: Tool = {
     "- IMPORTANT: `page.waitForTimeout(ms)` was REMOVED in Puppeteer v22+. To " +
     "sleep, use `await new Promise(r => setTimeout(r, ms))` instead.\n" +
     "- Prefer waiting for a specific selector over a fixed sleep whenever possible.\n" +
-    "- You are free to use any Puppeteer method — the sandbox is isolated per call.",
+    "- You are free to use any Puppeteer method — the sandbox is isolated per call.\n" +
+    "- File paths in your script (page.screenshot({ path }), downloads, setInputFiles) resolve " +
+    "relative to the PROJECT directory — use relative paths like 'out.png' or 'screenshots/page.png' " +
+    "and the file lands in the project folder. Do NOT use absolute paths unless necessary.",
   parameters: {
     type: "object",
     properties: {
@@ -272,10 +275,15 @@ export const runBrowserTool: Tool = {
     required: ["script"],
     additionalProperties: false,
   },
-  async execute(args) {
+  async execute(args, ctx) {
     const parsed = parseArgs(args);
     ensureWorkerFile();
-    const result = await runWorker(parsed);
+    // Set the worker's cwd to the project sandbox so that relative paths the
+    // AI writes inside the Puppeteer script (page.screenshot({ path: 'out.png' }),
+    // downloads, setInputFiles, etc.) land in the project directory the user
+    // expects — not an arbitrary host cwd (Electron's app dir, VSCode's
+    // extension dir, etc.). Falls back to process.cwd() if no workdir.
+    const result = await runWorker(parsed, ctx);
     return truncate(result, MAX_OUTPUT);
   },
 };
@@ -311,7 +319,7 @@ interface WorkerResult {
   error?: string;
 }
 
-function runWorker(args: Args): Promise<string> {
+function runWorker(args: Args, ctx: ToolContext): Promise<string> {
   const timeoutMs = args.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   return new Promise((resolve, reject) => {
     const env: NodeJS.ProcessEnv = {
@@ -326,6 +334,10 @@ function runWorker(args: Args): Promise<string> {
     };
     const child = fork(WORKER_PATH, [], {
       stdio: ["ignore", "pipe", "pipe", "ipc"],
+      // Run the worker from the project sandbox so relative file paths in the
+      // Puppeteer script (screenshot output, downloads, file uploads) resolve
+      // against the project dir, not the host's cwd.
+      cwd: ctx.projectDir,
       env,
       execArgv: [],
     });

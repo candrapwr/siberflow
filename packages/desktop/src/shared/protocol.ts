@@ -80,7 +80,7 @@ export interface HistoryEntry {
 
 /**
  * An uploaded Excel file after it has been copied into the per-session upload
- * dir (OS tmp, NOT the project dir). `read_excel` whitelists this location via
+ * dir (OS tmp, NOT the project dir). `excel_script` whitelists this location via
  * the agent's `uploadDir` option.
  */
 export interface PickedFile {
