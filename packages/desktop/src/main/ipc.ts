@@ -76,14 +76,19 @@ export function registerIpc(): void {
     host!.setWorkdir(folderPath);
   });
 
-  ipcMain.handle("siberflow:pickExcelFiles", async () => {
+  ipcMain.handle("siberflow:pickDocFiles", async () => {
     if (!host!.getWorkdir()) {
       return { error: "Pilih folder project dulu sebelum upload file." } as const;
     }
     const focused = BrowserWindow.getFocusedWindow() ?? mainWindow;
     const result = await dialog.showOpenDialog(focused!, {
-      title: "Pilih file Excel",
-      filters: [{ name: "Excel Workbook", extensions: ["xlsx"] }],
+      title: "Pilih file dokumen",
+      filters: [
+        { name: "Dokumen", extensions: ["xlsx", "docx", "pdf"] },
+        { name: "Excel Workbook", extensions: ["xlsx"] },
+        { name: "Word Document", extensions: ["docx"] },
+        { name: "PDF Document", extensions: ["pdf"] },
+      ],
       properties: ["openFile", "multiSelections"],
     });
     if (result.canceled || result.filePaths.length === 0) {

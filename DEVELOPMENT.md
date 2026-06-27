@@ -57,6 +57,9 @@ siberflow/
   │       │   ├── docx/
   │       │   │   ├── docx-script.ts   # docx_script — create/read .docx via docx + mammoth (vm sandbox)
   │       │   │   └── index.ts   # docxTools[]
+  │       │   ├── pdf/
+  │       │   │   ├── pdf-script.ts    # pdf_script — create/read .pdf via pdf-lib + pdfjs-dist (vm sandbox)
+  │       │   │   └── index.ts   # pdfTools[]
   │       │   ├── ssh/
   │       │   │   ├── exec.ts    # ssh_exec — remote shell over SSH2
   │       │   │   ├── sftp.ts    # sftp — remote file transfer
@@ -212,6 +215,7 @@ Default registry saat ini memuat delapan kategori tool:
 - database tool: `db_query` (MySQL / PostgreSQL / SQLite)
 - excel tool: `excel_script` (read/modify/create multi-sheet `.xlsx` via full exceljs API: cells, formulas, images, charts, styling — vm sandbox)
 - docx tool: `docx_script` (create/read `.docx` via `docx` library [create] + `mammoth` [read to HTML] — vm sandbox)
+- pdf tool: `pdf_script` (create/read `.pdf` via `pdf-lib` [create] + `pdfjs-dist` [read text] — vm sandbox)
 - ssh tools: `ssh_exec` (remote shell via SSH2), `sftp` (remote file transfer)
 - browser tool: `run_browser` (headless Chrome/Edge via Puppeteer, child_process worker)
 - interaction tool: `ask_user` (modal prompt ke user di host UI — always-on)
@@ -365,6 +369,28 @@ Tool create/read `.docx` via library `docx` (create, deklaratif API) + `mammoth`
 - **Document constructor**: butuh `sections` (required field di `IPropertiesOptions`). Start dengan `sections: []` supaya script bisa `addSection` from scratch.
 - **Source path resolve**: sama seperti `excel_script` — `resolveSourcePath(ctx, path)` whitelist `uploadDir`, fallback `resolveWithin(ctx.projectDir, ...)`. Destination path selalu `resolveWithin(ctx.projectDir, ...)`.
 - **Sandbox**: reuse `baseSandbox()` helper + `runInSandbox(sandbox, script, argNames)` — logic terpusat, beda arg names per mode. Sama persis security: `require`/`process`/`fs`/`global`/`Promise`/`eval`/`Function` di-block, timeout 5 detik.
+
+### PDF document tool (`pdf_script`)
+
+Tool create/read `.pdf` via library `pdf-lib` (create) + `pdfjs-dist` (read). Pure JS, no native deps. Source: `tools/pdf/pdf-script.ts`. Pattern identik `docx_script` (sandbox `node:vm` sync-only, host handle I/O).
+
+**Mode operasi**:
+- **Create** — script terima `(pdf, P, font)`:
+  - `pdf` = fresh `PDFDocument` (pdf-lib)
+  - `P` = subset module pdf-lib (`PDFDocument`, `StandardFonts`, `rgb`, `degrees`, `PageSizes`) — di-expose sebagai object literal (bukan full module, cukup untuk styling)
+  - `font` = **pre-embedded Helvetica** — host embed font SEBELUM sandbox (`await pdf.embedFont(StandardFonts.Helvetica)`), supaya script bisa `page.drawText(...)` sync tanpa `await embedFont()` (yang blocked di sandbox). Ini solusi kunci: pdf-lib's `embedFont` async, jadi host pre-embed.
+  - Script bangun halaman + draw, host serialize via **`pdf.save()`** (async, host-side) lalu write.
+- **Read** — `path` + `readOnly: true`. Host load via **pdfjs-dist** (`pdfjs.getDocument({data})`), iterasi `getPage(i).getTextContent()`, join text items, pages dipisah `\f`. String di-pass ke script `(text) => { ... return data }`.
+
+**Catatan implementasi**:
+- **pdfjs-dist lazy load via `createRequire`**: pdfjs-dist ESM-ish (`"type":"module"` + exports map). Kalau di-`import` static di core (yang di-bundle ke CJS), kena bug TDZ `require2` (sama seperti `docx`/`mammoth`). Solusi: host load lazy via `createRequire(import.meta.url).resolve("pdfjs-dist/legacy/build/pdf.mjs")` saat read mode dipanggil. Plus di-tandai `external` di build config (desktop + vscode).
+- **Legacy build**: pakai `pdfjs-dist/legacy/build/pdf.mjs` — main build browser-only (butuh DOM). Legacy build works di Node.
+- **Worker + standardFontDataUrl**: pdfjs v6 butuh worker. Set `GlobalWorkerOptions.workerSrc` ke `pdf.worker.mjs` sibling + `standardFontDataUrl` ke package's `standard_fonts/` (dengan trailing slash). Tanpa ini: warning/crash "Setting up fake worker".
+- **embedFont async → pre-embed**: beda dari exceljs (semua sync). `pdf-lib.embedFont()` async → host pre-embed Helvetica sebelum sandbox, pass sebagai arg `font`. Kalau script butuh font lain → tidak bisa (sandbox sync). Limitasi: create mode cuma pakai Helvetica. Untuk image juga sama (`embedPng` async) → create text/shape-only.
+- **Cross-realm bug (KRITIS)**: sandbox `node:vm` jalan di V8 realm terpisah. Array literal `[595,842]` dan options object `{start:{x,y}}` yang AI tulis punya prototype SANDBOX, bukan host. pdf-lib validasi input via `instanceof Array`/`instanceof Object` → cross-realm instance FAIL (return false) → throw error misleading `"page must be of type n... was actually of type NaN"` (pdf-lib's getType salah format cross-realm object jadi "NaN"). **Solusi**: `wrapPdf()` wrap `addPage` + setiap PDFPage draw method (drawText/drawLine/drawRectangle/dll). Tiap arg di-rebuild ke host realm lewat `toHostValue()` (deep copy ke host `Object`/`Array`) SEBELUM dipass ke pdf-lib. **PENTING**: deteksi plain object pakai `constructor.name === "Object"`, BUKAN `proto === Object.prototype` (yang miss cross-realm object karena proto-nya sandbox Object.prototype, bukan host). Tanpa fix ini, AI harus trial-error berkali-kali untuk nemu workaround.
+- **Scanned PDF**: read mode return empty untuk PDF scan (image, no text layer). pdfjs-dist tidak OCR — cuma baca text layer digital. Limitasi fundamental, bukan bug.
+- **Sandbox**: reuse `baseSandbox()` + `runInSandbox()` helper (sama seperti docx). `pdfjs-dist` di-load di host (bukan sandbox) → return text string ke sandbox.
+
 
 ### Browser tool (`run_browser`)
 
@@ -955,6 +981,7 @@ Buat workspace baru di `packages/<name>/`, depend ke `@siberflow/core`. Subscrib
 - `excel_script`: source path (read) punya whitelist tambahan — boleh baca path absolut di dalam `uploadDir` (tmp upload dir). Destination path (write) tetap sandbox `projectDir` — file Excel yang AI hasilkan harus di project, bukan tmp. Tool file lain tidak terima field `uploadDir` → tetap terkunci di project.
 - `excel_script` run kode AI-supplied di `node:vm` sandbox terkunci: `require`/`process`/`fs`/`global`/`Promise`/`eval`/`Function` di-block, timeout 5 detik. Compile + invoke dalam satu `runInContext` supaya timeout cover infinite loop. Script wajib synchronous; semua async I/O (load/write file) dilakukan host di luar sandbox.
 - `docx_script` sama persis pattern sandbox-nya dengan `excel_script` (vm terkunci, sync-only, host handle async I/O: `Packer.toBuffer` untuk create, `mammoth.convertToHtml` untuk read). Source path whitelist `uploadDir`, destination sandbox `projectDir`.
+- `pdf_script` sama pattern sandbox dengan excel/docx. Host pre-embed font + serialize (`pdf.save()`) untuk create, ekstrak text via pdfjs-dist (`getDocument`) untuk read. pdfjs-dist di-load lazy via `createRequire` di host + di-tandai `external` di build config (hindari bug TDZ bundling ESM).
 - `run_browser` run kode AI-supplied (Puppeteer) di **child process worker terisolasi** (bukan vm — Puppeteer async gak kompatibel). Worker gak punya akses host memory/session/AgentHost; env minimal (gak leak secrets); timeout kill process tree. Pakai Chrome/Edge yang sudah terinstall di sistem (channel `'chrome'` → fallback `'msedge'`), tidak ada download Chromium. `puppeteer-core` di-resolve via env var `SIBERFLOW_PUPPETEER_CORE_PATH` (host set) atau heuristik di `resolvePuppeteerCorePath()`.
 - Per-tool toggle (`enabledTools`): tool berbahaya (`exec`, `db_query`, `ssh_exec`, `run_browser`, dll) default OFF — opt-in via settings/env supaya blast-radius security kecil walau AI coba pakai. Pengecualian: `task_update` dan `ask_user` selalu on (core UX).
 - `exec` tool cwd=projectDir tapi shell bisa akses path lain (soft). OK untuk single-user dev; untuk multi-user / web public perlu permission layer.

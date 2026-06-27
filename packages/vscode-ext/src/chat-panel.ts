@@ -28,6 +28,7 @@ import {
 import type {
   BannerInfo,
   ExtToView,
+  DocKind,
   HistoryMessage,
   OptimizeMode,
   PickedFile,
@@ -201,8 +202,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "save_settings":
         await this.saveSettings(msg.values, msg.apiKey);
         break;
-      case "pick_excel_files":
-        await this.pickExcelFiles();
+      case "pick_doc_files":
+        await this.pickDocFiles();
         break;
       case "answer_user":
         this.resolveUserAnswer(msg.id, msg.status, msg.answer);
@@ -214,34 +215,40 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    * Open a multi-select .xlsx file picker, copy each chosen file into the
    * workspace's `_uploads/` sandbox, and notify the webview with the resulting
    * relative paths (or an error message if it failed). Mirrors the desktop
-   * app's `pickExcelFiles` IPC handler.
+   * app's `pickDocFiles` IPC handler.
    */
-  private async pickExcelFiles(): Promise<void> {
+  private async pickDocFiles(): Promise<void> {
     if (this.turnAbort) {
       this.post({ kind: "info", message: "Tunggu turn selesai sebelum upload." });
       return;
     }
     const uris = await vscode.window.showOpenDialog({
-      title: "Pilih file Excel",
-      filters: { "Excel Workbook": ["xlsx"] },
+      title: "Pilih file dokumen",
+      filters: {
+        "Dokumen": ["xlsx", "docx", "pdf"],
+        "Excel Workbook": ["xlsx"],
+        "Word Document": ["docx"],
+        "PDF Document": ["pdf"],
+      },
       canSelectMany: true,
       openLabel: "Upload",
     });
     if (!uris || uris.length === 0) return; // user cancelled
     try {
       const files = await this.copyUploads(uris);
-      this.post({ kind: "excel_files_picked", files });
+      this.post({ kind: "doc_files_picked", files });
     } catch (err) {
-      this.post({ kind: "excel_pick_error", message: (err as Error).message });
+      this.post({ kind: "doc_pick_error", message: (err as Error).message });
     }
   }
 
   /**
    * Copy source file URIs into the session's per-session upload dir in the OS
    * tmp folder (NOT the workspace — keeps the project clean and out of git).
-   * Returns metadata with absolute destination paths so the agent can pass
-   * them to `excel_script`, which whitelists this dir via the agent's `uploadDir`
-   * option. The folder is removed automatically when the session is deleted.
+   * Returns metadata with absolute destination paths + `kind` so the agent can
+   * be told the matching tool (`excel_script` / `docx_script` / `pdf_script`),
+   * which whitelists this dir via the agent's `uploadDir` option. The folder is
+   * removed automatically when the session is deleted.
    * Requires `this.current` to be set (so we know which session owns the dir).
    */
   private async copyUploads(srcUris: vscode.Uri[]): Promise<PickedFile[]> {
@@ -250,24 +257,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     const destDir = uploadsDirFor(this.current.id);
     // mode 0o700: owner-only, so other users on a shared Linux box can't read
-    // uploaded Excels out of /tmp.
+    // uploaded docs out of /tmp.
     await mkdir(destDir, { recursive: true, mode: 0o700 });
     const usedNames = new Set<string>();
     const out: PickedFile[] = [];
     for (const uri of srcUris) {
       const original = basename(uri.fsPath);
-      if (!original.toLowerCase().endsWith(".xlsx")) {
-        throw new Error(`File "${original}" bukan .xlsx. Hanya Excel yang didukung.`);
-      }
+      const lower = original.toLowerCase();
+      let kind: DocKind;
+      if (lower.endsWith(".xlsx")) kind = "excel";
+      else if (lower.endsWith(".docx")) kind = "docx";
+      else if (lower.endsWith(".pdf")) kind = "pdf";
+      else throw new Error(`File "${original}" bukan .xlsx/.docx/.pdf. Hanya dokumen yang didukung.`);
       const safe = sanitizeFileName(original, usedNames);
       usedNames.add(safe);
       const dest = join(destDir, safe);
       await copyFile(uri.fsPath, dest);
       await stat(dest); // sanity check it landed
-      // relPath is the ABSOLUTE tmp path — excel_script resolves absolute paths
-      // against the upload dir whitelist. (Field name kept for protocol
+      // relPath is the ABSOLUTE tmp path — the *_script tools resolve absolute
+      // paths against the upload dir whitelist. (Field name kept for protocol
       // stability; semantically it's an absolute path now.)
-      out.push({ name: original, relPath: dest });
+      out.push({ name: original, kind, relPath: dest });
     }
     return out;
   }

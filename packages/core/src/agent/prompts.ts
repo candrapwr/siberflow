@@ -48,6 +48,12 @@ function buildToolClause(enabledToolNames: string[]): string {
         "sandboxed JS function: headings, paragraphs, tables, images, bullets, styling)",
     );
   }
+  if (has("pdf_script")) {
+    parts.push(
+      "PDF document manipulation (pdf_script — create/read .pdf via the pdf-lib/pdfjs libraries in a " +
+        "sandboxed JS function: pages, text, shapes, colors, text extraction)",
+    );
+  }
   if (has("run_browser")) {
     parts.push("headless browser automation (run_browser for navigating/scraping/interacting with pages via the user's installed Chrome/Edge using the Puppeteer API — supports AJAX/SPA content, form fill, login, screenshots)");
   }
@@ -65,7 +71,7 @@ function buildToolClause(enabledToolNames: string[]): string {
 
   // Sandbox-scope note — only mention what's relevant to the active set.
   const hasLocalFs = any("read_file", "write_file", "edit_file", "copy_file", "list_dir", "exec") ||
-    has("excel_script") || has("docx_script");
+    has("excel_script") || has("docx_script") || has("pdf_script");
   const hasRemoteSsh = any("ssh_exec", "sftp");
   const scopeParts: string[] = [];
   if (hasLocalFs) scopeParts.push("all local file operations are sandboxed to the project directory");

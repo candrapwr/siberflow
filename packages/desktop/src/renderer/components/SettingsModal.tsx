@@ -18,6 +18,7 @@ const TOGGLE_TOOLS = [
   { name: "sftp", label: "sftp", group: "SSH" },
   { name: "excel_script", label: "excel_script", group: "Excel" },
   { name: "docx_script", label: "docx_script", group: "Document" },
+  { name: "pdf_script", label: "pdf_script", group: "Document" },
   { name: "run_browser", label: "run_browser", group: "Browser" },
 ] as const;
 

@@ -6,6 +6,7 @@ import { sshTools } from "./ssh/index.js";
 import { taskTools } from "./task/index.js";
 import { excelTools } from "./excel/index.js";
 import { docxTools } from "./docx/index.js";
+import { pdfTools } from "./pdf/index.js";
 import { browserTools } from "./browser/index.js";
 import { interactionTools } from "./interaction/index.js";
 
@@ -18,6 +19,7 @@ export { sshTools } from "./ssh/index.js";
 export { taskTools } from "./task/index.js";
 export { excelTools } from "./excel/index.js";
 export { docxTools } from "./docx/index.js";
+export { pdfTools } from "./pdf/index.js";
 export { browserTools } from "./browser/index.js";
 export { interactionTools } from "./interaction/index.js";
 
@@ -62,9 +64,9 @@ export function createDefaultRegistry(opts: RegistryOptions = {}): ToolRegistry 
   const enabled = opts.enabledTools ?? DEFAULT_ENABLED_TOOLS;
   const hasFs = opts.filesystem !== false;
 
-  // file / exec / excel / docx tools require the project sandbox (workdir).
+  // file / exec / excel / docx / pdf tools require the project sandbox (workdir).
   // Register only those the user enabled AND only when a workdir exists.
-  const fsCandidates = [...fileTools, ...cliTools, ...excelTools, ...docxTools];
+  const fsCandidates = [...fileTools, ...cliTools, ...excelTools, ...docxTools, ...pdfTools];
   for (const tool of fsCandidates) {
     if (hasFs && enabled.has(tool.name)) registry.register(tool);
   }

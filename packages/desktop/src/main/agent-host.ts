@@ -28,6 +28,7 @@ import {
 import type {
   BannerInfo,
   CurrentSessionInfo,
+  DocKind,
   HistoryEntry,
   MainEvent,
   PickedFile,
@@ -426,14 +427,12 @@ export class AgentHost {
    * Copy a list of source file paths into the session's per-session upload dir
    * in the OS tmp folder (NOT the project dir — keeps the workspace clean and
    * out of git). Filenames are sanitized; collisions are de-duplicated with a
-   * short suffix. Only `.xlsx` files are accepted. Returns metadata with the
-   * absolute destination path so the agent can pass it to `excel_script`, which
-   * whitelists this dir via the agent's `uploadDir` option. The folder is
-   * removed automatically when the session is deleted.
-   *
-   * Unlike file writes, uploads don't require a project workdir — they live in
-   * tmp. But `excel_script` still needs the project sandbox for relative-path
-   * reads, so a missing workdir just means relative reads won't resolve.
+   * short suffix. Accepted: `.xlsx`, `.docx`, `.pdf`. Returns metadata with the
+   * absolute destination path + `kind` (derived from extension) so the renderer
+   * can pick the right chip icon and the prompt builder can name the matching
+   * tool (`excel_script` / `docx_script` / `pdf_script`), which whitelists this
+   * dir via the agent's `uploadDir` option. The folder is removed automatically
+   * when the session is deleted.
    */
   async copyUploads(srcPaths: string[]): Promise<PickedFile[]> {
     if (!this.current) {
@@ -441,25 +440,28 @@ export class AgentHost {
     }
     const destDir = uploadsDirFor(this.current.id);
     // mode 0o700: owner-only, so other users on a shared Linux box can't read
-    // uploaded Excels out of /tmp.
+    // uploaded docs out of /tmp.
     await mkdir(destDir, { recursive: true, mode: 0o700 });
 
     const usedNames = new Set<string>();
     const out: PickedFile[] = [];
     for (const src of srcPaths) {
       const original = basename(src);
-      if (!original.toLowerCase().endsWith(".xlsx")) {
-        throw new Error(`File "${original}" bukan .xlsx. Hanya Excel yang didukung.`);
-      }
+      const lower = original.toLowerCase();
+      let kind: DocKind;
+      if (lower.endsWith(".xlsx")) kind = "excel";
+      else if (lower.endsWith(".docx")) kind = "docx";
+      else if (lower.endsWith(".pdf")) kind = "pdf";
+      else throw new Error(`File "${original}" bukan .xlsx/.docx/.pdf. Hanya dokumen yang didukung.`);
       const safe = sanitizeFileName(original, usedNames);
       usedNames.add(safe);
       const dest = join(destDir, safe);
       await copyFile(src, dest);
       const stats = await stat(dest);
-      // relPath is the ABSOLUTE tmp path — excel_script resolves absolute paths
-      // against the upload dir whitelist. (Field name kept for protocol
+      // relPath is the ABSOLUTE tmp path — the *_script tools resolve absolute
+      // paths against the upload dir whitelist. (Field name kept for protocol
       // stability; semantically it's an absolute path now.)
-      out.push({ name: original, relPath: dest, bytes: stats.size });
+      out.push({ name: original, kind, relPath: dest, bytes: stats.size });
     }
     return out;
   }

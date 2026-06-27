@@ -1,13 +1,13 @@
 // Chat input: textarea + send/stop button. Enter to send, Shift+Enter newline.
-// Also hosts the Excel (.xlsx) attachment picker: a paperclip button opens a
-// native file dialog, chosen files are copied into the project sandbox by the
-// main process, and the resulting relative paths are folded into the outgoing
-// prompt so the agent picks them up via `excel_script`.
+// Also hosts the document (.xlsx/.docx/.pdf) attachment picker: a paperclip
+// button opens a native file dialog, chosen files are copied into the session
+// upload dir by the main process, and the resulting paths are folded into the
+// outgoing prompt so the agent reads them via the matching *_script tool.
 
 import { memo, useEffect, useRef, useState } from "react";
 import { ipc } from "../ipc.js";
-import type { PickedFile } from "@shared/protocol";
-import { FileExcelIcon, PaperclipIcon, SendIcon, StopIcon, XIcon } from "./icons.js";
+import type { DocKind, PickedFile } from "@shared/protocol";
+import { FileDocIcon, FileExcelIcon, FilePdfIcon, PaperclipIcon, SendIcon, StopIcon, XIcon } from "./icons.js";
 
 interface ComposerProps {
   busy: boolean;
@@ -17,18 +17,26 @@ interface ComposerProps {
    * a turn completes. */
   autoFocusKey?: string;
   /** When this changes to a non-empty string, prefill the input with it and
-   * focus/select-all so the user can edit then resend. */
+   * focus/select-all so the user can immediately edit or resend. */
   prefill?: string;
   /** Whether the active session has a working directory. Upload is disabled
    * (and attachments cleared) when false, since there's no sandbox to copy
-   * files into and `excel_script` wouldn't be registered anyway. */
+   * files into and the *_script tools wouldn't be registered anyway. */
   hasWorkdir?: boolean;
-  /** Whether excel_script is enabled in settings. The upload button is disabled
-   * (with a tooltip hint) when false, since uploaded files can't be read. */
-  excelEnabled?: boolean;
+  /** Whether ANY document tool is enabled in settings. The upload button is
+   * disabled (with a tooltip hint) when none are, since uploaded files can't
+   * be read. */
+  docEnabled?: boolean;
 }
 
-export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, prefill, hasWorkdir = true, excelEnabled = true }: ComposerProps) {
+/** Pick the right chip icon for a document kind. */
+function docIcon(kind: DocKind) {
+  if (kind === "docx") return FileDocIcon;
+  if (kind === "pdf") return FilePdfIcon;
+  return FileExcelIcon;
+}
+
+export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, prefill, hasWorkdir = true, docEnabled = true }: ComposerProps) {
   const [value, setValue] = useState("");
   const [attachments, setAttachments] = useState<PickedFile[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -76,11 +84,11 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
     if (!hasWorkdir) setAttachments([]);
   }, [hasWorkdir]);
 
-  const onPickExcel = async () => {
+  const onPickDoc = async () => {
     if (busy || uploading || !hasWorkdir) return;
     setUploading(true);
     try {
-      const result = await ipc().pickExcelFiles();
+      const result = await ipc().pickDocFiles();
       if ("error" in result) {
         // Surface as a transient alert; the host already returns a localized
         // message (e.g. "Pilih folder project dulu…").
@@ -125,44 +133,47 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
     }
   };
 
-  const uploadDisabled = busy || uploading || !hasWorkdir || !excelEnabled;
+  const uploadDisabled = busy || uploading || !hasWorkdir || !docEnabled;
   const uploadTitle = !hasWorkdir
     ? "Pilih folder project dulu sebelum upload"
-    : !excelEnabled
-      ? "Aktifkan excel_script di Tools settings untuk upload Excel"
+    : !docEnabled
+      ? "Aktifkan salah satu tool dokumen (excel_script/docx_script/pdf_script) di Tools settings untuk upload"
       : uploading
         ? "Menyalin file…"
-        : "Upload file Excel (.xlsx)";
+        : "Upload file dokumen (.xlsx/.docx/.pdf)";
 
   return (
     <div className="composer">
       {attachments.length > 0 && (
         <div className="composer-attachments">
-          {attachments.map((f, i) => (
-            <span className="attach-chip" key={`${f.relPath}:${i}`} title={f.relPath}>
-              <FileExcelIcon size={13} className="attach-chip-icon" />
-              <span className="attach-chip-name">{f.name}</span>
-              <button
-                type="button"
-                className="attach-chip-x"
-                onClick={() => removeAttachment(i)}
-                disabled={busy}
-                title="Hapus"
-              >
-                <XIcon size={11} />
-              </button>
-            </span>
-          ))}
+          {attachments.map((f, i) => {
+            const Icon = docIcon(f.kind);
+            return (
+              <span className="attach-chip" key={`${f.relPath}:${i}`} title={f.relPath}>
+                <Icon size={13} className="attach-chip-icon" />
+                <span className="attach-chip-name">{f.name}</span>
+                <button
+                  type="button"
+                  className="attach-chip-x"
+                  onClick={() => removeAttachment(i)}
+                  disabled={busy}
+                  title="Hapus"
+                >
+                  <XIcon size={11} />
+                </button>
+              </span>
+            );
+          })}
         </div>
       )}
       <div className="composer-shell">
         <button
           type="button"
           className="upload-btn"
-          onClick={onPickExcel}
+          onClick={onPickDoc}
           disabled={uploadDisabled}
           title={uploadTitle}
-          aria-label="Upload file Excel"
+          aria-label="Upload file dokumen"
         >
           <PaperclipIcon size={15} />
         </button>
@@ -193,16 +204,16 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
 });
 
 /**
- * Compose the user's typed instruction with any attached Excel files into a
- * single prompt string. The attachment block lists each file's relative path
-   * and instructs the agent to read them via `excel_script`. If the user typed
- * nothing, a sensible default instruction is supplied so the turn isn't blank.
+ * Fold staged attachments into the prompt sent to the agent. Short and
+ * type-agnostic: just lists the file paths under a one-line header, then the
+ * user's typed instruction (or a generic default if they typed nothing). The
+ * agent picks the right `*_script` tool itself based on each file's extension.
  *
  * Kept in sync with the VSCode webview's equivalent helper.
  */
 export function buildPromptWithAttachments(text: string, files: PickedFile[]): string {
   if (files.length === 0) return text;
   const fileList = files.map((f) => `- ${f.relPath}`).join("\n");
-  const instruction = text.length > 0 ? text : "Baca file Excel ini dengan excel_script lalu analisa dan rangkum isinya.";
-  return `Saya upload file Excel berikut, sudah tersimpan di folder project:\n${fileList}\n\nTolong baca dengan tool excel_script lalu: ${instruction}`;
+  const instr = text.length > 0 ? text : "Read these files and summarize their contents.";
+  return `Attached files:\n${fileList}\n\n${instr}`;
 }

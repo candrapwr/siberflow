@@ -3,6 +3,7 @@ import type {
   ExtToView,
   ViewToExt,
   BannerInfo,
+  DocKind,
   PickedFile,
   SessionInfo,
   SettingsValues,
@@ -93,6 +94,8 @@ const ICONS = {
   tool: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>`,
   paperclip: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>`,
   fileExcel: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h8"/><path d="M12 13v4"/></svg>`,
+  fileDoc: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13l1.5 5 1.5-4 1.5 4L15 13"/></svg>`,
+  filePdf: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8.5 13v5h1.5a1.5 1.5 0 0 0 0-3H8.5"/><path d="M13 13v5h1.5a1.5 1.5 0 0 0 1.5-1.5v-2a1.5 1.5 0 0 0-1.5-1.5H13z"/></svg>`,
   x: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`,
 };
 
@@ -297,6 +300,7 @@ const TOGGLE_TOOLS = [
   { name: "sftp", label: "sftp", group: "SSH" },
   { name: "excel_script", label: "excel_script", group: "Excel" },
   { name: "docx_script", label: "docx_script", group: "Document" },
+  { name: "pdf_script", label: "pdf_script", group: "Document" },
   { name: "run_browser", label: "run_browser", group: "Browser" },
 ];
 
@@ -511,19 +515,19 @@ function renderComposer(): HTMLElement {
   const shell = document.createElement("div");
   shell.className = "composer-shell";
 
-  // Excel upload button (paperclip). Opens a native multi-select .xlsx picker
-  // handled by the extension host; the host copies files into the workspace
-  // sandbox and replies with excel_files_picked.
+  // Document upload button (paperclip). Opens a native multi-select
+  // .xlsx/.docx/.pdf picker handled by the extension host; the host copies files
+  // into the session upload dir and replies with doc_files_picked.
   const uploadBtn = document.createElement("button");
   uploadBtn.className = "upload-btn";
   uploadBtn.id = "upload-btn";
   uploadBtn.type = "button";
-  uploadBtn.title = "Upload file Excel (.xlsx)";
-  uploadBtn.setAttribute("aria-label", "Upload file Excel");
+  uploadBtn.title = "Upload file dokumen (.xlsx/.docx/.pdf)";
+  uploadBtn.setAttribute("aria-label", "Upload file dokumen");
   uploadBtn.innerHTML = ICONS.paperclip;
   uploadBtn.onclick = () => {
     if (state.busy) return;
-    vscode.postMessage({ kind: "pick_excel_files" });
+    vscode.postMessage({ kind: "pick_doc_files" });
   };
   shell.appendChild(uploadBtn);
 
@@ -565,6 +569,13 @@ function renderComposer(): HTMLElement {
   return el;
 }
 
+/** Map a document kind to its chip icon SVG string. */
+function docIcon(kind: DocKind): string {
+  if (kind === "docx") return ICONS.fileDoc;
+  if (kind === "pdf") return ICONS.filePdf;
+  return ICONS.fileExcel;
+}
+
 /** Re-render the attachment chip strip from `state.attachments`. */
 function updateAttachments(): void {
   const wrap = document.getElementById("composer-attachments");
@@ -577,7 +588,7 @@ function updateAttachments(): void {
     chip.title = f.relPath;
     const icon = document.createElement("span");
     icon.className = "attach-chip-icon";
-    icon.innerHTML = ICONS.fileExcel;
+    icon.innerHTML = docIcon(f.kind);
     const name = document.createElement("span");
     name.className = "attach-chip-name";
     name.textContent = f.name;
@@ -636,17 +647,17 @@ function submit(): void {
 }
 
 /**
- * Compose the user's typed instruction with any attached Excel files into a
- * single prompt string. When attachments are present, a header block lists
- * each file's relative path and tells the agent to read them via `excel_script`.
- * If the user typed nothing, a sensible default instruction is supplied so the
- * turn isn't blank. Mirrors the desktop Composer's helper.
+ * Fold staged attachments into the prompt sent to the agent. Short and
+ * type-agnostic: just lists the file paths under a one-line header, then the
+ * user's typed instruction (or a generic default if they typed nothing). The
+ * agent picks the right `*_script` tool itself based on each file's extension.
+ * Mirrors the desktop Composer's helper.
  */
 function buildPromptWithAttachments(text: string, files: PickedFile[]): string {
   if (files.length === 0) return text;
   const fileList = files.map((f) => `- ${f.relPath}`).join("\n");
-  const instruction = text.length > 0 ? text : "Baca file Excel ini dengan excel_script lalu analisa dan rangkum isinya.";
-  return `Saya upload file Excel berikut, sudah tersimpan di folder project:\n${fileList}\n\nTolong baca dengan tool excel_script lalu: ${instruction}`;
+  const instr = text.length > 0 ? text : "Read these files and summarize their contents.";
+  return `Attached files:\n${fileList}\n\n${instr}`;
 }
 
 function setBusy(b: boolean): void {
@@ -690,13 +701,16 @@ function updateComposerState(): void {
   }
   if (ta) ta.disabled = state.busy;
   if (uploadBtn) {
-    const excelEnabled = state.enabledTools.includes("excel_script");
-    uploadBtn.disabled = state.busy || !excelEnabled;
-    uploadBtn.title = !excelEnabled
-      ? "Aktifkan excel_script di Tools settings untuk upload Excel"
+    const docEnabled =
+      state.enabledTools.includes("excel_script") ||
+      state.enabledTools.includes("docx_script") ||
+      state.enabledTools.includes("pdf_script");
+    uploadBtn.disabled = state.busy || !docEnabled;
+    uploadBtn.title = !docEnabled
+      ? "Aktifkan salah satu tool dokumen (excel_script/docx_script/pdf_script) di Tools settings untuk upload"
       : state.busy
         ? "Tunggu turn selesai"
-        : "Upload file Excel (.xlsx)";
+        : "Upload file dokumen (.xlsx/.docx/.pdf)";
   }
   if (hint) {
     hint.innerHTML = state.busy
@@ -1316,14 +1330,14 @@ window.addEventListener("message", (ev) => {
       scrollToBottom();
       refreshActionBar();
       break;
-    case "excel_files_picked":
+    case "doc_files_picked":
       if (msg.files.length > 0) {
         state.attachments.push(...msg.files);
         updateAttachments();
         updateComposerState();
       }
       break;
-    case "excel_pick_error":
+    case "doc_pick_error":
       showNotice("error", msg.message);
       break;
     case "ask_user":
