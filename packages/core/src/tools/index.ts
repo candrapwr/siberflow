@@ -5,6 +5,7 @@ import { dbTools } from "./db/index.js";
 import { sshTools } from "./ssh/index.js";
 import { taskTools } from "./task/index.js";
 import { excelTools } from "./excel/index.js";
+import { docxTools } from "./docx/index.js";
 import { browserTools } from "./browser/index.js";
 import { interactionTools } from "./interaction/index.js";
 
@@ -16,6 +17,7 @@ export { dbTools } from "./db/index.js";
 export { sshTools } from "./ssh/index.js";
 export { taskTools } from "./task/index.js";
 export { excelTools } from "./excel/index.js";
+export { docxTools } from "./docx/index.js";
 export { browserTools } from "./browser/index.js";
 export { interactionTools } from "./interaction/index.js";
 
@@ -35,7 +37,7 @@ export interface RegistryOptions {
   /**
    * Which tool names to register. Defaults to the 5 file operations only
    * (`DEFAULT_ENABLED_TOOLS`). exec / db_query / ssh_exec / sftp /
-   * read_excel / write_excel default OFF — opt in via settings/env to keep the
+   * excel_script default OFF — opt in via settings/env to keep the
    * prompt lean and the blast radius small. `task_update` ignores this filter
    * (it is always registered).
    */
@@ -60,9 +62,9 @@ export function createDefaultRegistry(opts: RegistryOptions = {}): ToolRegistry 
   const enabled = opts.enabledTools ?? DEFAULT_ENABLED_TOOLS;
   const hasFs = opts.filesystem !== false;
 
-  // file / exec / excel tools require the project sandbox (workdir). Register
-  // only those the user enabled AND only when a workdir exists.
-  const fsCandidates = [...fileTools, ...cliTools, ...excelTools];
+  // file / exec / excel / docx tools require the project sandbox (workdir).
+  // Register only those the user enabled AND only when a workdir exists.
+  const fsCandidates = [...fileTools, ...cliTools, ...excelTools, ...docxTools];
   for (const tool of fsCandidates) {
     if (hasFs && enabled.has(tool.name)) registry.register(tool);
   }

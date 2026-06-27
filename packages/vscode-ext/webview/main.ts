@@ -295,9 +295,8 @@ const TOGGLE_TOOLS = [
   { name: "db_query", label: "db_query", group: "Database" },
   { name: "ssh_exec", label: "ssh_exec", group: "SSH" },
   { name: "sftp", label: "sftp", group: "SSH" },
-  { name: "read_excel", label: "read_excel", group: "Excel" },
-  { name: "write_excel", label: "write_excel", group: "Excel" },
-  { name: "write_excel_script", label: "write_excel_script", group: "Excel" },
+  { name: "excel_script", label: "excel_script", group: "Excel" },
+  { name: "docx_script", label: "docx_script", group: "Document" },
   { name: "run_browser", label: "run_browser", group: "Browser" },
 ];
 
@@ -610,7 +609,7 @@ function submit(): void {
   const hasAttachments = state.attachments.length > 0;
   if (!text && !hasAttachments) return;
   // Fold staged Excel attachments into the prompt: list their relative paths
-  // and instruct the agent to read them via read_excel. Mirrors the desktop
+  // and instruct the agent to read them via excel_script. Mirrors the desktop
   // composer's buildPromptWithAttachments.
   const composed = buildPromptWithAttachments(text, state.attachments);
   ta.value = "";
@@ -639,15 +638,15 @@ function submit(): void {
 /**
  * Compose the user's typed instruction with any attached Excel files into a
  * single prompt string. When attachments are present, a header block lists
- * each file's relative path and tells the agent to read them via `read_excel`.
+ * each file's relative path and tells the agent to read them via `excel_script`.
  * If the user typed nothing, a sensible default instruction is supplied so the
  * turn isn't blank. Mirrors the desktop Composer's helper.
  */
 function buildPromptWithAttachments(text: string, files: PickedFile[]): string {
   if (files.length === 0) return text;
   const fileList = files.map((f) => `- ${f.relPath}`).join("\n");
-  const instruction = text.length > 0 ? text : "Baca file Excel ini dengan read_excel lalu analisa dan rangkum isinya.";
-  return `Saya upload file Excel berikut, sudah tersimpan di folder project:\n${fileList}\n\nTolong baca dengan tool read_excel lalu: ${instruction}`;
+  const instruction = text.length > 0 ? text : "Baca file Excel ini dengan excel_script lalu analisa dan rangkum isinya.";
+  return `Saya upload file Excel berikut, sudah tersimpan di folder project:\n${fileList}\n\nTolong baca dengan tool excel_script lalu: ${instruction}`;
 }
 
 function setBusy(b: boolean): void {
@@ -691,10 +690,10 @@ function updateComposerState(): void {
   }
   if (ta) ta.disabled = state.busy;
   if (uploadBtn) {
-    const excelEnabled = state.enabledTools.includes("read_excel");
+    const excelEnabled = state.enabledTools.includes("excel_script");
     uploadBtn.disabled = state.busy || !excelEnabled;
     uploadBtn.title = !excelEnabled
-      ? "Aktifkan read_excel di Tools settings untuk upload Excel"
+      ? "Aktifkan excel_script di Tools settings untuk upload Excel"
       : state.busy
         ? "Tunggu turn selesai"
         : "Upload file Excel (.xlsx)";

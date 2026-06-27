@@ -240,7 +240,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    * Copy source file URIs into the session's per-session upload dir in the OS
    * tmp folder (NOT the workspace — keeps the project clean and out of git).
    * Returns metadata with absolute destination paths so the agent can pass
-   * them to `read_excel`, which whitelists this dir via the agent's `uploadDir`
+   * them to `excel_script`, which whitelists this dir via the agent's `uploadDir`
    * option. The folder is removed automatically when the session is deleted.
    * Requires `this.current` to be set (so we know which session owns the dir).
    */
@@ -264,7 +264,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const dest = join(destDir, safe);
       await copyFile(uri.fsPath, dest);
       await stat(dest); // sanity check it landed
-      // relPath is the ABSOLUTE tmp path — read_excel resolves absolute paths
+      // relPath is the ABSOLUTE tmp path — excel_script resolves absolute paths
       // against the upload dir whitelist. (Field name kept for protocol
       // stability; semantically it's an absolute path now.)
       out.push({ name: original, relPath: dest });
@@ -407,7 +407,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       enabledToolNames: this.registry.list().map((t) => t.name),
     });
     // uploadDir is the per-session tmp dir where uploaded Excels live. Pass it
-    // so read_excel can whitelist reads from there even though it's outside
+    // so excel_script can whitelist reads from there even though it's outside
     // the project sandbox.
     const uploadDir = this.current ? uploadsDirFor(this.current.id) : undefined;
     return new Agent({

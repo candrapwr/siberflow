@@ -16,9 +16,8 @@ const TOGGLE_TOOLS = [
   { name: "db_query", label: "db_query", group: "Database" },
   { name: "ssh_exec", label: "ssh_exec", group: "SSH" },
   { name: "sftp", label: "sftp", group: "SSH" },
-  { name: "read_excel", label: "read_excel", group: "Excel" },
-  { name: "write_excel", label: "write_excel", group: "Excel" },
-  { name: "write_excel_script", label: "write_excel_script", group: "Excel" },
+  { name: "excel_script", label: "excel_script", group: "Excel" },
+  { name: "docx_script", label: "docx_script", group: "Document" },
   { name: "run_browser", label: "run_browser", group: "Browser" },
 ] as const;
 

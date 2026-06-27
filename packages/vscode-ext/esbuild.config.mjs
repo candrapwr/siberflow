@@ -61,10 +61,12 @@ const extension = {
   platform: "node",
   format: "cjs",
   target: "node20",
-  // puppeteer-core is a large package that does dynamic requires. It must
-  // stay external so esbuild doesn't try to bundle it — the tool loads it via
-  // require() at runtime from node_modules, just like sqlite3/ssh2.
-  external: ["vscode", "puppeteer-core"],
+  // puppeteer-core, docx, and mammoth are packages that must stay external.
+  // puppeteer-core does dynamic requires at runtime. `docx` and `mammoth` are
+  // ESM-only ("type":"module") and break esbuild's CJS interop (TDZ on the
+  // generated `require2` helper) when bundled into the extension's CJS output.
+  // Both ship CJS builds, so Node resolves them via require() at runtime.
+  external: ["vscode", "puppeteer-core", "docx", "mammoth"],
 };
 
 const webview = {

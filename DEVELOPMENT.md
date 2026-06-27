@@ -52,11 +52,11 @@ siberflow/
     │       │   │   ├── exec.ts    # shell exec, cwd=projectDir
     │       │   │   └── index.ts
   │       │   ├── excel/
-  │       │   │   ├── read.ts    # read_excel — multi-sheet, table/json output
-  │       │   │   ├── write.ts   # write_excel — multi-sheet, styled output
-  │       │   │   ├── script.ts  # write_excel_script — full exceljs API via vm sandbox
-  │       │   │   ├── styles.ts  # theme presets, named colors, number formats
+  │       │   │   ├── excel-script.ts  # excel_script — read/modify/create .xlsx via full exceljs API (vm sandbox)
   │       │   │   └── index.ts   # excelTools[]
+  │       │   ├── docx/
+  │       │   │   ├── docx-script.ts   # docx_script — create/read .docx via docx + mammoth (vm sandbox)
+  │       │   │   └── index.ts   # docxTools[]
   │       │   ├── ssh/
   │       │   │   ├── exec.ts    # ssh_exec — remote shell over SSH2
   │       │   │   ├── sftp.ts    # sftp — remote file transfer
@@ -199,7 +199,7 @@ interface Tool {
 
 interface ToolContext {
   projectDir: string;   // sandbox root untuk semua tool file
-  uploadDir?: string;   // tmp upload dir, HANYA dibaca read_excel (lihat section Excel)
+  uploadDir?: string;   // tmp upload dir, HANYA dibaca excel_script (lihat section Excel)
   taskStore?: TaskStore;  // hadir saat tasksEnabled
 }
 ```
@@ -210,7 +210,8 @@ Default registry saat ini memuat delapan kategori tool:
 - file tools: `read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`
 - cli tool: `exec`
 - database tool: `db_query` (MySQL / PostgreSQL / SQLite)
-- excel tools: `read_excel`, `write_excel`, `write_excel_script` (multi-sheet `.xlsx`, styled output + full exceljs API via vm sandbox)
+- excel tool: `excel_script` (read/modify/create multi-sheet `.xlsx` via full exceljs API: cells, formulas, images, charts, styling — vm sandbox)
+- docx tool: `docx_script` (create/read `.docx` via `docx` library [create] + `mammoth` [read to HTML] — vm sandbox)
 - ssh tools: `ssh_exec` (remote shell via SSH2), `sftp` (remote file transfer)
 - browser tool: `run_browser` (headless Chrome/Edge via Puppeteer, child_process worker)
 - interaction tool: `ask_user` (modal prompt ke user di host UI — always-on)
@@ -268,42 +269,40 @@ Contoh argumen:
 
 Domain `tools/excel/` pakai library `exceljs` (pure JavaScript, **tidak ada native addon** — aman untuk build Electron cross-platform, tidak perlu rebuild seperti `sqlite3`/`ssh2`). Dua tool:
 
-**`read_excel`** — baca workbook `.xlsx`. Output default markdown `table` (header ditulis sekali) atau `json` (array row objects, presisi numerik terjaga). Bisa baca satu sheet spesifik (`sheet`) atau semua sheet sekaligus (tiap sheet di-prefix `=== Sheet: <name> (<rows> rows) ===`, sheet kosong di-skip). Tipe data dipertahankan: angka tetap number, tanggal → ISO string, formula → result, merged cell → value top-left, error cell (`#N/A`) → string. Safety caps: `maxRows` default 500 per sheet, total output 200K chars (sama seperti `db_query`).
+**`excel_script`** — satu tool serbaguna untuk **baca, modifikasi, dan buat** workbook `.xlsx` via akses penuh API `exceljs`. AI menyuplai function JavaScript `(wb, ExcelJS) => { ... return <optional data> }` yang dijalankan di sandbox `node:vm`. Host yang melakukan semua I/O file; sandbox hanya memanipulasi objek workbook.
+
+**Mode operasi** (berdasarkan argumen):
+- **Read existing** — `path` + `readOnly: true`. Host load workbook dari disk ke `wb`; script membaca cell/rumus/image dan **return** data yang diekstrak (string/number/object/array). Return value di-serialize JSON (replacer untuk Buffer/Date/exceljs object) dan dikirim balik ke AI sebagai output tool, jadi AI "melihat" hasil bacaannya.
+- **Modify existing** — `path` (workbook di-load ke `wb`), script memutasinya, `readOnly` false/omit. Host tulis workbook balik ke `path` (atau `saveAs`) setelah script selesai.
+- **Create new** — omit `path`, bangun workbook dari nol via `wb.addWorksheet(...)`, pass `saveAs` (atau `path`) sebagai destinasi.
+
+**Kapabilitas** (full exceljs API):
+- **Rumus/formula** — baca `cell.value.formula` / `cell.value.result`; tulis `ws.getCell('C2').value = { formula: 'SUM(A2:A10)' }`
+- **Gambar/image** — `ws.getImages()` enumerate; `wb.getImage(id).buffer` ambil bytes; tulis via `wb.addImage({ buffer, extension })` + `ws.addImage(id, range)`. Sandbox mem-block `fs` → untuk embed image, AI baca bytes dulu via tool lain (`read_file`) lalu inline Buffer literal di script.
+- **Styling/layout** — merge cells, multi-level header, conditional formatting, chart, autofilter, data validation, frozen panes, column grouping, protection, number format, zebra rows, dll.
 
 Catatan implementasi penting:
-- **ESM/CJS**: `exceljs` CommonJS; di NodeNext ESM named import gagal runtime → pakai `import ExcelJS from "exceljs"; const { Workbook } = ExcelJS`
+- **ESM/CJS**: `exceljs` CommonJS; di NodeNext ESM named import gagal runtime → pakai `import ExcelJS from "exceljs"; const { Workbook: WorkbookCtor } = ExcelJS`
 - **Type mismatch Buffer**: exceljs pinned ke `@types/node` lama, `load(buffer)` structural mismatch → cast `as any` di call site (runtime aman)
-- **Resolve path**: pakai `resolveExcelPath(ctx, path)` — bukan `resolveWithin` langsung. Cek upload dir dulu (kalau ada & path absolut), fallback ke project sandbox
+- **Source path resolve**: pakai `resolveSourcePath(ctx, path)` — bukan `resolveWithin` langsung. Cek upload dir dulu (kalau ada & path absolut), fallback ke project sandbox. Destination path selalu `resolveWithin(ctx.projectDir, ...)` (output Excel harus di project).
+- **JSON replacer**: return value di-coerce — function di-omit, Buffer/TypedArray → descriptor (jangan dump raw image bytes), Date → ISO. Cap 200K chars.
 
-**`write_excel`** — buat/overwrite workbook `.xlsx` multi-sheet dari map `sheets: { SheetName: [rowObjects] }`. Header diambil dari key object pertama. Default sudah styling rapi (theme `professional`: header bold + biru + text putih + freeze pane + autoWidth + zebra rows). Styling custom ramah AI (high-level, bukan raw exceljs style):
-- `theme`: `professional` / `zebra` / `minimal` / `colorful`
-- `header`: `{ bold?, background?, color? }` — warna pakai nama (`blue`/`lightgray`/25+ lainnya di `styles.ts`) atau hex `#RRGGBB`
-- `zebraRows`, `freezeHeader`, `autoWidth` (toggle boolean)
-- `numberFormats`: map kolom → named format (`currency`, `date`, `datetime`, `percent`, `integer`, `decimal`) atau format Excel custom string
-
-Catatan implementasi:
-- **Tanggal via JSON**: tool args datang sebagai JSON (Date → ISO string via `JSON.parse`). `coerceValue` deteksi strict ISO date-only / datetime → convert balik ke Date object supaya tersimpan sebagai date cell. Date-only `2025-01-01` parse sebagai **local midnight** (tidak geser TZ ke `07:00:00`); datetime dengan offset dipertahankan
-- **Validation**: nama sheet max 31 char, no duplikat (case-insensitive), reject karakter `\ / ? * [ ] :`; reject file bukan `.xlsx`
-- **write_excel tetap sandbox projectDir** — output Excel harus di project (berbeda dengan read_excel yang whitelist upload dir). resolve pakai `resolveWithin(ctx.projectDir, path)` langsung
-
-Contoh argumen `write_excel`:
+Contoh argumen `excel_script` (baca existing):
 
 ```json
 {
   "path": "laporan.xlsx",
-  "sheets": {
-    "Penjualan": [
-      { "produk": "Indomie", "qty": 10, "harga": 3000, "tanggal": "2025-01-01" },
-      { "produk": "Aqua", "qty": 5, "harga": 5000, "tanggal": "2025-01-02" }
-    ],
-    "Stok": [
-      { "produk": "Indomie", "stok": 200 }
-    ]
-  },
-  "styling": {
-    "theme": "colorful",
-    "numberFormats": { "harga": "currency", "tanggal": "date" }
-  }
+  "readOnly": true,
+  "script": "(wb, ExcelJS) => { const ws = wb.worksheets[0]; const rows = []; ws.eachRow((r) => rows.push(r.values.slice(1))); return { headers: rows[0], data: rows.slice(1) }; }"
+}
+```
+
+Contoh (buat baru dengan rumus):
+
+```json
+{
+  "saveAs": "ringkas.xlsx",
+  "script": "(wb, ExcelJS) => { const ws = wb.addWorksheet('Total'); ws.getCell('A1').value = 'Total'; ws.getCell('B1').value = { formula: 'SUM(B2:B10)' }; }"
 }
 ```
 
@@ -312,8 +311,8 @@ Contoh argumen `write_excel`:
 Fitur upload `.xlsx` dari composer (tombol paperclip) menyimpan file ke **OS tmp dir** — bukan project folder — supaya workspace bersih dan tidak ikut git.
 
 - **Lokasi**: `os.tmpdir()/siberflow-uploads/<sessionId>/` (per-session isolated, `mkdir mode 0o700` → owner-only, mitigasi `/tmp` world-readable di Linux)
-- **Alur**: tombol paperclip → native file picker `.xlsx` multi-select → `copyUploads(srcPaths)` salin ke upload dir (nama di-sanitize, collide → append `-2`) → return `{ name, relPath(absolute), bytes }[]` → renderer render chip attachment → saat send, prompt otomatis digabung dengan list path file + instruksi → AI pakai `read_excel`
-- **Whitelist**: `read_excel` resolve path absolut via `ToolContext.uploadDir` (dari `AgentOptions.uploadDir`). Tool file lain (`read_file`, `write_file`, `exec`, dll) **tidak terima** `uploadDir` → tetap sandbox projectDir, tidak bisa baca tmp
+- **Alur**: tombol paperclip → native file picker `.xlsx` multi-select → `copyUploads(srcPaths)` salin ke upload dir (nama di-sanitize, collide → append `-2`) → return `{ name, relPath(absolute), bytes }[]` → renderer render chip attachment → saat send, prompt otomatis digabung dengan list path file + instruksi → AI pakai `excel_script` (mode read)
+- **Whitelist**: `excel_script` resolve path absolut (source) via `ToolContext.uploadDir` (dari `AgentOptions.uploadDir`). Tool file lain (`read_file`, `write_file`, `exec`, dll) **tidak terima** `uploadDir` → tetap sandbox projectDir, tidak bisa baca tmp
 - **Cleanup**: `deleteSession(id)` otomatis `cleanupUploads(id)` (rm recursive). Folder tmp juga di-reap OS saat reboot
 - **Helper core**: `uploadsDirFor(sessionId)` + `cleanupUploads(sessionId)` di `session/store.ts`
 
@@ -333,18 +332,39 @@ Algoritma:
 
 Setiap tool file (read/write/edit/copy/list) wajib lewat `resolveWithin` sebelum operasi fs.
 
-`read_excel` adalah pengecualian: pakai `resolveExcelPath(ctx, path)` yang **cuma allow path absolut di dalam `ctx.uploadDir`** (tmp upload dir), lalu fallback ke `resolveWithin(ctx.projectDir, ...)`. Path relatif selalu resolve ke projectDir — tidak bisa nekat baca file upload lewat nama relatif. `write_excel` pakai `resolveWithin` biasa (output Excel harus di project).
+`excel_script` adalah pengecualian **hanya untuk source path** (read): pakai `resolveSourcePath(ctx, path)` yang **cuma allow path absolut di dalam `ctx.uploadDir`** (tmp upload dir), lalu fallback ke `resolveWithin(ctx.projectDir, ...)`. Path relatif selalu resolve ke projectDir — tidak bisa nekat baca file upload lewat nama relatif. Destination path (write) selalu pakai `resolveWithin` biasa (output Excel harus di project).
 
-### `write_excel_script` (full exceljs API via vm sandbox)
+### `excel_script` sandbox (`node:vm`)
 
-Untuk layout Excel kompleks (merge cells, multi-level header, conditional formatting, chart, autofilter, dll) yang gak bisa di-handle `write_excel` (data mode). AI tulis function JavaScript `(wb, ExcelJS) => { ... }` yang dijalankan di **sandbox `node:vm`** terkunci:
+AI-supplied script dijalankan di **sandbox `node:vm`** terkunci:
 
 - Context cuma expose `wb` (workbook) + `ExcelJS` + minimal globals (Math/JSON/Date/dll)
 - `require`/`process`/`fs`/`global`/`globalThis` di-shadow jadi `undefined`
+- `Promise` juga di-block — script **wajib synchronous** (semua async I/O dilakukan host di luar sandbox)
 - `codeGeneration: { strings: false, wasm: false }` disable `eval` + `Function` constructor
 - Timeout 5 detik untuk infinite loop
 
-**Pola worker** yang penting: compile + invoke script dalam **satu `runInContext`** call (embed script sebagai static source text dalam wrapper IIFE), BUKAN return function dari sandbox lalu invoke di host. Kalau di-invoke di host, timeout vm gak cover execution — infinite loop gak ke-kill (bug yang sudah di-fix). Lihat `tools/excel/script.ts` untuk pattern lengkap.
+**Pola worker** yang penting: compile + invoke script dalam **satu `runInContext`** call (embed script sebagai static source text dalam wrapper IIFE), BUKAN return function dari sandbox lalu invoke di host. Kalau di-invoke di host, timeout vm gak cover execution — infinite loop gak ke-kill (bug yang sudah di-fix). Return value script di-park di slot `__result` sandbox, lalu di-read host setelah `runInContext` selesai. Lihat `tools/excel/excel-script.ts` untuk pattern lengkap.
+
+### Word document tool (`docx_script`)
+
+Tool create/read `.docx` via library `docx` (create, deklaratif API) + `mammoth` (read, convert ke HTML). Pure JS, no native deps. Source: `tools/docx/docx-script.ts`. Pattern identik `excel_script` (sandbox `node:vm` sync-only, host handle I/O), tapi dengan adaptasi API.
+
+**Mode operasi**:
+- **Create** — script terima `(doc, docx)` di mana `doc` adalah fresh empty `Document`. Script membangun dokumen via API deklaratif (`doc.addSection({...})`, `new docx.Paragraph(...)`, `new docx.Table(...)`, dll). Setelah script selesai, host serialize via **`docx.Packer.toBuffer(doc)`** (async, host-side) lalu write ke `path`/`saveAs`.
+- **Read** — `path` + `readOnly: true`. Host load file, convert via **`mammoth.convertToHtml({buffer})`** (async, host-side) → teruskan **HTML string** ke script `(html) => { ... return data }`. Script ekstrak struktur (heading, tabel, hitung kata) dan return.
+
+**Kenapa host handle serialization/mammoth?** `docx.Packer.toBuffer()` dan `mammoth.convertToHtml()` keduanya async → tidak bisa di sandbox sync-only. Sama seperti `exceljs.writeBuffer()` di `excel_script`: host lakukan async I/O, sandbox sync-only manipulasi/ekstrak.
+
+**Library API yang di-expose di sandbox**:
+- Create mode: `doc` (Document) + `docx` (full module: `Paragraph`, `TextRun`, `HeadingLevel`, `Table`, `TableRow`, `TableCell`, `ImageRun`, `AlignmentType`, dll)
+- Read mode: `html` (string hasil mammoth conversion)
+
+**Catatan implementasi**:
+- **ESM namespace import**: `docx` dan `mammoth` pakai named exports tanpa default → `import * as docxLib from "docx"` (bukan default import). Berbeda dari `exceljs` yang punya default export.
+- **Document constructor**: butuh `sections` (required field di `IPropertiesOptions`). Start dengan `sections: []` supaya script bisa `addSection` from scratch.
+- **Source path resolve**: sama seperti `excel_script` — `resolveSourcePath(ctx, path)` whitelist `uploadDir`, fallback `resolveWithin(ctx.projectDir, ...)`. Destination path selalu `resolveWithin(ctx.projectDir, ...)`.
+- **Sandbox**: reuse `baseSandbox()` helper + `runInSandbox(sandbox, script, argNames)` — logic terpusat, beda arg names per mode. Sama persis security: `require`/`process`/`fs`/`global`/`Promise`/`eval`/`Function` di-block, timeout 5 detik.
 
 ### Browser tool (`run_browser`)
 
@@ -356,7 +376,7 @@ Tool scraping/interaksi halaman web via **headless Chrome/Edge menggunakan Puppe
 3. Host tunggu result atau kill worker via `killTree(pid)` (`process.kill(-pid)` Unix / `taskkill /T` Windows — reuse pattern dari `cli/exec.ts`)
 4. Output di-truncate 200K chars
 
-**Kenapa child_process, bukan vm sandbox?** Puppeteer async-only (`await page.goto()`). `vm.runInContext` sync dan blocking — gak bisa `await`. Timeout async code di vm unreliable (sudah di-alami di `write_excel_script` infinite loop). Child process isolation lebih clean: worker gak punya akses host memory/session/AgentHost; env minimal (PATH, HOME, dll); worst case script AI menulis kode malicious → worker crash/isolated → gak affect host.
+**Kenapa child_process, bukan vm sandbox?** Puppeteer async-only (`await page.goto()`). `vm.runInContext` sync dan blocking — gak bisa `await`. Timeout async code di vm unreliable (sudah di-alami di `excel_script` infinite loop). Child process isolation lebih clean: worker gak punya akses host memory/session/AgentHost; env minimal (PATH, HOME, dll); worst case script AI menulis kode malicious → worker crash/isolated → gak affect host.
 
 **Resolved path** (`resolvePuppeteerCorePath()`): worker import `puppeteer-core` via absolute `file://` URL yang di-inject ke worker source. Worker di-run dari temp dir tanpa `node_modules`, jadi bare `import "puppeteer-core"` gak resolve. Resolution order di `browser.ts`:
 1. Env var `SIBERFLOW_PUPPETEER_CORE_PATH` — override eksplisit dari host. Wajib di VSCode extension (process.execPath = VSCode binary, jadi heuristik core gak nemu). Host (`chat-panel.ts`) resolve path sendiri: cek `<extensionPath>/vendor/puppeteer-core` (VSIX packaged) → `<extensionPath>/node_modules/puppeteer-core` → walk-up parent dirs cari hoisted `node_modules/puppeteer-core` (debug mode).
@@ -379,7 +399,7 @@ Default: `DEFAULT_ENABLED_TOOLS = { read_file, write_file, edit_file, copy_file,
 - VSCode: setting `siberflow.enabledTools` (array) + grid checkbox di settings UI (`TOGGLE_TOOLS` const)
 - Desktop: settings modal → section "Tools" (grid checkbox, sama pattern `TOGGLE_TOOLS`)
 
-UI toggle conditional pattern: Composer upload button (paperclip) disable + tooltip saat `read_excel` tidak di-enable — cek `state.enabledTools.includes("read_excel")`. Sama untuk tool UI lain yang depend availability.
+UI toggle conditional pattern: Composer upload button (paperclip) disable + tooltip saat `excel_script` tidak di-enable — cek `state.enabledTools.includes("excel_script")`. Sama untuk tool UI lain yang depend availability.
 
 ### Request delay (`requestDelayMs`)
 
@@ -931,10 +951,10 @@ Buat workspace baru di `packages/<name>/`, depend ke `@siberflow/core`. Subscrib
 ## Catatan Keamanan Singkat
 
 - File tools sandboxed ke `projectDir` (hard).
-- `read_excel` punya whitelist tambahan: boleh baca path absolut di dalam `uploadDir` (tmp upload dir, per-session, mode 0700). Tool file lain tidak terima field `uploadDir` → tetap terkunci di project.
 - Upload Excel disimpan di `os.tmpdir()/siberflow-uploads/<sessionId>/` (bukan project) — workspace bersih, tidak ikut git. Cleanup otomatis saat `deleteSession`. Folder owner-only (mode 0700) untuk mitigasi `/tmp` world-readable di Linux multi-user.
-- `write_excel` output tetap sandbox `projectDir` — file Excel yang AI hasilkan harus di project, bukan tmp.
-- `write_excel_script` run kode AI-supplied di `node:vm` sandbox terkunci: `require`/`process`/`fs`/`eval`/`Function` di-block, timeout 5 detik. Compile + invoke dalam satu `runInContext` supaya timeout cover infinite loop.
+- `excel_script`: source path (read) punya whitelist tambahan — boleh baca path absolut di dalam `uploadDir` (tmp upload dir). Destination path (write) tetap sandbox `projectDir` — file Excel yang AI hasilkan harus di project, bukan tmp. Tool file lain tidak terima field `uploadDir` → tetap terkunci di project.
+- `excel_script` run kode AI-supplied di `node:vm` sandbox terkunci: `require`/`process`/`fs`/`global`/`Promise`/`eval`/`Function` di-block, timeout 5 detik. Compile + invoke dalam satu `runInContext` supaya timeout cover infinite loop. Script wajib synchronous; semua async I/O (load/write file) dilakukan host di luar sandbox.
+- `docx_script` sama persis pattern sandbox-nya dengan `excel_script` (vm terkunci, sync-only, host handle async I/O: `Packer.toBuffer` untuk create, `mammoth.convertToHtml` untuk read). Source path whitelist `uploadDir`, destination sandbox `projectDir`.
 - `run_browser` run kode AI-supplied (Puppeteer) di **child process worker terisolasi** (bukan vm — Puppeteer async gak kompatibel). Worker gak punya akses host memory/session/AgentHost; env minimal (gak leak secrets); timeout kill process tree. Pakai Chrome/Edge yang sudah terinstall di sistem (channel `'chrome'` → fallback `'msedge'`), tidak ada download Chromium. `puppeteer-core` di-resolve via env var `SIBERFLOW_PUPPETEER_CORE_PATH` (host set) atau heuristik di `resolvePuppeteerCorePath()`.
 - Per-tool toggle (`enabledTools`): tool berbahaya (`exec`, `db_query`, `ssh_exec`, `run_browser`, dll) default OFF — opt-in via settings/env supaya blast-radius security kecil walau AI coba pakai. Pengecualian: `task_update` dan `ask_user` selalu on (core UX).
 - `exec` tool cwd=projectDir tapi shell bisa akses path lain (soft). OK untuk single-user dev; untuk multi-user / web public perlu permission layer.
