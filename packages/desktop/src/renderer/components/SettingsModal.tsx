@@ -22,6 +22,12 @@ const TOGGLE_TOOLS = [
   { name: "run_browser", label: "run_browser", group: "Browser" },
 ] as const;
 
+const CUSTOM_PROVIDER_DEFAULT = {
+  name: "custom",
+  baseUrl: "",
+  defaultModel: "",
+};
+
 interface SettingsModalProps {
   values: SettingsValues;
   hasApiKey: boolean;
@@ -35,10 +41,26 @@ export const SettingsModal = memo(function SettingsModal({
   mustConfigure,
   onClose,
 }: SettingsModalProps) {
-  const [form, setForm] = useState<SettingsValues>({ ...DEFAULT_SETTINGS, ...values });
+  const [form, setForm] = useState<SettingsValues>({
+    ...DEFAULT_SETTINGS,
+    ...values,
+    customProvider: {
+      ...CUSTOM_PROVIDER_DEFAULT,
+      ...(values.customProvider ?? {}),
+    },
+  });
   const [apiKey, setApiKey] = useState("");
+  const [error, setError] = useState("");
   const set = <K extends keyof SettingsValues>(key: K, val: SettingsValues[K]) =>
     setForm((f) => ({ ...f, [key]: val }));
+  const setCustomProvider = <K extends keyof SettingsValues["customProvider"]>(
+    key: K,
+    val: SettingsValues["customProvider"][K],
+  ) =>
+    setForm((f) => ({
+      ...f,
+      customProvider: { ...f.customProvider, [key]: val },
+    }));
   /** Toggle a tool name in/out of the enabledTools array. */
   const toggleTool = (name: string) =>
     setForm((f) => ({
@@ -49,8 +71,24 @@ export const SettingsModal = memo(function SettingsModal({
     }));
 
   const save = () => {
+    if (form.provider === "custom") {
+      if (!form.customProvider.baseUrl.trim() || !form.customProvider.defaultModel.trim()) {
+        setError("Custom provider needs a base URL and default model.");
+        return;
+      }
+    }
     // null = leave key unchanged; non-empty = update; empty = clear.
-    void ipc().saveSettings(form, apiKey.length > 0 ? apiKey : null);
+    void ipc().saveSettings(
+      {
+        ...form,
+        customProvider: {
+          name: form.customProvider.name.trim() || "custom",
+          baseUrl: form.customProvider.baseUrl.trim().replace(/\/+$/, ""),
+          defaultModel: form.customProvider.defaultModel.trim(),
+        },
+      },
+      apiKey.length > 0 ? apiKey : null,
+    );
     onClose();
   };
 
@@ -78,8 +116,41 @@ export const SettingsModal = memo(function SettingsModal({
               <option value="qwen">qwen (Alibaba)</option>
               <option value="zai">zai (GLM / Z.AI)</option>
               <option value="claude">claude (Anthropic)</option>
+              <option value="custom">custom (OpenAI-compatible)</option>
             </select>
           </div>
+          {form.provider === "custom" && (
+            <>
+              <div className="form-row">
+                <label>Custom provider name</label>
+                <input
+                  type="text"
+                  value={form.customProvider.name}
+                  onChange={(e) => setCustomProvider("name", e.target.value)}
+                  placeholder="custom"
+                />
+              </div>
+              <div className="form-row">
+                <label>Base URL</label>
+                <input
+                  type="text"
+                  value={form.customProvider.baseUrl}
+                  onChange={(e) => setCustomProvider("baseUrl", e.target.value)}
+                  placeholder="https://api.example.com/v1"
+                />
+                <div className="form-help">OpenAI-compatible root URL. Siberflow appends /chat/completions.</div>
+              </div>
+              <div className="form-row">
+                <label>Default model</label>
+                <input
+                  type="text"
+                  value={form.customProvider.defaultModel}
+                  onChange={(e) => setCustomProvider("defaultModel", e.target.value)}
+                  placeholder="model-name"
+                />
+              </div>
+            </>
+          )}
           <div className="form-row">
             <label>API key</label>
             <input
@@ -91,6 +162,7 @@ export const SettingsModal = memo(function SettingsModal({
             />
             <div className="form-help">Stored encrypted via OS keychain (safeStorage).</div>
           </div>
+          {error && <div className="form-help form-error">{error}</div>}
           <div className="form-row">
             <label>Model override</label>
             <input

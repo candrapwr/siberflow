@@ -21,6 +21,7 @@ import {
   SESSION_FORMAT_VERSION,
   uploadsDirFor,
   type Provider,
+  type ProviderConfig,
   type Session,
   type Task,
   type ToolRegistry,
@@ -185,6 +186,11 @@ export class AgentHost {
   }
 
   saveSettings(values: SettingsValues, apiKey: string | null): void {
+    values = normalizeSettings(values);
+    if (values.provider === "custom" && (!values.customProvider.baseUrl || !values.customProvider.defaultModel)) {
+      this.emit({ type: "error", message: "Custom provider needs a base URL and default model." });
+      return;
+    }
     persistSettings(values);
     this.settings = values;
     this.applyDebug();
@@ -219,11 +225,11 @@ export class AgentHost {
 
     // Reflect provider/model change on the active session record.
     if (this.current) {
-      this.current.provider = values.provider;
+      this.current.provider = displayProviderName(values);
       this.current.model =
         values.model.trim().length > 0
           ? values.model.trim()
-          : createProvider(values.provider, { apiKey: this.apiKey }).defaultModel;
+          : createProvider(values.provider, this.providerConfig(values)).defaultModel;
       this.current.updatedAt = new Date().toISOString();
       saveSessionSync(this.current);
     }
@@ -247,7 +253,7 @@ export class AgentHost {
 
   private rebuildAgent(): void {
     if (!this.apiKey) return;
-    this.provider = createProvider(this.settings.provider, { apiKey: this.apiKey });
+    this.provider = createProvider(this.settings.provider, this.providerConfig());
     // Only register filesystem + exec tools when the session has a working
     // directory. Sessions without a workdir keep db/ssh/task tools only.
     const hasWorkdir = !!this.current?.projectDir;
@@ -685,11 +691,26 @@ export class AgentHost {
 
   private banner(): BannerInfo {
     return {
-      provider: this.settings.provider,
+      provider: this.provider?.name ?? displayProviderName(this.settings),
       model:
         this.settings.model.trim().length > 0
           ? this.settings.model.trim()
           : this.provider?.defaultModel ?? "?",
+    };
+  }
+
+  private providerConfig(settings: SettingsValues = this.settings): ProviderConfig {
+    if (!this.apiKey) {
+      throw new Error("API key is not configured.");
+    }
+    if (settings.provider !== "custom") {
+      return { apiKey: this.apiKey };
+    }
+    return {
+      apiKey: this.apiKey,
+      baseUrl: settings.customProvider.baseUrl,
+      customName: settings.customProvider.name,
+      customDefaultModel: settings.customProvider.defaultModel,
     };
   }
 
@@ -725,4 +746,22 @@ export class AgentHost {
     const usage = this.getUsage();
     if (usage) this.emit({ type: "usage", usage });
   }
+}
+
+function displayProviderName(settings: SettingsValues): string {
+  return settings.provider === "custom"
+    ? settings.customProvider.name || "custom"
+    : settings.provider;
+}
+
+function normalizeSettings(values: SettingsValues): SettingsValues {
+  const customProvider = values.customProvider ?? { name: "custom", baseUrl: "", defaultModel: "" };
+  return {
+    ...values,
+    customProvider: {
+      name: customProvider.name.trim() || "custom",
+      baseUrl: customProvider.baseUrl.trim().replace(/\/+$/, ""),
+      defaultModel: customProvider.defaultModel.trim(),
+    },
+  };
 }

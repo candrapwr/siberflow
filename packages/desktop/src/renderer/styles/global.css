@@ -1451,6 +1451,9 @@ kbd {
   color: var(--fg-muted);
   margin-top: 2px;
 }
+.form-error {
+  color: var(--red);
+}
 .must-configure {
   padding: 8px 10px;
   background: rgba(217, 177, 74, 0.12);

@@ -21,6 +21,7 @@ import {
   optimizeContext,
   uploadsDirFor,
   type Provider,
+  type ProviderConfig,
   type Session,
   type Task,
   type ToolRegistry,
@@ -315,11 +316,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     values: SettingsValues,
     apiKey: string | null,
   ): Promise<void> {
+    values = normalizeSettings(values);
+    if (values.provider === "custom" && (!values.customProvider.baseUrl || !values.customProvider.defaultModel)) {
+      this.post({ kind: "error", message: "Custom provider needs a base URL and default model." });
+      return;
+    }
     const prevSettings = this.settings;
     const cfg = vscode.workspace.getConfiguration("siberflow");
     const target = vscode.ConfigurationTarget.Global;
     await Promise.all([
       cfg.update("provider", values.provider, target),
+      cfg.update("customProvider", values.customProvider, target),
       cfg.update("model", values.model, target),
       cfg.update("contextOptimize", values.contextOptimize, target),
       cfg.update("contextOptimizeMode", values.contextOptimizeMode, target),
@@ -363,11 +370,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     if (this.current) {
-      this.current.provider = values.provider;
+      this.current.provider = displayProviderName(values);
       this.current.model =
         values.model.trim().length > 0
           ? values.model.trim()
-          : createProvider(values.provider, { apiKey: this.apiKey }).defaultModel;
+          : createProvider(values.provider, this.providerConfig(values)).defaultModel;
       this.current.updatedAt = new Date().toISOString();
       if (this.agent) {
         this.current.tasks = [...this.agent.getTasks()];
@@ -391,9 +398,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private rebuildAgent(): void {
     if (!this.apiKey) return;
-    this.provider = createProvider(this.settings.provider, {
-      apiKey: this.apiKey,
-    });
+    this.provider = createProvider(this.settings.provider, this.providerConfig());
     this.registry = createDefaultRegistry({
       enabledTools: new Set(this.settings.enabledTools),
     });
@@ -868,6 +873,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     };
   }
 
+  private providerConfig(settings: SettingsValues = this.settings): ProviderConfig {
+    if (!this.apiKey) {
+      throw new Error("API key is not configured.");
+    }
+    if (settings.provider !== "custom") {
+      return { apiKey: this.apiKey };
+    }
+    return {
+      apiKey: this.apiKey,
+      baseUrl: settings.customProvider.baseUrl,
+      customName: settings.customProvider.name,
+      customDefaultModel: settings.customProvider.defaultModel,
+    };
+  }
+
   private sessionInfo(): SessionInfo | null {
     if (!this.current) return null;
     return {
@@ -928,6 +948,16 @@ function readSettings(): SettingsValues {
   const cfg = vscode.workspace.getConfiguration("siberflow");
   return {
     provider: cfg.get<ProviderName>("provider", "deepseek"),
+    customProvider: {
+      name: "custom",
+      baseUrl: "",
+      defaultModel: "",
+      ...(cfg.get<SettingsValues["customProvider"]>("customProvider", {
+        name: "custom",
+        baseUrl: "",
+        defaultModel: "",
+      }) ?? {}),
+    },
     model: cfg.get<string>("model", ""),
     contextOptimize: cfg.get<boolean>("contextOptimize", true),
     contextOptimizeMode: cfg.get<OptimizeMode>("contextOptimizeMode", "recent"),
@@ -963,6 +993,24 @@ function sanitizeFileName(original: string, used: Set<string>): string {
 
 function secretKeyFor(provider: ProviderName): string {
   return `siberflow.apiKey.${provider}`;
+}
+
+function normalizeSettings(values: SettingsValues): SettingsValues {
+  const customProvider = values.customProvider ?? { name: "custom", baseUrl: "", defaultModel: "" };
+  return {
+    ...values,
+    customProvider: {
+      name: customProvider.name.trim() || "custom",
+      baseUrl: customProvider.baseUrl.trim().replace(/\/+$/, ""),
+      defaultModel: customProvider.defaultModel.trim(),
+    },
+  };
+}
+
+function displayProviderName(settings: SettingsValues): string {
+  return settings.provider === "custom"
+    ? settings.customProvider.name || "custom"
+    : settings.provider;
 }
 
 function emptyUsage() {

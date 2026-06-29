@@ -9,6 +9,8 @@ export interface SiberflowConfig {
   model?: string;
   apiKey: string;
   baseUrl?: string;
+  customProviderName?: string;
+  customDefaultModel?: string;
   projectDir: string;
   contextOptimize: ContextOptimizeConfig;
   autoContinue: boolean;
@@ -44,6 +46,15 @@ export function loadConfigFromEnv(
     hideTools: env.SIBERFLOW_HIDE_TOOLS === "true",
     ...(env.SIBERFLOW_MODEL ? { model: env.SIBERFLOW_MODEL } : {}),
     ...(env.SIBERFLOW_BASE_URL ? { baseUrl: env.SIBERFLOW_BASE_URL } : {}),
+    ...(provider === "custom" && env.SIBERFLOW_CUSTOM_PROVIDER_NAME
+      ? { customProviderName: env.SIBERFLOW_CUSTOM_PROVIDER_NAME }
+      : {}),
+    ...(provider === "custom"
+      ? {
+          customDefaultModel:
+            env.SIBERFLOW_CUSTOM_DEFAULT_MODEL ?? env.SIBERFLOW_MODEL ?? "",
+        }
+      : {}),
   };
 }
 
@@ -164,5 +175,7 @@ function apiKeyEnvVar(provider: ProviderName): string {
       return "ZAI_API_KEY";
     case "claude":
       return "ANTHROPIC_API_KEY";
+    case "custom":
+      return "CUSTOM_API_KEY";
   }
 }
