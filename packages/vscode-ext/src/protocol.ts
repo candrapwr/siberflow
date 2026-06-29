@@ -60,12 +60,19 @@ export type ViewToExt =
   | { kind: "pick_doc_files" }
   | { kind: "answer_user"; id: string; status: "answer" | "cancel"; answer: string };
 
-export type ProviderName = "deepseek" | "gemini" | "openai" | "openai-responses" | "grok" | "qwen" | "zai" | "claude";
+export type ProviderName = "deepseek" | "gemini" | "openai" | "openai-responses" | "grok" | "qwen" | "zai" | "claude" | "custom";
+
+export interface CustomProviderSettings {
+  name: string;
+  baseUrl: string;
+  defaultModel: string;
+}
 
 export type OptimizeMode = "drop" | "summary" | "recent";
 
 export interface SettingsValues {
   provider: ProviderName;
+  customProvider: CustomProviderSettings;
   model: string;
   contextOptimize: boolean;
   contextOptimizeMode: OptimizeMode;

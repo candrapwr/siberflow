@@ -304,6 +304,12 @@ const TOGGLE_TOOLS = [
   { name: "run_browser", label: "run_browser", group: "Browser" },
 ];
 
+const CUSTOM_PROVIDER_DEFAULT = {
+  name: "custom",
+  baseUrl: "",
+  defaultModel: "",
+};
+
 function showSettingsModal(
   values: SettingsValues,
   hasApiKey: boolean,
@@ -342,7 +348,23 @@ function showSettingsModal(
           <option value="qwen">qwen (Alibaba)</option>
           <option value="zai">zai (GLM / Z.AI)</option>
           <option value="claude">claude (Anthropic)</option>
+          <option value="custom">custom (OpenAI-compatible)</option>
         </select>
+      </div>
+      <div id="cfg-custom-provider">
+        <div class="form-row">
+          <label>Custom provider name</label>
+          <input type="text" id="cfg-custom-name" placeholder="custom">
+        </div>
+        <div class="form-row">
+          <label>Base URL</label>
+          <input type="text" id="cfg-custom-baseurl" placeholder="https://api.example.com/v1">
+          <div class="form-help">OpenAI-compatible root URL. Siberflow appends /chat/completions.</div>
+        </div>
+        <div class="form-row">
+          <label>Default model</label>
+          <input type="text" id="cfg-custom-model" placeholder="model-name">
+        </div>
       </div>
       <div class="form-row">
         <label>API key</label>
@@ -413,8 +435,20 @@ function showSettingsModal(
   // Populate
   const providerSelect = modal.querySelector("#cfg-provider") as HTMLSelectElement;
   const modelInput = modal.querySelector("#cfg-model") as HTMLInputElement;
+  const customProvider = { ...CUSTOM_PROVIDER_DEFAULT, ...(values.customProvider ?? {}) };
+  const customWrap = modal.querySelector("#cfg-custom-provider") as HTMLElement;
+  const customNameInput = modal.querySelector("#cfg-custom-name") as HTMLInputElement;
+  const customBaseUrlInput = modal.querySelector("#cfg-custom-baseurl") as HTMLInputElement;
+  const customModelInput = modal.querySelector("#cfg-custom-model") as HTMLInputElement;
+  const updateCustomVisibility = () => {
+    customWrap.style.display = providerSelect.value === "custom" ? "" : "none";
+  };
   providerSelect.value = values.provider;
   modelInput.value = values.model;
+  customNameInput.value = customProvider.name;
+  customBaseUrlInput.value = customProvider.baseUrl;
+  customModelInput.value = customProvider.defaultModel;
+  updateCustomVisibility();
   // (cfg-tasks checkbox removed — task_update is now always-on, not toggleable)
   (modal.querySelector("#cfg-optimize") as HTMLInputElement).checked = values.contextOptimize;
   (modal.querySelector("#cfg-optmode") as HTMLSelectElement).value = values.contextOptimizeMode;
@@ -450,6 +484,7 @@ function showSettingsModal(
 
   providerSelect.addEventListener("change", () => {
     modelInput.value = "";
+    updateCustomVisibility();
   });
 
   modal.querySelector("#cfg-cancel")?.addEventListener("click", closeIfAllowed);
@@ -457,6 +492,15 @@ function showSettingsModal(
     const provider = providerSelect.value as SettingsValues["provider"];
     const apiKeyRaw = (modal.querySelector("#cfg-apikey") as HTMLInputElement).value;
     const model = modelInput.value;
+    const customProvider = {
+      name: customNameInput.value.trim() || "custom",
+      baseUrl: customBaseUrlInput.value.trim().replace(/\/+$/, ""),
+      defaultModel: customModelInput.value.trim(),
+    };
+    if (provider === "custom" && (!customProvider.baseUrl || !customProvider.defaultModel)) {
+      alert("Custom provider needs a base URL and default model.");
+      return;
+    }
     const contextOptimize = (modal.querySelector("#cfg-optimize") as HTMLInputElement).checked;
     const contextOptimizeMode = (modal.querySelector("#cfg-optmode") as HTMLSelectElement).value as "drop" | "summary" | "recent";
     const autoContinue = (modal.querySelector("#cfg-autocontinue") as HTMLInputElement).checked;
@@ -482,6 +526,7 @@ function showSettingsModal(
       kind: "save_settings",
       values: {
         provider,
+        customProvider,
         model,
         contextOptimize,
         contextOptimizeMode,

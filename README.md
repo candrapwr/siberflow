@@ -1,44 +1,97 @@
 # Siberflow
 
-AI platform dengan dukungan multi-provider, tool calling streaming, sandbox file, akses database, persistensi multi-session, dan task checklist. Interface saat ini: **CLI**, **VSCode extension** (sidebar panel), dan **Desktop app** (Electron + React).
+Siberflow is an AI coding and productivity platform with multi-provider support, streaming tool calls, sandboxed file access, database tools, persistent multi-session history, and task checklists. Current interfaces: **CLI**, **VS Code extension** sidebar, and **Desktop app** built with Electron and React.
 
-## Provider yang didukung
+[Baca versi Bahasa Indonesia](README.id.md)
 
-- `deepseek` (default) — `deepseek-v4-flash`, `deepseek-reasoner`
-- `gemini` — `gemini-2.5-flash` (via endpoint OpenAI-compatible Google)
-- `openai` — `gpt-5.4-nano` (pakai `/v1/chat/completions`)
-- `openai-responses` — `gpt-5.1-codex-mini` (pakai `/v1/responses`; untuk codex / o-series / gpt-5 yang tidak didukung chat completions)
-- `grok` — `grok-build-0.1` (xAI, via endpoint OpenAI-compatible)
-- `qwen` — `qwen3.7-plus` (Alibaba DashScope / MaaS, OpenAI-compatible). Default endpoint internasional; custom MaaS workspace bisa override via `SIBERFLOW_BASE_URL`
-- `zai` — `glm-5.2` (Z.AI / GLM, OpenAI-compatible). Default ke general endpoint `https://api.z.ai/api/paas/v4`; kalau perlu GLM Coding endpoint bisa override via `SIBERFLOW_BASE_URL`
-- `claude` — `claude-sonnet-4-5` (Anthropic, via OpenAI-compatible chat completions endpoint)
+Siberflow is developed by **DataSiberLab**. For questions, collaboration, or technical support, contact **candrapwr@datasiber.com**.
 
-## Struktur
+## Screenshots
 
-npm workspaces monorepo.
+**Desktop app - main chat workspace.** The desktop UI includes a multi-session sidebar, centered chat area, composer, and project-aware workspace context.
 
-- `packages/core` — agent loop, provider adapter, tool registry, file/db tools, session store, context optimize, task store
-- `packages/cli` — REPL interaktif, slash commands, ASCII banner, streaming render
-- `packages/vscode-ext` — VSCode extension dengan sidebar chat panel, settings UI, markdown render
-- `packages/desktop` — Electron desktop app (React + Vite), standalone UI, multi-session sidebar, safeStorage API key
+![Siberflow Desktop App](./ss_desktop.png)
 
-Semua sesi tersimpan di `~/.siberflow/sessions/` — cross-compat antar CLI, VSCode, dan Desktop.
+**Desktop settings - provider and agent configuration.** Users can choose a provider, store an API key, configure a custom OpenAI-compatible provider, select models, toggle tools, and adjust agent behavior.
+
+![Siberflow Desktop Settings](./ss_desktop_seting.png)
+
+**Desktop ask tool - agent confirmation/input prompt.** This modal appears when the agent needs a user decision or extra input before continuing.
+
+![Siberflow Desktop Ask Tool](./ss_desktop_ask_tool.png)
+
+**VS Code extension - AI chat inside the editor sidebar.** The extension runs from the current workspace context.
+
+![Siberflow VSCode Extension](./ss_vscode.png)
+
+**CLI - interactive terminal mode.** Siberflow can also run as a terminal REPL.
+
+![Siberflow CLI](./ss_cli.png)
+
+## Supported Providers
+
+- `deepseek` (default) - `deepseek-v4-flash`, `deepseek-reasoner`
+- `gemini` - `gemini-2.5-flash` through Google's OpenAI-compatible endpoint
+- `openai` - `gpt-5.4-nano` using `/v1/chat/completions`
+- `openai-responses` - `gpt-5.1-codex-mini` using `/v1/responses`, for Codex/o-series/GPT-5 models that do not support chat completions
+- `grok` - `grok-build-0.1` through xAI's OpenAI-compatible endpoint
+- `qwen` - `qwen3.7-plus` through Alibaba DashScope/MaaS, OpenAI-compatible. Custom MaaS workspaces can override `SIBERFLOW_BASE_URL`
+- `zai` - `glm-5.2` through Z.AI/GLM, OpenAI-compatible. Defaults to `https://api.z.ai/api/paas/v4`; GLM Coding endpoints can override `SIBERFLOW_BASE_URL`
+- `claude` - `claude-sonnet-4-5` through Anthropic's OpenAI-compatible chat completions endpoint
+- `custom` - any OpenAI-compatible provider with your own name, base URL, and default model. Available in Desktop, VS Code, and CLI
+
+## Repository Structure
+
+This is an npm workspaces monorepo.
+
+- `packages/core` - agent loop, provider adapters, tool registry, file/database tools, session store, context optimization, task state
+- `packages/cli` - interactive REPL, slash commands, ASCII banner, streaming renderer
+- `packages/vscode-ext` - VS Code extension with sidebar chat panel, settings UI, markdown rendering
+- `packages/desktop` - Electron desktop app with React/Vite, standalone UI, multi-session sidebar, safeStorage API keys
+
+All sessions are stored in `~/.siberflow/sessions/` and are compatible across CLI, VS Code, and Desktop.
 
 ## CLI
 
-### Quick start (dev)
+### Quick Start
 
 ```bash
 npm install
 cp .env.example .env
-# isi minimal salah satu API key: DEEPSEEK_API_KEY / GEMINI_API_KEY / OPENAI_API_KEY / XAI_API_KEY / DASHSCOPE_API_KEY / ZAI_API_KEY / ANTHROPIC_API_KEY
+# Fill at least one API key:
+# DEEPSEEK_API_KEY / GEMINI_API_KEY / OPENAI_API_KEY / XAI_API_KEY
+# DASHSCOPE_API_KEY / ZAI_API_KEY / ANTHROPIC_API_KEY / CUSTOM_API_KEY
 
 npm run dev:cli
 ```
 
-### Install global (Ubuntu / macOS)
+### Custom Provider
 
-Prasyarat: Node 20+. Setelah clone repo:
+Use `provider=custom` for any provider that supports the OpenAI `/chat/completions` wire format, such as an internal proxy, OpenRouter-compatible endpoint, vLLM, LiteLLM, or your own server.
+
+In **Desktop** and **VS Code**, select `custom (OpenAI-compatible)` in settings, then fill:
+
+- **Custom provider name** - display/internal name, for example `openrouter` or `local-vllm`
+- **Base URL** - API root, for example `https://api.example.com/v1`; Siberflow appends `/chat/completions`
+- **Default model** - model used when model override is empty
+- **API key** - stored encrypted like built-in providers
+
+For **CLI**, use environment variables:
+
+```bash
+SIBERFLOW_PROVIDER=custom
+CUSTOM_API_KEY=...
+SIBERFLOW_BASE_URL=https://api.example.com/v1
+SIBERFLOW_CUSTOM_DEFAULT_MODEL=model-name
+# optional:
+SIBERFLOW_CUSTOM_PROVIDER_NAME=my-provider
+```
+
+`SIBERFLOW_MODEL` can also be used when you want an explicit model override. Do not include `/chat/completions` in `SIBERFLOW_BASE_URL`; use the API root, such as `/v1`.
+
+### Global Install
+
+Prerequisite: Node.js 20+. After cloning the repository:
 
 ```bash
 npm install
@@ -46,270 +99,212 @@ npm run build
 npm link -w @siberflow/cli
 ```
 
-Sekarang `siberflow` bisa dipanggil dari direktori manapun. CLI mencari `.env` dengan walk-up dari cwd — taruh `.env` di project tempat kamu kerja, atau export env vars di `~/.bashrc`.
+The `siberflow` command is now available from any directory. The CLI searches for `.env` by walking upward from the current working directory, so place `.env` in the project you are working on or export environment variables from your shell profile.
 
-Uninstall: `npm unlink -w @siberflow/cli`.
+Uninstall:
 
-**Catatan**: `npm link` membuat symlink ke folder repo — jangan pindah/hapus repo setelah link.
+```bash
+npm unlink -w @siberflow/cli
+```
 
-![Siberflow CLI](./ss_cli.png)
+`npm link` creates a symlink to this repository, so do not move or delete the repo after linking.
 
-## VSCode Extension
+## VS Code Extension
 
-### Mode dev (F5)
+### Development Mode
 
 ```bash
 npm install
 cd packages/vscode-ext
-code .       # buka di VSCode, lalu tekan F5
+code .       # open in VS Code, then press F5
 ```
 
-Extension Development Host terbuka. Icon Siberflow muncul di activity bar kiri.
+The Extension Development Host opens and the Siberflow icon appears in the left activity bar.
 
-Pertama kali pakai, settings panel auto-muncul minta API key + pilihan provider. Tersimpan di **VSCode SecretStorage** (encrypted) — tidak perlu `.env`.
+On first use, the settings panel asks for provider and API key. API keys are stored in **VS Code SecretStorage** and do not require `.env`.
 
-![Siberflow VSCode Extension](./ss_vscode.png)
+For your own provider, select `custom (OpenAI-compatible)` and fill provider name, base URL, default model, and API key.
 
-### Build VSIX untuk install permanen / di-share
+### Build a VSIX
 
-Dari root project:
+From the repository root:
+
 ```bash
 npm run package:vscode
-# → packages/vscode-ext/siberflow-chat-0.1.0.vsix
+# -> packages/vscode-ext/siberflow-chat-0.1.0.vsix
 ```
 
-Install file `.vsix` di VSCode user lain:
+Install the `.vsix` in another VS Code installation:
 
-- **GUI**: Cmd+Shift+P → **"Extensions: Install from VSIX…"** → pilih file
+- **GUI**: Cmd+Shift+P -> **Extensions: Install from VSIX...** -> select the file
 - **CLI**: `code --install-extension siberflow-chat-0.1.0.vsix`
 
-VSIX self-contained (~40 KB) — esbuild sudah inline `@siberflow/core` + `marked`. Tidak perlu publish ke marketplace.
+The VSIX is self-contained because esbuild bundles `@siberflow/core` and `marked`.
 
-Update versi: edit `version` di `packages/vscode-ext/package.json`, lalu `npm run package:vscode` lagi.
+To release a new VSIX, update `version` in `packages/vscode-ext/package.json`, then run `npm run package:vscode` again.
 
-## Desktop App (Electron)
+## Desktop App
 
-Aplikasi desktop standalone (mirip Claude Desktop). UI dibangun dari nol dengan React + Vite, terpisah dari CLI/VSCode karena kebutuhan desktop berbeda (window management, folder picker per-session, sidebar multi-session). Mengkonsumsi `@siberflow/core` langsung — semua logic agent, tools, sessions reused.
+The desktop app is a standalone Electron app with a React/Vite UI. It consumes `@siberflow/core` directly, so the same agent, tools, and session logic are reused.
 
-### Mode dev
+### Development Mode
 
 ```bash
-npm run build:core      # build core dulu (prasyarat)
-npm run dev:desktop     # electron-vite dev (HMR untuk renderer)
+npm run build:core
+npm run dev:desktop
 ```
 
-Pertama kali buka, settings modal muncul untuk pilih provider + input API key. API key disimpan via **Electron `safeStorage`** (OS keychain, encrypted) di `~/Library/Application Support/Siberflow/siberflow-keys.json`.
+On first launch, the settings modal asks for provider and API key. API keys are stored through Electron **safeStorage** in the OS keychain-backed file at `~/Library/Application Support/Siberflow/siberflow-keys.json`.
 
-> **Error `Electron uninstall`?** Binary Electron (~180MB) tidak ter-download saat `npm install` (network/caching issue). Jalankan manual:
-> ```bash
-> node node_modules/electron/install.js
-> ```
-> Ini download Electron binary ke `node_modules/electron/dist/` + buat `path.txt`. Setelah itu `npm run dev:desktop` jalan normal. Catatan: `release:mac` tetap bisa tanpa ini karena electron-builder download Electron sendiri saat packaging.
+Custom providers can be added from the settings modal by selecting `custom (OpenAI-compatible)`. Fill the API root base URL and default model; Siberflow uses `/chat/completions`.
 
-### Build installer
+If Electron did not download during `npm install`, run:
 
 ```bash
-npm run package:desktop       # build + package (auto-detect platform)
+node node_modules/electron/install.js
+```
+
+### Build Installers
+
+```bash
+npm run package:desktop       # build + package for the current platform
 npm run package:mac           # macOS (.dmg)
 npm run package:win           # Windows (.exe / NSIS)
 npm run package:linux         # Linux (.AppImage)
 ```
 
-Semua script di atas bisa dijalankan dari **root** repo maupun dari `packages/desktop`. Native modules (`ssh2`, `sqlite3`) otomatis di-rebuild untuk Electron ABI via `electron-builder install-app-deps` yang ada di dalam script `package:*` (tidak pakai `postinstall` agar tidak rekursif).
+These scripts can be run from the repository root or from `packages/desktop`. Native modules (`ssh2`, `sqlite3`) are rebuilt for the Electron ABI through `electron-builder install-app-deps` inside the package scripts.
 
-Output: `packages/desktop/dist/Siberflow-<version>-<arch>.dmg` (macOS, ~110MB).
+Output example: `packages/desktop/dist/Siberflow-<version>-<arch>.dmg`.
 
-> **Windows:** jika `npm run package:win` gagal dengan `electron-builder is not recognized` atau `app-builder.exe ENOENT`, force install binary-nya:
-> ```powershell
-> npm install electron-builder@25 --force
-> npm install app-builder-bin --force
-> npm run package:win
-> ```
-> Panduan lengkap build Windows (termasuk prasyarat Python + VS Build Tools): lihat [BUILD-WINDOWS.md](BUILD-WINDOWS.md).
+On Windows, if `npm run package:win` fails with `electron-builder is not recognized` or `app-builder.exe ENOENT`, force-install the builder binaries:
 
-### ⚠️ Batasan Cross-Platform Build
-
-**Installer desktop harus di-build di OS target yang sama.** Tidak bisa cross-compile dari satu OS ke OS lain untuk menghasilkan installer yang berfungsi.
-
-| Build dari | macOS `.dmg` | Windows `.exe` | Linux `.AppImage` |
-|---|---|---|---|
-| **macOS** | ✅ berfungsi | ⚠️ installer terbentuk tapi **app crash** | ⚠️ sama |
-| **Windows** | ⚠️ sama | ✅ berfungsi | ⚠️ sama |
-| **Linux** | ⚠️ sama | ⚠️ sama | ✅ berfungsi |
-
-**Kenapa?** Native modules (`ssh2`, `sqlite3`, `cpu-features`) adalah machine code yang harus di-compile untuk tiap platform:
-- macOS → `Mach-O arm64/x64`
-- Windows → `PE32 x64`
-- Linux → `ELF x64`
-
-Dari Mac, native modules ter-compile jadi `Mach-O arm64`. Saat installer Windows hasil cross-compile dijalankan → load native module Mach-O di Windows → **crash instan**. Shortcut desktop tidak dibuat (dibuat saat first-run sukses), yang tersisa cuma uninstaller. `electron-builder` / `electron-rebuild` hanya rebuild untuk platform yang sedang jalan, tidak ada flag cross-compile untuk native addons.
-
-**Solusi dapat installer per-platform:**
-
-1. **Build di OS target** — paling simpel. Clone repo di Windows untuk `.exe`, di Linux untuk `.AppImage`.
-2. **GitHub Actions** (rekomendasi) — build otomatis di runner (`windows-latest` / `ubuntu-latest` / `macos-latest`). Push tag → semua platform ter-build + upload ke Releases. Native modules ter-compile asli untuk tiap platform.
-3. **Virtual Machine** — install VM Windows/Linux di Mac, build di sana.
-
-**Catatan Untuk Build Desktop:** di path root:
-```bash
+```powershell
 npm install electron-builder@25 --force
 npm install app-builder-bin --force
+npm run package:win
 ```
 
-**Catatan Linux:** sebelum build, install toolchain native module:
+For full Windows build notes, including Python and Visual Studio Build Tools prerequisites, see [BUILD-WINDOWS.md](BUILD-WINDOWS.md).
+
+### Cross-Platform Build Limit
+
+Desktop installers should be built on the target OS. Cross-compiling from one OS to another can produce installers that build successfully but crash at runtime because native modules are compiled for the wrong platform.
+
+| Build host | macOS `.dmg` | Windows `.exe` | Linux `.AppImage` |
+|---|---|---|---|
+| **macOS** | Works | May build but app can crash | May build but app can crash |
+| **Windows** | May build but app can crash | Works | May build but app can crash |
+| **Linux** | May build but app can crash | May build but app can crash | Works |
+
+Recommended options:
+
+1. Build on the target OS.
+2. Use GitHub Actions with `windows-latest`, `ubuntu-latest`, and `macos-latest`.
+3. Use a Windows/Linux virtual machine when building from macOS.
+
+Linux build prerequisites:
+
 ```bash
 sudo apt update
 sudo apt install -y build-essential python3 make g++
-# runtime dependencies untuk Electron:
 sudo apt install -y libgtk-3-0 libnotify4 libnss3 libxss1 libxtst6 xauth \
   libatspi2.0-0 libdrm2 libgbm1 libasound2
 ```
 
-Kalau `npm install` timeout/`SIGINT` karena `postinstall` (electron-builder download Electron binary ~180MB), skip dulu lalu rebuild manual:
+If `npm install` times out while downloading Electron/electron-builder binaries, install first and rebuild manually:
+
 ```bash
 npm install
 cd packages/desktop && npm run rebuild
 ```
 
-### Fitur desktop
+### Desktop Features
 
-- **Multi-session sidebar** — daftar chat dikelompokkan per folder project, switch/new/delete, rename inline (double-click)
-- **Folder picker** — tiap chat session terikat ke satu folder project (sandbox tool file/exec); pilih via native dialog saat new chat
-- **Layout centered** — messages & composer di-tengah (max-width 760px) untuk readability, task panel floating di kanan-atas
-- **Resizable sidebar** — drag border kanan sidebar untuk resize
-- **Branding lengkap** — app name, icon (.icns/.ico/.png), window title "Siberflow"
+- **Multi-session sidebar** - chats grouped by project folder, switch/new/delete, inline rename
+- **Folder picker** - each chat session can be tied to a project folder for file and shell sandboxing
+- **Centered layout** - readable chat/composer width with a floating task panel
+- **Resizable sidebar** - drag the right border to resize
+- **App branding** - app name, icons, and window title
 
-## Fitur ringkas
+## Feature Summary
 
-- **Streaming response** — token muncul real-time, support markdown
-- **File dan shell tools** — `read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`, `exec`
-- **Database query tool** — `db_query` mendukung `mysql`, `postgresql`, dan `sqlite`; query bebas, optional `params`, SQLite path tetap dibatasi ke project dir
-- **Excel spreadsheet tool** — `excel_script`: satu tool serbaguna untuk membaca, memodifikasi, dan membuat `.xlsx` multi-sheet via akses penuh API `exceljs` di sandbox `node:vm`. Mendukung cells, **rumus/formula**, **gambar/image** (`addImage`/`getImages`), chart, merge cells, conditional formatting, autofilter, styling, dll. AI tulis function JS `(wb, ExcelJS) => { ... return <data> }`; host yang load/write file, sandbox hanya manipulasi workbook. File Excel dari upload UI disimpan di **OS tmp dir** (bukan project) — workspace tetap bersih, tidak ikut ke git
-- **Word document tool** — `docx_script`: satu tool untuk membuat dan membaca `.docx` via library `docx` (create) + `mammoth` (read) di sandbox `node:vm`. Create mode: AI bangun dokumen deklaratif (heading, paragraf, tabel, image, bullet, styling) via `(doc, docx) => { ... }`; host serialize lewat `Packer.toBuffer`. Read mode: host convert `.docx` existing ke HTML via mammoth, teruskan ke script `(html) => { ... return data }` untuk ekstrak struktur/konten. Sandbox sync-only, host handle semua async I/O.
-- **PDF document tool** — `pdf_script`: satu tool untuk membuat dan membaca `.pdf` via library `pdf-lib` (create) + `pdfjs-dist` (read) di sandbox `node:vm`. Create mode: AI bangun PDF deklaratif (halaman, text, shapes, warna, garis) via `(pdf, P, font) => { ... }`; host pre-embed Helvetica font + serialize lewat `pdf.save()`. Read mode: host ekstrak text semua halaman via pdfjs-dist, teruskan string (dipisah `\f` per halaman) ke script `(text) => { ... return data }`. Catatan: PDF hasil scan (image, no text layer) tidak bisa di-OCR.
-- **Browser tool** — `run_browser` scrape/interaksi halaman web via headless Chrome/Edge (Puppeteer). Mendukung AJAX/SPA (render JS), klik/form/login, screenshot, intercept network, multi-tab. Script Puppeteer dijalankan di child process worker terisolasi dengan timeout kill. **Pakai Chrome/Edge yang sudah terinstall** — tidak ada download Chromium. Default OFF (opt-in)
-- **Per-tool toggle** — aktif/nonaktifkan tool individual via settings/env (`SIBERFLOW_TOOLS`). Default hanya 5 file ops aktif; `exec`/`db_query`/`ssh`/`excel`/`docx`/`pdf`/`run_browser` opt-in untuk prompt ringan + blast-radius security kecil
-- **Request delay (anti rate-limit)** — jeda sebelum setiap request ke AI (default 1500ms, bisa 0) untuk mencegah provider block saat loop tool-call cepat. Set via env (`SIBERFLOW_REQUEST_DELAY_MS`) atau settings UI
-- **Task checklist** — opt-in via env / settings; AI maintain checklist multi-step yang bisa di-resume setelah Ctrl+C atau session restart
-- **Context optimization** — buang tool history dari turn lama (default aktif); current task tetap utuh. Tiga mode via `SIBERFLOW_CONTEXT_OPTIMIZE_MODE`: `recent` (default; seperti summary, tapi sisakan 1 turn terakhir sebelum current turn tetap utuh — hanya turn yang lebih tua dikompres, jadi konteks tool terakhir tidak hilang dulu), `drop` (buang total), atau `summary` (sisakan tag `[SUMMARY]` berisi *signature* per tool — nama + identifier ringkas seperti `exec("df -h")` / `write_file("src/foo.ts")`; payload berat dan result tetap dibuang). Defense-in-depth: provider & serialization selalu menjamin assistant message punya content atau tool_calls (fix error 400 DeepSeek)
-- **Auto-continue** — sambung otomatis respons yang kepotong max_tokens
-- **Silent task_update** — tool `task_update` tetap dieksekusi tapi tidak ditampilkan di transcript (CLI, VSCode, Desktop); efeknya hanya terlihat di task checklist
-- **Upload Excel dari chat (Desktop & VSCode)** — tombol paperclip di composer buka file picker `.xlsx` (multi-select); file disalin ke tmp per-session, prompt otomatis menyuruh AI baca via `excel_script`. Chip attachment dengan tombol hapus per file. Tombol disable otomatis saat `excel_script` tidak di-enable di settings
-- **Multi-session** — sesi tersimpan per project, picker saat startup
-- **Debug tracing** — env `SIBERFLOW_DEBUG=true` untuk log HTTP/finish_reason/usage
+- **Streaming responses** - tokens render in real time with markdown support
+- **File and shell tools** - `read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`, `exec`
+- **Database query tool** - `db_query` supports MySQL, PostgreSQL, and SQLite
+- **Excel spreadsheet tool** - `excel_script` can read, modify, and create `.xlsx` files through `exceljs`
+- **Word document tool** - `docx_script` can create and read `.docx` files through `docx` and `mammoth`
+- **PDF document tool** - `pdf_script` can create PDFs with `pdf-lib` and read digital text layers with `pdfjs-dist`
+- **Browser tool** - `run_browser` automates installed Chrome/Edge through Puppeteer; no Chromium download
+- **Per-tool toggle** - enable only the tools you need through settings or `SIBERFLOW_TOOLS`
+- **Request delay** - `SIBERFLOW_REQUEST_DELAY_MS`, default `1500`, helps avoid provider rate limits
+- **Task checklist** - resumable multi-step task state
+- **Context optimization** - compacts old tool history with `recent`, `summary`, or `drop` modes
+- **Auto-continue** - automatically continues responses cut off by max token limits
+- **Silent task updates** - `task_update` runs without cluttering the transcript
+- **Document upload from chat** - Desktop and VS Code can upload `.xlsx`, `.docx`, and `.pdf` into a per-session temporary directory
+- **Multi-session persistence** - sessions are stored per project and can be resumed across interfaces
+- **Debug tracing** - `SIBERFLOW_DEBUG=true` logs provider request/stream details
+- **Custom provider** - Desktop, VS Code, and CLI can use any OpenAI-compatible provider via `custom`
 
-## Excel tool (`excel_script`)
+## Document Tools
 
-Domain tool di `packages/core/src/tools/excel/excel-script.ts`, pakai library `exceljs` (pure JS, no native addon → aman untuk build Electron cross-platform). Terdaftar di registry di bawah flag `filesystem` — otomatis dimatikan saat session tanpa working directory (sama seperti `read_file`/`exec`).
+### Excel (`excel_script`)
 
-Satu tool untuk semua operasi Excel: **baca**, **modifikasi**, dan **buat baru**. AI menyuplai function JavaScript `(wb, ExcelJS) => { ... return <optional data> }` yang dieksekusi di sandbox `node:vm`. Host yang melakukan semua I/O file (load source + write destination); sandbox hanya memanipulasi objek workbook, jadi akses filesystem tetap ter-sandbox.
+`excel_script` uses `exceljs` in a locked-down `node:vm` sandbox. The agent supplies a synchronous JavaScript function `(wb, ExcelJS) => { ... return data }`; the host performs all file I/O.
 
-### Mode operasi
+Supported operations:
 
-- **Read existing** — beri `path` + `readOnly: true`. Workbook di-load dari disk, script membaca cell/rumus/image dari `wb` dan **return** data yang diekstrak. Return value (string/number/object/array) di-serialize ke JSON dan dikirim balik ke AI sebagai output tool, jadi AI "melihat" hasil bacaannya.
-- **Modify existing** — beri `path` (workbook di-load ke `wb`), script memutasinya, hapus `readOnly`. Workbook ditulis balik ke `path` (atau `saveAs`) setelah script selesai.
-- **Create new** — omit `path`, bangun workbook dari nol via `wb.addWorksheet(...)`, pass `saveAs` (atau `path`) sebagai destinasi. `wb` kosong baru disupply ke sandbox.
+- **Read existing** - pass `path` and `readOnly: true`; returned data is serialized back to the agent
+- **Modify existing** - pass `path`; the workbook is loaded, mutated, then written back to `path` or `saveAs`
+- **Create new** - omit `path`, build worksheets from scratch, and pass `saveAs`
 
-### Kapabilitas (full exceljs API)
+The tool supports formulas, images exposed through `exceljs`, styling, merges, tables, filters, validation, and other `exceljs` APIs.
 
-- **Rumus/formula** — cell value `{ formula, result }`: baca `cell.value.formula` / `.result`, tulis `ws.getCell('C2').value = { formula: 'SUM(A2:A10)' }`.
-- **Gambar/image** — `ws.getImages()` untuk enumerate image yang ada (buffer-nya via `wb.getImage(imageId).buffer`); tulis via `const id = wb.addImage({ buffer, extension:'png' }); ws.addImage(id, 'D2:F8')`. Catatan: sandbox mem-block `fs`, jadi untuk embed image AI harus baca bytes-nya dulu via tool lain (mis. `read_file`) lalu inline Buffer literal di script.
-- **Styling** — font, fill, border, alignment, number format, freeze panes, zebra rows, dll.
-- **Layout kompleks** — merge cells, multi-level header, conditional formatting, chart, autofilter, data validation, column grouping, protection.
+### Word (`docx_script`)
 
-### Keamanan sandbox
+`docx_script` uses `docx` for creation and `mammoth` for reading. Create mode receives `(doc, docx)` and writes a generated document through `Packer.toBuffer`. Read mode converts `.docx` to HTML with mammoth and passes that HTML to a synchronous script.
 
-Sandbox `node:vm` locked-down: `require`/`process`/`fs`/`global`/`Promise`/`eval`/`Function` di-block, `codeGeneration.strings:false`, timeout 5 detik. Script **wajib synchronous** (API exceljs yang di-expose di sandbox semua sync; semua async I/O dilakukan host). Worker pattern: compile + invoke dalam satu `runInContext` supaya timeout cover infinite loop.
+It supports headings, paragraphs, text styling, bullets/numbering, tables, sections, headers/footers, and image insertion when bytes are supplied by another tool.
 
-### Upload Excel dari UI (Desktop & VSCode)
+### PDF (`pdf_script`)
 
-Tombol paperclip 📎 di composer → file picker native `.xlsx` multi-select → file disalin ke **`os.tmpdir()/siberflow-uploads/<sessionId>/`** (per-session, mode 0700) → prompt otomatis digabung dengan list path file → AI pakai `excel_script`. Project folder tidak tersentuh. Saat session di-delete, folder tmp session otomatis dibersihkan (hook di `deleteSession`).
+`pdf_script` uses `pdf-lib` for creation and `pdfjs-dist` for reading. Create mode receives `(pdf, P, font)` with a pre-embedded Helvetica font. Read mode extracts digital text layers from pages and joins pages with `\f`.
 
-**Keamanan**: hanya `excel_script` yang whitelist upload dir (via `ToolContext.uploadDir`); tool file lain (`read_file`, `write_file`, `exec`, dll) tetap sandbox ke `projectDir` dan tidak bisa baca tmp.
+Scanned/image-only PDFs do not return text because OCR is not included.
 
-## Browser tool (`run_browser`)
+### Uploads
 
-Tool scraping/interaksi halaman web via headless Chrome/Edge (Puppeteer). Default **OFF** — enable via settings (Desktop/VSCode) atau `SIBERFLOW_TOOLS` env (CLI).
+Desktop and VS Code copy uploaded documents into:
 
-**Cara kerja**: AI tulis function Puppeteer `async ({ page, browser }) => { ... }` → tool spawn **child process worker terisolasi** (bukan vm sandbox — Puppeteer async gak kompatibel) → worker launch Chrome atau Edge headless → run script → return result string. Worker di-kill kalau timeout (`timeoutMs` default 30s, max 60s). Reuse pattern kill tree dari `exec` (`process.kill(-pid)` Unix / `taskkill /T` Windows).
+```text
+os.tmpdir()/siberflow-uploads/<sessionId>/
+```
 
-**Browser**: pakai Chrome/Edge yang sudah terinstall di sistem (channel `'chrome'` → fallback `'msedge'`). **Tidak ada download Chromium** — installer tetap kecil, langsung jalan.
+Only document tools are allowed to read that upload directory through `ToolContext.uploadDir`; normal file/shell tools remain sandboxed to the project directory.
 
-**Output**: capped 200K chars (sama pattern `exec`/`db_query`). Tool description arahkan AI extract data spesifik (`$$eval`/`textContent`) daripada return raw HTML.
+## Browser Tool (`run_browser`)
 
-## Word document tool (`docx_script`)
+`run_browser` executes Puppeteer scripts in an isolated child-process worker. It uses installed Chrome or Edge (`chrome`, then `msedge`) and has a timeout kill path. Output is capped to keep prompts manageable.
 
-Tool di `packages/core/src/tools/docx/docx-script.ts`, pakai library `docx` (create) dan `mammoth` (read) — keduanya pure JS, no native addon → aman untuk build Electron cross-platform. Terdaftar di registry di bawah flag `filesystem` — otomatis dimatikan saat session tanpa working directory (sama seperti `excel_script`/`read_file`/`exec`).
+Enable it through settings in Desktop/VS Code or through `SIBERFLOW_TOOLS` in CLI.
 
-Satu tool untuk dua operasi: **create** dokumen baru dan **read** dokumen existing. AI menyuplai function JavaScript yang dieksekusi di sandbox `node:vm`. Host melakukan semua async I/O (load, mammoth conversion, Packer serialization, write) di luar sandbox; sandbox sync-only.
+## Per-Tool Toggle
 
-### Mode operasi
+Default enabled tools are only:
 
-- **Create** — pass `saveAs` (atau `path`) sebagai destinasi. Script terima `(doc, docx)` di mana `doc` adalah fresh empty `Document` dan `docx` adalah module `docx`. Script membangun dokumen via API deklaratif (`doc.addSection({...})`, `new docx.Paragraph(...)`, dll). Host serialize via `docx.Packer.toBuffer(doc)` dan tulis ke destinasi.
-- **Read** — pass `path` + `readOnly: true`. Host load `.docx`, convert ke HTML via mammoth, teruskan **HTML string** ke script `(html) => { ... return data }`. Script ekstrak apa yang dibutuhkan (heading, tabel, hitung kata, struktur) dan **return** datanya. Return value di-serialize JSON dan dikirim ke AI.
+```text
+read_file,write_file,edit_file,copy_file,list_dir
+```
 
-### Kapabilitas (Create mode — full `docx` library API)
+Other tools such as `exec`, `db_query`, `ssh_exec`, `sftp`, `excel_script`, `docx_script`, `pdf_script`, and `run_browser` are opt-in. `task_update` and `ask_user` are core UX tools and are always available.
 
-- **Heading** — `docx.HeadingLevel.HEADING_1` sampai `HEADING_6` + `TITLE`.
-- **Text styling** — `TextRun({ text, bold, italics, underline, color: 'FF0000', size: 24, font: 'Arial' })`. Size dalam half-points (24 = 12pt). Color hex tanpa `#`.
-- **Bullet/numbering** — `Paragraph({ text, bullet: { level: 0 } })` atau numbering config.
-- **Table** — `Table({ rows: [TableRow({ children: [TableCell({ children: [Paragraph('cell')] })] })] })`, dengan styling per-cell/row.
-- **Image** — `ImageRun({ data: <Uint8Array>, transformation: { width, height } })`. Sandbox mem-block `fs` → untuk embed image, AI baca bytes dulu via tool lain (`read_file`) lalu inline Uint8Array di script.
-- **Section/layout** — page size, margin, orientation, header/footer, page break, column.
-
-### Kapabilitas (Read mode — mammoth HTML)
-
-- **Struktur semantik** — heading (`<h1>`-`<h6>`), paragraf (`<p>`), tabel (`<table>`), list (`<ul>`/`<ol>`), bold/italic (`<strong>`/`<em>`).
-- **Bukan exact formatting** — mammoth ekstrak struktur/konten, bukan styling visual (font, warna, margin tidak terbaca presisi). Ini limitasi mammoth, bukan bug.
-
-### Keamanan sandbox
-
-Sama seperti `excel_script`: sandbox `node:vm` locked-down, `require`/`process`/`fs`/`global`/`Promise`/`eval`/`Function` di-block, `codeGeneration.strings:false`, timeout 5 detik. Script wajib synchronous; semua async I/O dilakukan host di luar sandbox. Path destinasi (write) selalu sandbox `projectDir`; source path (read) whitelist `uploadDir` (uploaded files bisa dibaca).
-
-## PDF document tool (`pdf_script`)
-
-Tool di `packages/core/src/tools/pdf/pdf-script.ts`, pakai library `pdf-lib` (create) dan `pdfjs-dist` / Mozilla PDF.js (read) — keduanya pure JS, no native addon → aman untuk build Electron cross-platform. Terdaftar di registry di bawah flag `filesystem`.
-
-Satu tool untuk dua operasi: **create** PDF baru dan **read** PDF existing. Pattern identik `excel_script`/`docx_script` (sandbox `node:vm` sync-only, host handle async I/O).
-
-### Mode operasi
-
-- **Create** — pass `saveAs` (atau `path`) sebagai destinasi. Script terima `(pdf, P, font)`:
-  - `pdf` = fresh empty `PDFDocument` (pdf-lib)
-  - `P` = module pdf-lib (`PDFDocument`, `StandardFonts`, `rgb`, `degrees`, `PageSizes`)
-  - `font` = **pre-embedded Helvetica** — supaya script bisa `page.drawText(...)` langsung tanpa `await embedFont()` (yang async, blocked di sandbox)
-  - Script bangun halaman (`pdf.addPage([w,h])` / `P.PageSizes.A4`), draw text/shapes, lalu host serialize via `pdf.save()` dan tulis ke destinasi.
-- **Read** — pass `path` + `readOnly: true`. Host load PDF, ekstrak text semua halaman via pdfjs-dist, teruskan **string text** (dipisah `\f` per halaman) ke script `(text) => { ... return data }`. Split `text.split("\f")` untuk akses per halaman.
-
-### Kapabilitas (Create mode — `pdf-lib` API)
-
-- **Halaman** — `pdf.addPage([width, height])` (points) atau `pdf.addPage(P.PageSizes.A4)`. A4 = [595, 842].
-- **Text** — `page.drawText('str', { x, y, size, font, color: P.rgb(r,g,b) })`. Color 0-1 float. `font` = pre-embedded Helvetica.
-- **Shapes** — `page.drawRectangle({ x, y, width, height, color })`, `page.drawLine({ start, end, thickness })`, `page.drawEllipse(...)`.
-- **Image** — terbatas: `embedPng`/`embedJpg` async, tidak bisa di sandbox. Saat ini create text/shape-only.
-- **Multi-page** — `pdf.addPage()` per halaman baru, masing-masing independen.
-
-### Kapabilitas (Read mode — pdfjs-dist)
-
-- **Text extraction** — semua text layer dari setiap halaman, di-join dengan `\f` (form feed) sebagai separator.
-- **Limitasi**: PDF hasil scan (image of text, no embedded text layer) return **empty** — pdfjs-dist tidak OCR, hanya baca text layer digital. PDF yang di-generate programatik (Word export, pdf-lib, dll) terekstrak baik.
-
-### Keamanan sandbox
-
-Sama seperti `excel_script`/`docx_script`: sandbox `node:vm` locked-down, sync-only, host handle async I/O (`pdf.save()` create, `pdfjs.getDocument()` read). `pdfjs-dist` di-load lazy via `createRequire` di host (bukan di-bundle) untuk hindari masalah bundling ESM. Path destinasi sandbox `projectDir`; source path whitelist `uploadDir`.
-
-## Per-tool toggle (enabledTools)
-
-Aktif/nonaktifkan tool individual supaya tool yang gak dipakai gak membebani prompt (~200-300 token per disabled tool) + blast-radius security lebih ketat. Default: **hanya 5 file ops** aktif (`read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`). `exec`/`db_query`/`ssh_exec`/`sftp`/`excel_script`/`docx_script`/`run_browser` default OFF — opt-in. Pengecualian: `task_update` dan `ask_user` selalu on (core UX, tidak muncul di toggle).
-
-`task_update` selalu nyala kalau `tasks` enabled (bypass enabledTools — itu master switch task checklist feature, bukan per-tool toggle).
-
-| Interface | Cara set |
+| Interface | How to configure |
 |---|---|
-| **CLI** | env `SIBERFLOW_TOOLS=read_file,write_file,edit_file,copy_file,list_dir,run_browser` (comma-separated) |
-| **VSCode** | setting `siberflow.enabledTools` (array) + grid checkbox di settings UI |
-| **Desktop** | Settings modal → section "Tools" (grid 12+ checkbox, group by kategori) |
+| **CLI** | `SIBERFLOW_TOOLS=read_file,write_file,edit_file,copy_file,list_dir,run_browser` |
+| **VS Code** | `siberflow.enabledTools` plus the settings UI checkbox grid |
+| **Desktop** | Settings modal -> Tools |
 
-## Developer docs
+## Developer Docs
 
-Detail teknis, struktur kode, protokol VSCode extension, cara menambah provider/tool, dan internal rendering di [DEVELOPMENT.md](DEVELOPMENT.md).
+For technical architecture, VS Code protocol details, provider/tool development, packaging notes, and renderer internals, see [DEVELOPMENT.md](DEVELOPMENT.md).

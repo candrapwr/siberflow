@@ -21,6 +21,12 @@ async function main(): Promise<void> {
   const provider = createProvider(config.provider, {
     apiKey: config.apiKey,
     ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
+    ...(config.customProviderName
+      ? { customName: config.customProviderName }
+      : {}),
+    ...(config.customDefaultModel
+      ? { customDefaultModel: config.customDefaultModel }
+      : {}),
   });
   const registry = createDefaultRegistry({
     enabledTools: config.enabledTools,

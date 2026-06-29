@@ -13,11 +13,19 @@ export type ProviderName =
   | "grok"
   | "qwen"
   | "zai"
-  | "claude";
+  | "claude"
+  | "custom";
+
+export interface CustomProviderSettings {
+  name: string;
+  baseUrl: string;
+  defaultModel: string;
+}
 
 /** Persisted settings shape (stored in userData/siberflow-settings.json). */
 export interface SettingsValues {
   provider: ProviderName;
+  customProvider: CustomProviderSettings;
   model: string;
   contextOptimize: boolean;
   contextOptimizeMode: "drop" | "summary" | "recent";
@@ -33,6 +41,11 @@ export interface SettingsValues {
 
 export const DEFAULT_SETTINGS: SettingsValues = {
   provider: "deepseek",
+  customProvider: {
+    name: "custom",
+    baseUrl: "",
+    defaultModel: "",
+  },
   model: "",
   contextOptimize: true,
   contextOptimizeMode: "recent",

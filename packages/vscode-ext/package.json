@@ -1,6 +1,6 @@
 {
   "name": "siberflow-chat",
-  "version": "0.5.27",
+  "version": "0.5.28",
   "displayName": "Siberflow",
   "description": "AI chat sidebar with multi-provider, tool calling, sandboxed file ops, and task checklists.",
   "publisher": "DatasiberLab",
@@ -98,10 +98,38 @@
             "openai-responses",
             "grok",
             "qwen",
-            "zai"
+            "zai",
+            "claude",
+            "custom"
           ],
           "default": "deepseek",
           "description": "Active LLM provider"
+        },
+        "siberflow.customProvider": {
+          "type": "object",
+          "default": {
+            "name": "custom",
+            "baseUrl": "",
+            "defaultModel": ""
+          },
+          "properties": {
+            "name": {
+              "type": "string",
+              "default": "custom",
+              "description": "Display/internal name for the custom OpenAI-compatible provider."
+            },
+            "baseUrl": {
+              "type": "string",
+              "default": "",
+              "description": "OpenAI-compatible API root URL, for example https://api.example.com/v1. Siberflow appends /chat/completions."
+            },
+            "defaultModel": {
+              "type": "string",
+              "default": "",
+              "description": "Default model to use when siberflow.model is empty."
+            }
+          },
+          "description": "Configuration used when siberflow.provider is custom."
         },
         "siberflow.model": {
           "type": "string",

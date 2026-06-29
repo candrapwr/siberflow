@@ -2,6 +2,14 @@
 
 Siberflow adalah extension chat AI untuk VSCode yang dirancang untuk membantu pekerjaan langsung dari dalam workspace. Extension ini bisa dipakai untuk membaca struktur project, membantu perubahan kode, menjalankan perintah shell, dan menangani pekerjaan bertahap tanpa perlu pindah ke tool lain.
 
+Siberflow dikembangkan oleh **DataSiberLab**. Untuk pertanyaan, kerja sama, atau dukungan teknis, hubungi **candrapwr@datasiber.com**.
+
+## Tampilan
+
+**Panel chat Siberflow di VSCode.** Gambar ini menunjukkan extension berjalan di sidebar editor, memakai konteks workspace yang sedang dibuka untuk membantu pekerjaan coding.
+
+![Siberflow VSCode Extension](../../ss_vscode.png)
+
 ## Apa yang bisa dilakukan
 
 - Chat AI langsung dari sidebar VSCode
@@ -26,9 +34,22 @@ Siberflow adalah extension chat AI untuk VSCode yang dirancang untuk membantu pe
 3. Saat pertama kali dipakai, isi provider dan API key.
 4. Mulai chat seperti biasa dari panel extension.
 
+## Custom provider
+
+Selain provider bawaan, Siberflow bisa memakai provider sendiri selama kompatibel dengan OpenAI `/chat/completions`.
+
+Di panel settings, pilih `custom (OpenAI-compatible)`, lalu isi:
+
+- **Custom provider name** — nama provider yang ingin ditampilkan
+- **Base URL** — root API, contoh `https://api.example.com/v1`
+- **Default model** — model yang dipakai kalau model override dikosongkan
+- **API key** — disimpan encrypted di VSCode SecretStorage
+
+Base URL jangan diisi sampai `/chat/completions`; Siberflow otomatis menambahkan path itu saat request.
+
 ## Ringkas fitur utama
 
-- Mendukung beberapa provider AI
+- Mendukung beberapa provider AI, termasuk custom OpenAI-compatible provider
 - Response tampil streaming di panel chat
 - Punya tool untuk file, shell, dan database
 - Session tersimpan per project

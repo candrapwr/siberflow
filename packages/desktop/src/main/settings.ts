@@ -16,7 +16,14 @@ export function loadSettings(): SettingsValues {
     const raw = readFileSync(settingsPath(), "utf8");
     const parsed = JSON.parse(raw) as Partial<SettingsValues>;
     // Merge with defaults so new fields are populated for existing installs.
-    return { ...DEFAULT_SETTINGS, ...parsed };
+    return {
+      ...DEFAULT_SETTINGS,
+      ...parsed,
+      customProvider: {
+        ...DEFAULT_SETTINGS.customProvider,
+        ...(parsed.customProvider ?? {}),
+      },
+    };
   } catch {
     return { ...DEFAULT_SETTINGS };
   }
