@@ -47,6 +47,7 @@ interface ChatState {
   mustConfigure: boolean;
   settingsValues: { provider: string } | null;
   hasApiKey: boolean;
+  hasMultimodalApiKey: boolean;
   banner: BannerInfo | null;
   session: CurrentSessionInfo | null;
   hideTools: boolean;
@@ -80,6 +81,7 @@ const initial: ChatState = {
   mustConfigure: false,
   settingsValues: null,
   hasApiKey: false,
+  hasMultimodalApiKey: false,
   banner: null,
   session: null,
   hideTools: true,
@@ -247,6 +249,7 @@ function reducer(state: ChatState, action: Action): ChatState {
         mustConfigure: e.mustConfigure,
         settingsValues: e.values,
         hasApiKey: e.hasApiKey,
+        hasMultimodalApiKey: e.hasMultimodalApiKey,
       };
 
     case "settings-saved":

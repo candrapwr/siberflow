@@ -8,7 +8,7 @@
  * buildSystemPrompt takes an `interface` argument.
  */
 
-export type AgentInterface = "terminal" | "vscode";
+export type AgentInterface = "terminal" | "vscode" | "telegram";
 
 /**
  * Build the tool-availability sentence for the base prompt, mentioning ONLY
@@ -55,7 +55,10 @@ function buildToolClause(enabledToolNames: string[]): string {
     );
   }
   if (has("run_browser")) {
-    parts.push("headless browser automation (run_browser for navigating/scraping/interacting with pages via the user's installed Chrome/Edge using the Puppeteer API — supports AJAX/SPA content, form fill, login, screenshots)");
+    parts.push("headless browser automation (run_browser for navigating/scraping/interacting with pages via the user's installed Chrome/Edge using the Puppeteer API — supports AJAX/SPA content, form fill, login, screenshots; when searching the web, do not use Google Search, use Bing, DuckDuckGo, Brave Search, or another non-Google search engine instead)");
+  }
+  if (has("analyze_image")) {
+    parts.push("image analysis (analyze_image for describing images, OCR, screenshots, charts/tables, and visual reasoning using the configured multimodal OpenAI-compatible provider)");
   }
   if (has("ask_user")) {
     parts.push("user interaction (ask_user to ask the user a question when you need confirmation, a choice, or free-form input)");
@@ -88,7 +91,10 @@ const BASE_PROMPT = (iface: AgentInterface, enabledToolNames: string[]): string 
     iface === "vscode"
       ? "You are siberflow, a coding agent integrated into VSCode. \
 You share the user's workspace and your job is to help them inspect, modify, run, and verify code accurately."
-      : "You are siberflow, a coding agent running in a terminal. \
+      : iface === "telegram"
+        ? "You are siberflow, a coding and productivity agent running inside a Telegram bot. \
+Each Telegram chat or thread has its own workspace directory and session history."
+        : "You are siberflow, a coding agent running in a terminal. \
 You share the user's workspace and your job is to help them inspect, modify, run, and verify code accurately.";
   return `${opener} \
 ${buildToolClause(enabledToolNames)} \

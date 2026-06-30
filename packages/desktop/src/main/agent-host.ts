@@ -37,7 +37,7 @@ import type {
   SettingsValues,
   UsageInfo,
 } from "@shared/protocol";
-import { getApiKey, setApiKey as storeApiKey, deleteApiKey } from "./secrets.js";
+import { getApiKey, setApiKey as storeApiKey, deleteApiKey, MULTIMODAL_SECRET_KEY } from "./secrets.js";
 import { loadSettings, saveSettings as persistSettings } from "./settings.js";
 
 /** Omit system + tool messages, keeping only user/assistant content for display. */
@@ -143,6 +143,7 @@ export class AgentHost {
     this.settings = loadSettings();
     this.apiKey = getApiKey(this.settings.provider);
     this.applyDebug();
+    this.applyMultimodalEnv();
     if (!this.apiKey) {
       this.readyForChat = false;
       this.emit({
@@ -150,6 +151,7 @@ export class AgentHost {
         mustConfigure: true,
         values: this.settings,
         hasApiKey: false,
+        hasMultimodalApiKey: !!getApiKey(MULTIMODAL_SECRET_KEY),
       });
       return;
     }
@@ -170,8 +172,12 @@ export class AgentHost {
 
   // -------- settings --------
 
-  getSettings(): { values: SettingsValues; hasApiKey: boolean } {
-    return { values: { ...this.settings }, hasApiKey: !!this.apiKey };
+  getSettings(): { values: SettingsValues; hasApiKey: boolean; hasMultimodalApiKey: boolean } {
+    return {
+      values: { ...this.settings },
+      hasApiKey: !!this.apiKey,
+      hasMultimodalApiKey: !!getApiKey(MULTIMODAL_SECRET_KEY),
+    };
   }
 
   async openSettings(): Promise<void> {
@@ -182,10 +188,11 @@ export class AgentHost {
       mustConfigure: false,
       values: this.settings,
       hasApiKey: !!this.apiKey,
+      hasMultimodalApiKey: !!getApiKey(MULTIMODAL_SECRET_KEY),
     });
   }
 
-  saveSettings(values: SettingsValues, apiKey: string | null): void {
+  saveSettings(values: SettingsValues, apiKey: string | null, multimodalApiKey: string | null): void {
     values = normalizeSettings(values);
     if (values.provider === "custom" && (!values.customProvider.baseUrl || !values.customProvider.defaultModel)) {
       this.emit({ type: "error", message: "Custom provider needs a base URL and default model." });
@@ -194,6 +201,7 @@ export class AgentHost {
     persistSettings(values);
     this.settings = values;
     this.applyDebug();
+    this.applyMultimodalEnv(multimodalApiKey);
 
     // API key handling: null means "leave unchanged", empty means "delete".
     if (apiKey !== null) {
@@ -218,6 +226,7 @@ export class AgentHost {
         mustConfigure: true,
         values,
         hasApiKey: false,
+        hasMultimodalApiKey: !!getApiKey(MULTIMODAL_SECRET_KEY),
       });
       this.emit({ type: "error", message: `API key for ${values.provider} required.` });
       return;
@@ -249,6 +258,23 @@ export class AgentHost {
   private applyDebug(): void {
     if (this.settings.debug) process.env.SIBERFLOW_DEBUG = "true";
     else delete process.env.SIBERFLOW_DEBUG;
+  }
+
+  private applyMultimodalEnv(apiKeyInput: string | null = null): void {
+    const baseUrl = this.settings.multimodalProvider.baseUrl.trim().replace(/\/+$/, "");
+    const model = this.settings.multimodalProvider.model.trim();
+    if (baseUrl) process.env.SIBERFLOW_MULTIMODAL_BASE_URL = baseUrl;
+    else delete process.env.SIBERFLOW_MULTIMODAL_BASE_URL;
+    if (model) process.env.SIBERFLOW_MULTIMODAL_MODEL = model;
+    else delete process.env.SIBERFLOW_MULTIMODAL_MODEL;
+
+    if (apiKeyInput !== null) {
+      if (apiKeyInput.length > 0) storeApiKey(MULTIMODAL_SECRET_KEY, apiKeyInput);
+      else deleteApiKey(MULTIMODAL_SECRET_KEY);
+    }
+    const key = getApiKey(MULTIMODAL_SECRET_KEY);
+    if (key) process.env.SIBERFLOW_MULTIMODAL_API_KEY = key;
+    else delete process.env.SIBERFLOW_MULTIMODAL_API_KEY;
   }
 
   private rebuildAgent(): void {
@@ -756,12 +782,17 @@ function displayProviderName(settings: SettingsValues): string {
 
 function normalizeSettings(values: SettingsValues): SettingsValues {
   const customProvider = values.customProvider ?? { name: "custom", baseUrl: "", defaultModel: "" };
+  const multimodalProvider = values.multimodalProvider ?? { baseUrl: "https://api.openai.com/v1", model: "" };
   return {
     ...values,
     customProvider: {
       name: customProvider.name.trim() || "custom",
       baseUrl: customProvider.baseUrl.trim().replace(/\/+$/, ""),
       defaultModel: customProvider.defaultModel.trim(),
+    },
+    multimodalProvider: {
+      baseUrl: multimodalProvider.baseUrl.trim().replace(/\/+$/, ""),
+      model: multimodalProvider.model.trim(),
     },
   };
 }

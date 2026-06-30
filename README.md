@@ -1,6 +1,6 @@
 # Siberflow
 
-Siberflow is an AI coding and productivity platform with multi-provider support, streaming tool calls, sandboxed file access, database tools, persistent multi-session history, and task checklists. Current interfaces: **CLI**, **VS Code extension** sidebar, and **Desktop app** built with Electron and React.
+Siberflow is an AI coding and productivity platform with multi-provider support, streaming tool calls, sandboxed file access, database tools, persistent multi-session history, and task checklists. Current interfaces: **CLI**, **VS Code extension** sidebar, **Desktop app** built with Electron and React, and a **Telegram bot**.
 
 [Baca versi Bahasa Indonesia](README.id.md)
 
@@ -48,8 +48,9 @@ This is an npm workspaces monorepo.
 - `packages/cli` - interactive REPL, slash commands, ASCII banner, streaming renderer
 - `packages/vscode-ext` - VS Code extension with sidebar chat panel, settings UI, markdown rendering
 - `packages/desktop` - Electron desktop app with React/Vite, standalone UI, multi-session sidebar, safeStorage API keys
+- `packages/telegram` - Telegram Bot API long-polling host with one Siberflow session and workdir per chat/thread
 
-All sessions are stored in `~/.siberflow/sessions/` and are compatible across CLI, VS Code, and Desktop.
+All sessions are stored in `~/.siberflow/sessions/` and are compatible across CLI, VS Code, Desktop, and Telegram.
 
 ## CLI
 
@@ -108,6 +109,45 @@ npm unlink -w @siberflow/cli
 ```
 
 `npm link` creates a symlink to this repository, so do not move or delete the repo after linking.
+
+## Telegram Bot
+
+The Telegram host runs Siberflow through Bot API long polling. Each private chat, group, supergroup, and forum thread gets its own persistent Siberflow session and its own workspace directory under `~/.siberflow/telegram-workdirs` by default.
+
+Telegram provider/model can be overridden with `SIBERFLOW_TELEGRAM_PROVIDER` and `SIBERFLOW_TELEGRAM_MODEL`. API keys are still read from the provider's global key env. Telegram tools are controlled through `SIBERFLOW_TELEGRAM_TOOLS`; the default is `run_browser`.
+
+```bash
+npm install
+cp .env.example .env
+
+# Required:
+TELEGRAM_BOT_TOKEN=...
+DEEPSEEK_API_KEY=... # or another provider key selected by SIBERFLOW_PROVIDER
+
+npm run dev:telegram
+```
+
+Optional Telegram-specific environment variables:
+
+```bash
+TELEGRAM_API_BASE_URL=https://api.telegram.org
+SIBERFLOW_TELEGRAM_WORKDIR_ROOT=~/.siberflow/telegram-workdirs
+SIBERFLOW_TELEGRAM_PROVIDER=deepseek
+SIBERFLOW_TELEGRAM_MODEL=deepseek-v4-flash
+SIBERFLOW_TELEGRAM_TOOLS=run_browser
+```
+
+Streaming behavior:
+
+- Private chats use Telegram Bot API `sendRichMessageDraft` while the model streams, then persist the final response with `sendRichMessage`.
+- Groups and supergroups receive the final `sendRichMessage` only, because Telegram rich message drafts are scoped to private chats.
+- The bot does not use `editMessageText` or other message-edit APIs for streaming.
+
+Commands:
+
+- `/start` - short bot introduction
+- `/reset` - delete the current Telegram chat/thread session
+- `/siberflow <message>` - optional explicit prefix in groups
 
 ## VS Code Extension
 
@@ -236,6 +276,7 @@ cd packages/desktop && npm run rebuild
 - **Word document tool** - `docx_script` can create and read `.docx` files through `docx` and `mammoth`
 - **PDF document tool** - `pdf_script` can create PDFs with `pdf-lib` and read digital text layers with `pdfjs-dist`
 - **Browser tool** - `run_browser` automates installed Chrome/Edge through Puppeteer; no Chromium download
+- **Image analysis tool** - `analyze_image` sends an image plus prompt to a configured OpenAI-compatible multimodal model
 - **Per-tool toggle** - enable only the tools you need through settings or `SIBERFLOW_TOOLS`
 - **Request delay** - `SIBERFLOW_REQUEST_DELAY_MS`, default `1500`, helps avoid provider rate limits
 - **Task checklist** - resumable multi-step task state
@@ -289,6 +330,24 @@ Only document tools are allowed to read that upload directory through `ToolConte
 
 Enable it through settings in Desktop/VS Code or through `SIBERFLOW_TOOLS` in CLI.
 
+## Image Analysis Tool (`analyze_image`)
+
+`analyze_image` accepts a local image path, HTTP(S) image URL, or `data:image/...` URL plus a prompt. Local paths are sandboxed to the session project/workdir or upload directory.
+
+Configure the multimodal OpenAI-compatible provider:
+
+```bash
+SIBERFLOW_MULTIMODAL_BASE_URL=https://api.openai.com/v1
+SIBERFLOW_MULTIMODAL_MODEL=gpt-4o-mini
+SIBERFLOW_MULTIMODAL_API_KEY=...
+```
+
+Enable it through settings or env, for example:
+
+```bash
+SIBERFLOW_TELEGRAM_TOOLS=run_browser,analyze_image
+```
+
 ## Per-Tool Toggle
 
 Default enabled tools are only:
@@ -297,7 +356,7 @@ Default enabled tools are only:
 read_file,write_file,edit_file,copy_file,list_dir
 ```
 
-Other tools such as `exec`, `db_query`, `ssh_exec`, `sftp`, `excel_script`, `docx_script`, `pdf_script`, and `run_browser` are opt-in. `task_update` and `ask_user` are core UX tools and are always available.
+Other tools such as `exec`, `db_query`, `ssh_exec`, `sftp`, `excel_script`, `docx_script`, `pdf_script`, `run_browser`, and `analyze_image` are opt-in. `task_update` and `ask_user` are core UX tools and are always available.
 
 | Interface | How to configure |
 |---|---|

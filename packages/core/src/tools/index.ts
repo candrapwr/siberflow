@@ -9,6 +9,7 @@ import { docxTools } from "./docx/index.js";
 import { pdfTools } from "./pdf/index.js";
 import { browserTools } from "./browser/index.js";
 import { interactionTools } from "./interaction/index.js";
+import { imageTools } from "./image/index.js";
 
 export * from "./base.js";
 export { ToolRegistry } from "./registry.js";
@@ -22,6 +23,7 @@ export { docxTools } from "./docx/index.js";
 export { pdfTools } from "./pdf/index.js";
 export { browserTools } from "./browser/index.js";
 export { interactionTools } from "./interaction/index.js";
+export { imageTools } from "./image/index.js";
 
 export interface RegistryOptions {
   /**
@@ -44,6 +46,12 @@ export interface RegistryOptions {
    * (it is always registered).
    */
   enabledTools?: Set<string>;
+  /**
+   * Register interaction tools such as ask_user. Default true. Hosts that
+   * cannot block on a user prompt (for example Telegram long polling) may
+   * disable this so the model sees only the explicitly enabled capabilities.
+   */
+  interaction?: boolean;
 }
 
 /**
@@ -66,7 +74,7 @@ export function createDefaultRegistry(opts: RegistryOptions = {}): ToolRegistry 
 
   // file / exec / excel / docx / pdf tools require the project sandbox (workdir).
   // Register only those the user enabled AND only when a workdir exists.
-  const fsCandidates = [...fileTools, ...cliTools, ...excelTools, ...docxTools, ...pdfTools];
+  const fsCandidates = [...fileTools, ...cliTools, ...excelTools, ...docxTools, ...pdfTools, ...imageTools];
   for (const tool of fsCandidates) {
     if (hasFs && enabled.has(tool.name)) registry.register(tool);
   }
@@ -79,7 +87,9 @@ export function createDefaultRegistry(opts: RegistryOptions = {}): ToolRegistry 
   if (opts.tasks !== false) {
     for (const tool of taskTools) registry.register(tool);
   }
-  // Interaction tools (ask_user) are always registered — core to the agent UX.
-  for (const tool of interactionTools) registry.register(tool);
+  // Interaction tools (ask_user) are enabled by default for interactive hosts.
+  if (opts.interaction !== false) {
+    for (const tool of interactionTools) registry.register(tool);
+  }
   return registry;
 }

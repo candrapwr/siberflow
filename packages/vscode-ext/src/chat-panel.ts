@@ -201,7 +201,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         await this.runCommand(msg.command);
         break;
       case "save_settings":
-        await this.saveSettings(msg.values, msg.apiKey);
+        await this.saveSettings(msg.values, msg.apiKey, msg.multimodalApiKey);
         break;
       case "pick_doc_files":
         await this.pickDocFiles();
@@ -290,6 +290,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.apiKey = await this.loadApiKey(this.settings.provider);
     if (this.settings.debug) process.env.SIBERFLOW_DEBUG = "true";
     else delete process.env.SIBERFLOW_DEBUG;
+    await this.applyMultimodalEnv();
 
     if (!this.apiKey) {
       await this.openSettings(true);
@@ -304,10 +305,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private async openSettings(mustConfigure: boolean): Promise<void> {
     this.settings = readSettings();
     this.apiKey = await this.loadApiKey(this.settings.provider);
+    await this.applyMultimodalEnv();
     this.post({
       kind: "settings",
       values: this.settings,
       hasApiKey: !!this.apiKey,
+      hasMultimodalApiKey: !!(await this.loadMultimodalApiKey()),
       mustConfigure,
     });
   }
@@ -315,6 +318,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private async saveSettings(
     values: SettingsValues,
     apiKey: string | null,
+    multimodalApiKey: string | null,
   ): Promise<void> {
     values = normalizeSettings(values);
     if (values.provider === "custom" && (!values.customProvider.baseUrl || !values.customProvider.defaultModel)) {
@@ -327,6 +331,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     await Promise.all([
       cfg.update("provider", values.provider, target),
       cfg.update("customProvider", values.customProvider, target),
+      cfg.update("multimodalProvider", values.multimodalProvider, target),
       cfg.update("model", values.model, target),
       cfg.update("contextOptimize", values.contextOptimize, target),
       cfg.update("contextOptimizeMode", values.contextOptimizeMode, target),
@@ -353,6 +358,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.settings = values;
     if (values.debug) process.env.SIBERFLOW_DEBUG = "true";
     else delete process.env.SIBERFLOW_DEBUG;
+    await this.applyMultimodalEnv(multimodalApiKey);
 
     if (!this.apiKey) {
       this.readyForChat = false;
@@ -363,6 +369,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         kind: "settings",
         values,
         hasApiKey: false,
+        hasMultimodalApiKey: !!(await this.loadMultimodalApiKey()),
         mustConfigure: true,
       });
       this.post({ kind: "error", message: `API key for ${values.provider} required.` });
@@ -394,6 +401,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private async loadApiKey(provider: ProviderName): Promise<string | null> {
     const v = await this.ctx.secrets.get(secretKeyFor(provider));
     return v ?? null;
+  }
+
+  private async loadMultimodalApiKey(): Promise<string | null> {
+    const v = await this.ctx.secrets.get(multimodalSecretKey());
+    return v ?? null;
+  }
+
+  private async applyMultimodalEnv(apiKeyInput: string | null = null): Promise<void> {
+    const baseUrl = this.settings.multimodalProvider.baseUrl.trim().replace(/\/+$/, "");
+    const model = this.settings.multimodalProvider.model.trim();
+    if (baseUrl) process.env.SIBERFLOW_MULTIMODAL_BASE_URL = baseUrl;
+    else delete process.env.SIBERFLOW_MULTIMODAL_BASE_URL;
+    if (model) process.env.SIBERFLOW_MULTIMODAL_MODEL = model;
+    else delete process.env.SIBERFLOW_MULTIMODAL_MODEL;
+
+    if (apiKeyInput !== null) {
+      if (apiKeyInput.length > 0) await this.ctx.secrets.store(multimodalSecretKey(), apiKeyInput);
+      else await this.ctx.secrets.delete(multimodalSecretKey());
+    }
+    const key = await this.loadMultimodalApiKey();
+    if (key) process.env.SIBERFLOW_MULTIMODAL_API_KEY = key;
+    else delete process.env.SIBERFLOW_MULTIMODAL_API_KEY;
   }
 
   private rebuildAgent(): void {
@@ -958,6 +987,14 @@ function readSettings(): SettingsValues {
         defaultModel: "",
       }) ?? {}),
     },
+    multimodalProvider: {
+      baseUrl: "https://api.openai.com/v1",
+      model: "",
+      ...(cfg.get<SettingsValues["multimodalProvider"]>("multimodalProvider", {
+        baseUrl: "https://api.openai.com/v1",
+        model: "",
+      }) ?? {}),
+    },
     model: cfg.get<string>("model", ""),
     contextOptimize: cfg.get<boolean>("contextOptimize", true),
     contextOptimizeMode: cfg.get<OptimizeMode>("contextOptimizeMode", "recent"),
@@ -995,14 +1032,23 @@ function secretKeyFor(provider: ProviderName): string {
   return `siberflow.apiKey.${provider}`;
 }
 
+function multimodalSecretKey(): string {
+  return "siberflow.apiKey.multimodal";
+}
+
 function normalizeSettings(values: SettingsValues): SettingsValues {
   const customProvider = values.customProvider ?? { name: "custom", baseUrl: "", defaultModel: "" };
+  const multimodalProvider = values.multimodalProvider ?? { baseUrl: "https://api.openai.com/v1", model: "" };
   return {
     ...values,
     customProvider: {
       name: customProvider.name.trim() || "custom",
       baseUrl: customProvider.baseUrl.trim().replace(/\/+$/, ""),
       defaultModel: customProvider.defaultModel.trim(),
+    },
+    multimodalProvider: {
+      baseUrl: multimodalProvider.baseUrl.trim().replace(/\/+$/, ""),
+      model: multimodalProvider.model.trim(),
     },
   };
 }

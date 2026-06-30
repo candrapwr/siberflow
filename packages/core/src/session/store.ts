@@ -208,6 +208,7 @@ export async function saveOptimizedMiddleView(
  */
 export async function clearSessions(filter?: {
   projectDir?: string;
+  includeTelegram?: boolean;
 }): Promise<number> {
   const summaries = await listSessions(filter);
   let removed = 0;
@@ -219,6 +220,7 @@ export async function clearSessions(filter?: {
 
 export async function listSessions(filter?: {
   projectDir?: string;
+  includeTelegram?: boolean;
 }): Promise<SessionSummary[]> {
   await ensureDir();
   const files = await readdir(SESSIONS_DIR);
@@ -230,6 +232,7 @@ export async function listSessions(filter?: {
     try {
       const raw = await readFile(join(SESSIONS_DIR, f), "utf8");
       const s = JSON.parse(raw) as Session;
+      if (!filter?.includeTelegram && isTelegramSessionId(s.id)) continue;
       if (filter?.projectDir && s.projectDir !== filter.projectDir) continue;
       out.push({
         id: s.id,
@@ -244,6 +247,10 @@ export async function listSessions(filter?: {
   }
   out.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   return out;
+}
+
+function isTelegramSessionId(id: string): boolean {
+  return id.startsWith("telegram-");
 }
 
 export async function findByNameOrId(

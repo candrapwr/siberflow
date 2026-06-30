@@ -23,6 +23,10 @@ export function loadSettings(): SettingsValues {
         ...DEFAULT_SETTINGS.customProvider,
         ...(parsed.customProvider ?? {}),
       },
+      multimodalProvider: {
+        ...DEFAULT_SETTINGS.multimodalProvider,
+        ...(parsed.multimodalProvider ?? {}),
+      },
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
