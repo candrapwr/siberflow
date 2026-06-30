@@ -517,10 +517,12 @@ class BotRunner {
     let draftSent = false;
     const canDraft = message.chat.type === "private";
     const draftId = canDraft ? newTelegramRandomId() : 0;
-    const shownToolStatuses = new Set<string>();
     let activeToolStatus = "";
     let toolHeartbeat: ReturnType<typeof setInterval> | null = null;
-    const groupStatus: { promise?: Promise<number | undefined> } = {};
+    const groupStatus: {
+      promise?: Promise<number | undefined>;
+      lastText?: string;
+    } = {};
 
     const sendDraft = (text: string): void => {
       if (!canDraft) return;
@@ -554,6 +556,42 @@ class BotRunner {
       }
     };
 
+    const showGroupToolStatus = (status: string): void => {
+      if (canDraft) return;
+      void this.api.sendChatAction(message.chat.id, "typing", message.message_thread_id);
+      if (groupStatus.lastText === status) return;
+      groupStatus.lastText = status;
+
+      if (!groupStatus.promise) {
+        groupStatus.promise = this.api
+          .sendMessage({
+            chat_id: message.chat.id,
+            text: status,
+            message_thread_id: message.message_thread_id,
+          })
+          .then((sent) => sent.message_id)
+          .catch((err) => {
+            console.error(`Telegram status error: ${(err as Error).message}`);
+            return undefined;
+          });
+        return;
+      }
+
+      groupStatus.promise = groupStatus.promise.then(async (messageId) => {
+        if (!messageId) return undefined;
+        try {
+          await this.api.editRichMessage({
+            chat_id: message.chat.id,
+            message_id: messageId,
+            text: status,
+          });
+        } catch (err) {
+          console.error(`Telegram status edit error: ${(err as Error).message}`);
+        }
+        return messageId;
+      });
+    };
+
     if (!canDraft) {
       await this.api.sendChatAction(message.chat.id, "typing", message.message_thread_id);
     }
@@ -580,21 +618,7 @@ class BotRunner {
             onToolCallStart: (_index, name) => {
               const status = toolStatusText(name);
               if (!canDraft) {
-                void this.api.sendChatAction(message.chat.id, "typing", message.message_thread_id);
-                if (!shownToolStatuses.has(name)) {
-                  shownToolStatuses.add(name);
-                  groupStatus.promise = this.api
-                    .sendMessage({
-                      chat_id: message.chat.id,
-                      text: status,
-                      message_thread_id: message.message_thread_id,
-                    })
-                    .then((sent) => sent.message_id)
-                    .catch((err) => {
-                      console.error(`Telegram status error: ${(err as Error).message}`);
-                      return undefined;
-                    });
-                }
+                showGroupToolStatus(status);
                 return;
               }
               showToolDraft(status);
@@ -618,11 +642,10 @@ class BotRunner {
     } catch (err) {
       clearToolHeartbeat();
       const text = `Error: ${(err as Error).message}`;
-      await this.api.sendMessage({
-        chat_id: message.chat.id,
-        text,
-        message_thread_id: message.message_thread_id,
-      });
+      const replaceMessageId = groupStatus.promise
+        ? await groupStatus.promise
+        : undefined;
+      await this.sendFinal(message, text, replaceMessageId);
     }
   }
 
