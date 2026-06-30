@@ -890,6 +890,45 @@ Native modules (`ssh2`, `sqlite3`, `cpu-features`) otomatis di-rebuild untuk Ele
 
 Session files di lokasi yang sama (`~/.siberflow/sessions/`), format identik. Session dibuat via desktop bisa di-load di CLI/VSCode dan sebaliknya.
 
+## Telegram Host (`packages/telegram`)
+
+Bot Telegram via Bot API long-polling. Satu file entry point: [index.ts](packages/telegram/src/index.ts). Reuse `@siberflow/core` penuh (Agent, provider, registry, session store) — tidak ada fork logika agent.
+
+### Arsitektur
+
+- `BotRunner` — loop `getUpdates` (long-poll `timeout=25`). Tiap update di-handle `void handleUpdate(update).catch(...)` (fire-and-forget dengan backstop). Session dibuat per chat+thread (`sessionIdFor`), masing-masing punya `workdir` sendiri di `~/.siberflow/telegram-workdirs/<id>`.
+- **Concurrency model (serial per session)**: `turnQueues: Map<sessionId, Promise<void>>` jadi mutex/chain per session. `enqueueTurn()` merangkai turn baru ke tail session itu, jadi turn pada session yang sama selalu jalan **berurutan, tidak pernah paralel**. Turn pada session berbeda tetap paralel (chain independen). Ini ganti flag `busy` + pesan "masih memproses" lama: pesan yang masuk saat turn jalan sekarang **diantri & diproses berurutan**, bukan ditolak/dihapus. Mencegah race condition saat 2+ pesan tiba di batch `getUpdates` yang sama (yang dulu bisa jalan 2 turn paralel pada satu Agent → history rusak / `saveSession` korup / tool conflict). Chain promise tidak pernah reject (rejection ditelan supaya satu turn gagal tak meracuni queue); entry dihapus dari map saat tail settle (tidak bocor memory).
+- `TelegramApi` — wrapper fetch ke Bot API. **Resilience: tiap call punya timeout 30s (`AbortController`) + retry 3x exponential backoff (1s→2s→4s)** untuk transient network error (`ETIMEDOUT`/`ENETUNREACH`/`ECONNRESET`/`fetch failed`/HTTP 5xx/429). Error permanen (4xx selain 429, `message is not modified`) fail-fast tanpa retry. Helper `isTransientError()` klasifikasi.
+- Global handler di `main()`: `process.on("unhandledRejection"/"uncaughtException")` suppress tanpa exit — single failed call tidak pernah crash proses.
+
+### Streaming & feedback per chat type
+
+- **Private chat** — pakai `sendRichMessageDraft` (Bot API streaming draft, hanya tersedia di private chat). Draft di-throttle `DRAFT_MIN_INTERVAL_MS=900ms`. Final response di-persist via `sendRichMessage`. Tool call tampilkan status "⏳..." di draft + heartbeat 10s.
+- **Group/supergroup** — draft streaming TIDAK didukung API Telegram untuk grup (batasan resmi). Mekanisme feedback: pesan status tool ("⏳ Memproses...") yang di-edit jadi hasil final via `editRichMessage`. Typing indicator di-refresh tiap `GROUP_TYPING_INTERVAL_MS=4s` (indikator typing hanya bertahan ~5s) supaya chat tidak terlihat frozen.
+- `sendFinal` — kalau edit status→hasil gagal, pesan status orphan **dihapus** via `deleteMessage` dulu sebelum kirim chunk fresh (fix bug "spinner gantung + duplikat pesan").
+
+### Per-turn abort
+
+`BotRunner.turnAbort: AbortController` per turn, diteruskan ke `agent.send({ signal })`. Konsisten dengan Desktop/VSCode. Telegram tidak punya tombol Stop user, jadi abort dipicu internal saat turn throw (cancel in-flight LLM request bersih).
+
+### `bot_script` & `BotScriptHost`
+
+`bot_script` (opt-in) run JS di `node:vm` sandbox dengan helper `bot`. Interface `BotScriptHost` di [core/tools/base.ts](packages/core/src/tools/base.ts); implementasi Telegram di `createBotScriptHost()`.
+
+**Method `bot` (14 method + metadata)**:
+- Metadata: `bot.chat.{id,type,title,username,messageThreadId,currentMessageId,currentUserId,currentUserUsername}` (user info di-ekspres agar AI bisa cross-chat send).
+- Send (target chat aktif default, override via `chatId` arg terakhir): `sendMessage`, `sendPhoto`, `sendDocument`, `sendVideo`, `sendAudio`, `sendAnimation`, `sendVoice`, `sendMediaGroup`, `sendLocation`, `sendPoll`, `reply`.
+- Manipulasi/info (chat aktif only): `editMessageText`, `deleteMessage`, `getChat`, `getChatMember`.
+
+**Cross-chat send**: override `chatId` (mis. `bot.sendMessage(text, bot.chat.currentUserId)` untuk kirim ke private user dari grup). **Syarat**: user harus sudah `/start` bot di private — kalau belum, Telegram kembalikan `Forbidden` → diteruskan ke AI sebagai string error.
+
+**Keamanan**:
+- Sandbox vm: shell/process/require/eval/Function di-block. Timeout 15s.
+- Path file (semua send media) di-validasi via `resolveTelegramWorkdirPath` — harus di session workdir.
+- `chatId` override wajib number valid (`resolveTarget`) — anti halusinasi AI kirim ke chat ID salah.
+- Admin method (ban/kick/mute/promote/setChatTitle) **tidak diimplementasikan sama sekali** — di-block dengan tidak menyediakannya.
+- Chat-manipulation/info (`getChat`/`getChatMember`/`editMessageText`/`deleteMessage`/`reply`) selalu di chat aktif, abaikan `chatId` override.
+
 ## Build & Dev
 
 | Script | Aksi |
@@ -966,6 +1005,7 @@ Contoh kategori yang sudah ada di repo:
 - `tools/excel/*` untuk spreadsheet `.xlsx` (read pakai `resolveExcelPath` agar bisa baca upload dir; write tetap `resolveWithin` project; script mode pakai vm sandbox untuk full exceljs API)
 - `tools/ssh/*` untuk remote shell & SFTP
 - `tools/browser/*` untuk scraping/interaksi web via headless Chrome/Edge Puppeteer (child_process worker, pakai browser yang sudah terinstall)
+- `tools/bot/*` untuk `bot_script` — JS sandbox yang ekspos API bot host (Telegram) ke AI via interface `BotScriptHost`
 - `tools/task/*` untuk task checklist
 
 Kalau tool baru butuh opt-in (default OFF), tambah nama tool ke `TOGGLE_TOOLS` array di `SettingsModal.tsx` (Desktop) + `webview/main.ts` (VSCode) + list di `.env.example`. Filter otomatis lewat `enabledTools` di `createDefaultRegistry`.
@@ -983,6 +1023,7 @@ Buat workspace baru di `packages/<name>/`, depend ke `@siberflow/core`. Subscrib
 - `docx_script` sama persis pattern sandbox-nya dengan `excel_script` (vm terkunci, sync-only, host handle async I/O: `Packer.toBuffer` untuk create, `mammoth.convertToHtml` untuk read). Source path whitelist `uploadDir`, destination sandbox `projectDir`.
 - `pdf_script` sama pattern sandbox dengan excel/docx. Host pre-embed font + serialize (`pdf.save()`) untuk create, ekstrak text via pdfjs-dist (`getDocument`) untuk read. pdfjs-dist di-load lazy via `createRequire` di host + di-tandai `external` di build config (hindari bug TDZ bundling ESM).
 - `run_browser` run kode AI-supplied (Puppeteer) di **child process worker terisolasi** (bukan vm — Puppeteer async gak kompatibel). Worker gak punya akses host memory/session/AgentHost; env minimal (gak leak secrets); timeout kill process tree. Pakai Chrome/Edge yang sudah terinstall di sistem (channel `'chrome'` → fallback `'msedge'`), tidak ada download Chromium. `puppeteer-core` di-resolve via env var `SIBERFLOW_PUPPETEER_CORE_PATH` (host set) atau heuristik di `resolvePuppeteerCorePath()`.
+- `bot_script` run JS AI-supplied di `node:vm` sandbox terkunci (pola sama excel_script: shell/process/require/eval/Function di-block, timeout 15s). Ekspos API Telegram via interface `BotScriptHost` — **kurasi method, bukan akses penuh**: send media/poll/location, edit/delete pesan bot sendiri, getChat/getChatMember. **Admin/moderation method (ban/kick/mute/promote/setChatTitle) TIDAK diimplementasikan** — di-block dengan tidak menyediakannya di interface. Path media wajib di session workdir (`resolveTelegramWorkdirPath`). Cross-chat send (kirim ke private user dari grup) diizinkan via arg `chatId` override (harus number valid, anti-halusinasi) — syarat user sudah `/start` bot di private (batasan API Telegram, error `Forbidden` diteruskan ke AI kalau belum). Chat-manipulation/info selalu scoped ke chat aktif.
 - Per-tool toggle (`enabledTools`): tool berbahaya (`exec`, `db_query`, `ssh_exec`, `run_browser`, dll) default OFF — opt-in via settings/env supaya blast-radius security kecil walau AI coba pakai. Pengecualian: `task_update` dan `ask_user` selalu on (core UX).
 - `exec` tool cwd=projectDir tapi shell bisa akses path lain (soft). OK untuk single-user dev; untuk multi-user / web public perlu permission layer.
 - API key:

@@ -126,7 +126,6 @@ interface TelegramFile {
 interface RuntimeSession {
   agent: Agent;
   session: Session;
-  busy: boolean;
   pendingUsage?: UsageStats;
 }
 
@@ -310,6 +309,19 @@ class BotRunner {
   private botId = 0;
   private botUsername = "";
   /**
+   * Per-session serial turn queue. Each session ID maps to the tail Promise of
+   * an in-flight (or already-resolved) turn chain. New turns for the SAME
+   * session `.then()` onto that tail, so they execute strictly one after
+   * another — never two in parallel on the same Agent/session. This prevents:
+   *   - history/message array races on a shared Agent instance,
+   *   - concurrent saveSession() writes corrupting the session file,
+   *   - two tool-call loops fighting over the same workdir.
+   * Turns on DIFFERENT sessions still run in parallel (independent chains).
+   * Replaces the old `busy` flag + "masih memproses" rejection: messages sent
+   * while a turn runs are now QUEUED and processed in order instead of dropped.
+   */
+  private readonly turnQueues = new Map<string, Promise<void>>();
+  /**
    * AbortController for the currently running turn. Passed into agent.send() so
    * that if a turn fails or needs to be cancelled, any in-flight LLM request
    * can be aborted cleanly instead of hanging. Mirrors the per-turn abort
@@ -382,32 +394,59 @@ class BotRunner {
       const input = await this.withReplyContext(message, baseInput, runtime.session.projectDir);
       if (!input) return;
 
-      if (runtime.busy) {
-        await this.api.sendMessage({
-          chat_id: message.chat.id,
-          text: "Session ini masih memproses pesan sebelumnya.",
-          message_thread_id: message.message_thread_id,
-        });
-        return;
-      }
-
-      runtime.busy = true;
-      try {
-        await this.runTurn(runtime, message, input);
-      } finally {
-        runtime.busy = false;
-      }
+      // Serial execution per session: never run two turns in parallel on the
+      // same Agent/session. Messages sent while a turn is in-flight are queued
+      // and processed in order once the previous turn completes — they are NOT
+      // dropped. Different sessions run independently (separate queue tails).
+      // This replaces the old `busy` flag + "masih memproses" rejection, which
+      // both dropped the queued message AND had a race when two messages
+      // arrived in the same getUpdates batch.
+      this.enqueueTurn(runtime, message, input);
     } catch (err) {
-      // Surface pre-turn errors (session load failure, busy-check reply, image
-      // context, etc.) to the user instead of silently swallowing them. These
-      // never crashed the process (the outer .catch in run() caught them), but
-      // previously left the user with no feedback at all. runTurn has its own
+      // Surface pre-turn errors (session load failure, image context, etc.) to
+      // the user instead of silently swallowing them. runTurn has its own
       // try/catch and never reaches here; this only covers the paths above it.
       console.error(`Telegram handleUpdate error: ${(err as Error).message}`);
       await this.notifyError(message, err).catch(() => {
         // notifyError itself can fail (network down) — best-effort, never throw.
       });
     }
+  }
+
+  /**
+   * Chain a turn onto this session's serial queue. Each call returns
+   * immediately after appending; the actual runTurn executes only after the
+   * previous turn for the same session settles (resolve OR reject). The chain
+   * promise never rejects — runTurn's own try/catch turns failures into chat
+   * messages, and we swallow any residual rejection so a single bad turn can't
+   * poison the whole queue.
+   */
+  private enqueueTurn(
+    runtime: RuntimeSession,
+    message: TelegramMessage,
+    input: string,
+  ): void {
+    const sessionId = sessionIdFor(message);
+    const prev = this.turnQueues.get(sessionId) ?? Promise.resolve();
+    const next = prev
+      .catch(() => {
+        // Swallow the previous turn's rejection so the chain keeps going. A
+        // failure in one turn must not skip or abort subsequent queued turns.
+      })
+      .then(() => this.runTurn(runtime, message, input))
+      .catch((err) => {
+        // Defensive: runTurn is expected to catch its own errors, but if
+        // something escapes, log it so the queue stays healthy.
+        console.error(`Telegram turn error: ${(err as Error).message}`);
+      });
+    this.turnQueues.set(sessionId, next);
+    // Clean up the map entry once the tail settles to avoid unbounded growth
+    // for idle sessions.
+    void next.then(() => {
+      if (this.turnQueues.get(sessionId) === next) {
+        this.turnQueues.delete(sessionId);
+      }
+    });
   }
 
   /** Best-effort error notification to a chat. Swallows its own errors so it
@@ -532,7 +571,7 @@ class BotRunner {
     });
     agent.loadHistory(withSystemPrompt(session.messages, systemPrompt));
 
-    const runtime: RuntimeSession = { agent, session, busy: false };
+    const runtime: RuntimeSession = { agent, session };
     this.sessions.set(id, runtime);
     return runtime;
   }
