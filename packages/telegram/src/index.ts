@@ -21,6 +21,8 @@ import {
   type Session,
   type ToolRegistry,
   type UsageStats,
+  debug,
+  isDebug,
 } from "@siberflow/core";
 import { loadDotEnv } from "./env.js";
 
@@ -480,6 +482,22 @@ class BotRunner {
   ): Promise<string> {
     const replyImage = await this.downloadMessageImage(message.reply_to_message, workdir);
     const directImage = await this.downloadMessageImage(message, workdir);
+    // Diagnostic: log what Telegram actually sent for the reply/quote fields.
+    // Enabled only with SIBERFLOW_DEBUG=true. Helps diagnose group privacy-mode
+    // cases where reply_to_message is present but its text is empty/stripped —
+    // in which case the quote field is the reliable source of the replied text.
+    if (isDebug()) {
+      const replied = message.reply_to_message;
+      const replyHasText = !!replied && !!(replied.text ?? replied.caption ?? "").trim();
+      const quoteText = message.quote?.text?.trim() ?? "";
+      const external = !!message.external_reply;
+      debug(
+        `[reply] reply_to_message=${replied ? "present" : "absent"}`,
+        `replyHasText=${replyHasText}`,
+        `quote=${quoteText ? `"${quoteText.slice(0, 60)}"` : "empty"}`,
+        `external_reply=${external}`,
+      );
+    }
     return withTelegramImageContext(message, input, {
       replyImagePath: replyImage,
       directImagePath: directImage,
@@ -1587,9 +1605,54 @@ function withTelegramImageContext(
   if (!trimmedInput) return "";
 
   const replied = message.reply_to_message;
-  const repliedContext = replied
-    ? describeRepliedMessage(replied, images.replyImagePath)
-    : describeReplyFallback(message);
+  // Build the most informative "what is being replied to / quoted" context.
+  // Priority of text sources:
+  //   1. message.reply_to_message.text/caption (full text, when privacy mode
+  //      lets the bot see the replied message — typical in DMs and when the
+  //      bot is a group admin or privacy mode is off).
+  //   2. message.quote.text (the specific text fragment the user selected when
+  //      replying — Telegram sends this even when reply_to_message is stripped
+  //      or its text is empty, so it's the most reliable text source in groups
+  //      with default privacy mode).
+  // Media metadata is layered on top regardless of the text source.
+  const repliedText = replied ? (replied.text ?? replied.caption ?? "").trim() : "";
+  const quoteText = message.quote?.text?.trim() ?? "";
+  const external = message.external_reply;
+  // external_reply carries only media metadata + a link, not the text; its text
+  // (if any) arrives via message.quote. So treat it as a media descriptor here.
+  const hasMediaReply =
+    !!replied?.photo?.length ||
+    !!replied?.document ||
+    !!replied?.sticker ||
+    !!replied?.animation ||
+    !!replied?.video ||
+    !!replied?.voice ||
+    !!replied?.audio ||
+    !!external?.photo?.length ||
+    !!external?.document ||
+    !!external?.sticker ||
+    !!external?.animation ||
+    !!external?.video ||
+    !!external?.voice ||
+    !!external?.audio;
+
+  const repliedContext = (() => {
+    if (replied && (repliedText || hasMediaReply)) {
+      // Full replied message available — richest context (text + media).
+      return describeRepliedMessage(replied, images.replyImagePath);
+    }
+    // Fall back to whatever fragments Telegram gave us: the selected quote
+    // text, and/or external_reply media metadata.
+    const parts: string[] = [];
+    if (quoteText) {
+      parts.push(`[Quoted text from the replied Telegram message]\n${quoteText}`);
+    }
+    if (external) {
+      parts.push(describeExternalReply(external));
+    }
+    return parts.filter((p) => p.trim()).join("\n\n");
+  })();
+
   const directContext = describeDirectMessageImage(message, images.directImagePath);
   if (!repliedContext && !directContext) return trimmedInput;
 
@@ -1605,6 +1668,7 @@ function withTelegramImageContext(
         "# Telegram replied message context",
         `Sender: ${sender}`,
         ...(replied ? [`Message ID: ${replied.message_id}`] : []),
+        ...(quoteText && !repliedText ? ["(Full replied text unavailable; showing the user-selected quote)"] : []),
         "",
         repliedContext,
       ].join("\n"),
@@ -1626,23 +1690,6 @@ function describeDirectMessageImage(
   }
   return describeRepliedMessage(message, downloadedImagePath)
     .replaceAll("Replied message contains", "Current message contains");
-}
-
-function describeReplyFallback(message: TelegramMessage): string {
-  const parts: string[] = [];
-  const quote = message.quote?.text.trim();
-  if (quote) {
-    parts.push(
-      `[Quoted text from the replied Telegram message]\n${quote}`,
-    );
-  }
-
-  const external = message.external_reply;
-  if (external) {
-    parts.push(describeExternalReply(external));
-  }
-
-  return parts.filter((p) => p.trim()).join("\n\n");
 }
 
 function describeExternalReply(reply: TelegramExternalReplyInfo): string {
