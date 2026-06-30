@@ -60,6 +60,9 @@ function buildToolClause(enabledToolNames: string[]): string {
   if (has("analyze_image")) {
     parts.push("image analysis (analyze_image for describing images, OCR, screenshots, charts/tables, and visual reasoning using the configured multimodal OpenAI-compatible provider)");
   }
+  if (has("bot_script")) {
+    parts.push("bot automation (bot_script for host-provided bot actions such as sending messages/photos/documents to the active bot chat; file manipulation is not included, use file tools when enabled)");
+  }
   if (has("ask_user")) {
     parts.push("user interaction (ask_user to ask the user a question when you need confirmation, a choice, or free-form input)");
   }

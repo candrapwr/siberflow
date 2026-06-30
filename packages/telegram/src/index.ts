@@ -1,6 +1,7 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { extname, join, resolve } from "node:path";
+import { basename, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { marked } from "marked";
 import {
   Agent,
@@ -128,6 +129,11 @@ interface RuntimeSession {
   pendingUsage?: UsageStats;
 }
 
+interface BotScriptState {
+  message: TelegramMessage | null;
+  workdir: string | null;
+}
+
 interface AppConfig {
   telegramToken: string;
   telegramApiBase: string;
@@ -205,7 +211,25 @@ function withTelegramProviderEnv(
   if (env.SIBERFLOW_TELEGRAM_PROVIDER !== undefined) {
     out.SIBERFLOW_PROVIDER = env.SIBERFLOW_TELEGRAM_PROVIDER;
   }
+  const provider = out.SIBERFLOW_PROVIDER ?? "deepseek";
   copyTelegramEnv(out, env, "SIBERFLOW_MODEL", "SIBERFLOW_TELEGRAM_MODEL");
+  copyTelegramEnv(out, env, "SIBERFLOW_BASE_URL", "SIBERFLOW_TELEGRAM_BASE_URL");
+  copyTelegramEnv(
+    out,
+    env,
+    "SIBERFLOW_CUSTOM_PROVIDER_NAME",
+    "SIBERFLOW_TELEGRAM_CUSTOM_PROVIDER_NAME",
+  );
+  copyTelegramEnv(
+    out,
+    env,
+    "SIBERFLOW_CUSTOM_DEFAULT_MODEL",
+    "SIBERFLOW_TELEGRAM_CUSTOM_DEFAULT_MODEL",
+  );
+  const telegramApiKey = env.SIBERFLOW_TELEGRAM_API_KEY;
+  if (telegramApiKey !== undefined) {
+    out[apiKeyEnvVarForTelegramProvider(provider)] = telegramApiKey;
+  }
   return out;
 }
 
@@ -217,6 +241,29 @@ function copyTelegramEnv(
 ): void {
   const value = source[telegramName];
   if (value !== undefined) target[globalName] = value;
+}
+
+function apiKeyEnvVarForTelegramProvider(provider: string): string {
+  switch (provider) {
+    case "gemini":
+      return "GEMINI_API_KEY";
+    case "openai":
+    case "openai-responses":
+      return "OPENAI_API_KEY";
+    case "grok":
+      return "XAI_API_KEY";
+    case "qwen":
+      return "DASHSCOPE_API_KEY";
+    case "zai":
+      return "ZAI_API_KEY";
+    case "claude":
+      return "ANTHROPIC_API_KEY";
+    case "custom":
+      return "CUSTOM_API_KEY";
+    case "deepseek":
+    default:
+      return "DEEPSEEK_API_KEY";
+  }
 }
 
 function resolveTelegramTools(env: NodeJS.ProcessEnv = process.env): Set<string> {
@@ -232,6 +279,7 @@ function resolveTelegramTools(env: NodeJS.ProcessEnv = process.env): Set<string>
 class BotRunner {
   private offset = 0;
   private readonly sessions = new Map<string, RuntimeSession>();
+  private readonly activeTurn = new AsyncLocalStorage<BotScriptState>();
   private botId = 0;
   private botUsername = "";
 
@@ -402,22 +450,26 @@ class BotRunner {
     session.provider = this.config.provider.name;
     session.model = this.config.model;
 
+    const systemPrompt =
+      buildSystemPrompt({
+        interface: "telegram",
+        enabledToolNames: this.config.registry.list().map((t) => t.name),
+      }) + telegramSystemContext(message);
+
     const agent = new Agent({
       provider: this.config.provider,
       registry: this.config.registry,
       model: this.config.model,
       projectDir: workdir,
-      systemPrompt: buildSystemPrompt({
-        interface: "telegram",
-        enabledToolNames: this.config.registry.list().map((t) => t.name),
-      }),
+      systemPrompt,
       contextOptimize: this.config.contextOptimize,
       tasksEnabled: false,
       autoContinue: this.config.autoContinue,
       maxIterations: this.config.maxIterations,
       requestDelayMs: this.config.requestDelayMs,
+      botScript: this.createBotScriptHost(),
     });
-    agent.loadHistory(session.messages);
+    agent.loadHistory(withSystemPrompt(session.messages, systemPrompt));
 
     const runtime: RuntimeSession = { agent, session, busy: false };
     this.sessions.set(id, runtime);
@@ -507,47 +559,51 @@ class BotRunner {
     }
 
     try {
-      const final = await runtime.agent.send(input, {
-        onContent: (delta) => {
-          content += delta;
-          if (!canDraft) return;
-          const now = Date.now();
-          if (now - lastDraftAt < DRAFT_MIN_INTERVAL_MS) return;
-          sendDraft(
-            activeToolStatus
-              ? `${content}${content ? "\n\n" : ""}${activeToolStatus}`
-              : content,
-          );
-        },
-        onAssistantEnd: (_msg, meta) => {
-          if (meta.usage) runtime.pendingUsage = meta.usage;
-        },
-        onToolCallStart: (_index, name) => {
-          const status = toolStatusText(name);
-          if (!canDraft) {
-            void this.api.sendChatAction(message.chat.id, "typing", message.message_thread_id);
-            if (!shownToolStatuses.has(name)) {
-              shownToolStatuses.add(name);
-              groupStatus.promise = this.api
-                .sendMessage({
-                  chat_id: message.chat.id,
-                  text: status,
-                  message_thread_id: message.message_thread_id,
-                })
-                .then((sent) => sent.message_id)
-                .catch((err) => {
-                  console.error(`Telegram status error: ${(err as Error).message}`);
-                  return undefined;
-                });
-            }
-            return;
-          }
-          showToolDraft(status);
-        },
-        onToolResult: () => {
-          clearToolHeartbeat();
-        },
-      });
+      const final = await this.activeTurn.run(
+        { message, workdir: runtime.session.projectDir },
+        () =>
+          runtime.agent.send(input, {
+            onContent: (delta) => {
+              content += delta;
+              if (!canDraft) return;
+              const now = Date.now();
+              if (now - lastDraftAt < DRAFT_MIN_INTERVAL_MS) return;
+              sendDraft(
+                activeToolStatus
+                  ? `${content}${content ? "\n\n" : ""}${activeToolStatus}`
+                  : content,
+              );
+            },
+            onAssistantEnd: (_msg, meta) => {
+              if (meta.usage) runtime.pendingUsage = meta.usage;
+            },
+            onToolCallStart: (_index, name) => {
+              const status = toolStatusText(name);
+              if (!canDraft) {
+                void this.api.sendChatAction(message.chat.id, "typing", message.message_thread_id);
+                if (!shownToolStatuses.has(name)) {
+                  shownToolStatuses.add(name);
+                  groupStatus.promise = this.api
+                    .sendMessage({
+                      chat_id: message.chat.id,
+                      text: status,
+                      message_thread_id: message.message_thread_id,
+                    })
+                    .then((sent) => sent.message_id)
+                    .catch((err) => {
+                      console.error(`Telegram status error: ${(err as Error).message}`);
+                      return undefined;
+                    });
+                }
+                return;
+              }
+              showToolDraft(status);
+            },
+            onToolResult: () => {
+              clearToolHeartbeat();
+            },
+          }),
+      );
 
       clearToolHeartbeat();
       content = final || content || "(empty response)";
@@ -624,6 +680,81 @@ class BotRunner {
       }
     }
   }
+
+  private createBotScriptHost() {
+    const getActiveBotScriptState = (): { message: TelegramMessage; workdir: string } => {
+      const state = this.activeTurn.getStore();
+      if (!state?.message || !state.workdir) {
+        throw new Error("bot_script is only available during an active Telegram turn.");
+      }
+      return { message: state.message, workdir: state.workdir };
+    };
+
+    return {
+      get chat() {
+        const state = getActiveBotScriptState();
+        const message = state.message;
+        return {
+          id: message.chat.id,
+          type: message.chat.type,
+          title: message.chat.title,
+          username: message.chat.username,
+          messageThreadId: message.message_thread_id,
+          currentMessageId: message.message_id,
+        };
+      },
+      sendMessage: async (text: string) => {
+        const state = getActiveBotScriptState();
+        if (typeof text !== "string" || !text.trim()) {
+          throw new Error("sendMessage text must be a non-empty string.");
+        }
+        const sent = await this.api.sendMessage({
+          chat_id: state.message.chat.id,
+          text,
+          message_thread_id: state.message.message_thread_id,
+        });
+        return { message_id: sent.message_id };
+      },
+      sendPhoto: async (path: string, caption?: string) => {
+        const state = getActiveBotScriptState();
+        const file = await resolveTelegramWorkdirPath(state.workdir, path);
+        const sent = await this.api.sendPhoto({
+          chat_id: state.message.chat.id,
+          path: file,
+          caption,
+          message_thread_id: state.message.message_thread_id,
+        });
+        return { message_id: sent.message_id };
+      },
+      sendDocument: async (path: string, caption?: string) => {
+        const state = getActiveBotScriptState();
+        const file = await resolveTelegramWorkdirPath(state.workdir, path);
+        const sent = await this.api.sendDocument({
+          chat_id: state.message.chat.id,
+          path: file,
+          caption,
+          message_thread_id: state.message.message_thread_id,
+        });
+        return { message_id: sent.message_id };
+      },
+    };
+  }
+}
+
+async function resolveTelegramWorkdirPath(
+  workdir: string,
+  path: string,
+): Promise<string> {
+  if (typeof path !== "string" || !path.trim()) {
+    throw new Error("Path must be a non-empty string.");
+  }
+  const root = await realpath(workdir);
+  const target = await realpath(isAbsolute(path) ? path : resolve(root, path));
+  const rel = relative(root, target);
+  if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) {
+    return target;
+  }
+  throw new Error("Path escapes the Telegram session workdir.");
 }
 
 class TelegramApi {
@@ -680,6 +811,40 @@ class TelegramApi {
     });
   }
 
+  async sendPhoto(args: {
+    chat_id: number;
+    path: string;
+    caption?: string;
+    message_thread_id?: number;
+  }): Promise<TelegramMessage> {
+    const data = await readFile(args.path);
+    const form = new FormData();
+    form.set("chat_id", String(args.chat_id));
+    if (args.message_thread_id) {
+      form.set("message_thread_id", String(args.message_thread_id));
+    }
+    if (args.caption) form.set("caption", args.caption);
+    form.set("photo", new Blob([new Uint8Array(data)]), basename(args.path));
+    return this.callMultipart("sendPhoto", form);
+  }
+
+  async sendDocument(args: {
+    chat_id: number;
+    path: string;
+    caption?: string;
+    message_thread_id?: number;
+  }): Promise<TelegramMessage> {
+    const data = await readFile(args.path);
+    const form = new FormData();
+    form.set("chat_id", String(args.chat_id));
+    if (args.message_thread_id) {
+      form.set("message_thread_id", String(args.message_thread_id));
+    }
+    if (args.caption) form.set("caption", args.caption);
+    form.set("document", new Blob([new Uint8Array(data)]), basename(args.path));
+    return this.callMultipart("sendDocument", form);
+  }
+
   async editRichMessage(args: {
     chat_id: number;
     message_id: number;
@@ -730,6 +895,19 @@ class TelegramApi {
     }
     return json.result;
   }
+
+  private async callMultipart<T>(method: string, body: FormData): Promise<T> {
+    const url = `${this.baseUrl.replace(/\/$/, "")}/bot${this.token}/${method}`;
+    const res = await fetch(url, {
+      method: "POST",
+      body,
+    });
+    const json = (await res.json()) as TelegramResponse<T>;
+    if (!res.ok || !json.ok || json.result === undefined) {
+      throw new Error(json.description ?? `${method} failed with HTTP ${res.status}`);
+    }
+    return json.result;
+  }
 }
 
 function sessionIdFor(message: TelegramMessage): string {
@@ -750,10 +928,52 @@ function sessionNameFor(chat: TelegramChat): string {
   return chat.title ?? `${chat.type} ${chat.id}`;
 }
 
+function telegramSystemContext(message: TelegramMessage): string {
+  const chat = message.chat;
+  const lines = [
+    "",
+    "",
+    "# Telegram runtime context",
+    `Chat type: ${chat.type}`,
+    `Chat ID: ${chat.id}`,
+  ];
+  if (chat.title) lines.push(`Chat title: ${chat.title}`);
+  if (chat.username) lines.push(`Chat username: @${chat.username}`);
+  if (message.message_thread_id) {
+    lines.push(`Message thread ID: ${message.message_thread_id}`);
+  }
+  if (message.from) {
+    lines.push(
+      `Current user ID: ${message.from.id}`,
+      `Current user name: ${message.from.username ? `@${message.from.username}` : message.from.first_name}`,
+    );
+  }
+  lines.push(
+    "When using bot_script, operate only in this current Telegram chat/thread and current session workdir.",
+    "Do not invent Telegram chat IDs; use bot.chat for the active chat metadata.",
+  );
+  return lines.join("\n");
+}
+
+function withSystemPrompt(
+  messages: Session["messages"],
+  systemPrompt: string,
+): Session["messages"] {
+  if (messages.length === 0) return [];
+  const next = [...messages];
+  if (next[0]?.role === "system") {
+    next[0] = { ...next[0], content: systemPrompt };
+    return next;
+  }
+  return [{ role: "system", content: systemPrompt }, ...next];
+}
+
 function toolStatusText(name: string): string {
   switch (name) {
     case "run_browser":
       return "⏳ Mencari info...";
+    case "bot_script":
+      return "⏳ Menjalankan aksi Telegram...";
     default:
       return "⏳ Memproses...";
   }
