@@ -137,7 +137,15 @@ SIBERFLOW_TELEGRAM_MODEL=deepseek-v4-flash
 SIBERFLOW_TELEGRAM_BASE_URL=
 SIBERFLOW_TELEGRAM_API_KEY=
 SIBERFLOW_TELEGRAM_TOOLS=run_browser,analyze_image,bot_script
+# Force ONE session per chat (ignore forum topics / threads). Default: off —
+# real forum topics get their own session. Set "true" if your group is NOT a
+# forum but you still see sessions splitting by thread id.
+SIBERFLOW_TELEGRAM_ONE_SESSION_PER_CHAT=false
 ```
+
+#### Session isolation per topic (forum groups)
+
+For a group with **Topics enabled** (a forum), each topic gets its own session and workspace directory so the model's context does not mix between topics. Topic identity is detected via the message's `is_topic_message` flag — a *real* forum topic only. In non-forum groups, `message_thread_id` may still appear (on replies, or as a leftover if the group used to be a forum) but it does **not** spawn a separate session. If your non-forum group is still splitting sessions, set `SIBERFLOW_TELEGRAM_ONE_SESSION_PER_CHAT=true`.
 
 For an OpenAI-compatible custom provider used only by Telegram:
 
