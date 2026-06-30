@@ -499,11 +499,26 @@ class BotRunner {
       const replyHasText = !!replied && !!(replied.text ?? replied.caption ?? "").trim();
       const quoteText = message.quote?.text?.trim() ?? "";
       const external = !!message.external_reply;
+      const replyMedia = replied
+        ? [
+            replied.photo?.length ? `photo(${replied.photo.length})` : "",
+            replied.document ? `doc(${replied.document.mime_type ?? "?"})` : "",
+            replied.sticker ? "sticker" : "",
+            replied.animation ? "animation" : "",
+            replied.video ? "video" : "",
+            replied.voice ? "voice" : "",
+            replied.audio ? "audio" : "",
+          ]
+            .filter(Boolean)
+            .join(",") || "none"
+        : "n/a";
       debug(
         `[reply] reply_to_message=${replied ? "present" : "absent"}`,
         `replyHasText=${replyHasText}`,
+        `replyMedia=${replyMedia}`,
         `quote=${quoteText ? `"${quoteText.slice(0, 60)}"` : "empty"}`,
         `external_reply=${external}`,
+        `downloadedReplyImage=${replyImage ?? "none"}`,
       );
     }
     return withTelegramImageContext(message, input, {
