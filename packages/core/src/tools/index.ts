@@ -10,6 +10,7 @@ import { pdfTools } from "./pdf/index.js";
 import { browserTools } from "./browser/index.js";
 import { interactionTools } from "./interaction/index.js";
 import { imageTools } from "./image/index.js";
+import { botTools } from "./bot/index.js";
 
 export * from "./base.js";
 export { ToolRegistry } from "./registry.js";
@@ -24,6 +25,7 @@ export { pdfTools } from "./pdf/index.js";
 export { browserTools } from "./browser/index.js";
 export { interactionTools } from "./interaction/index.js";
 export { imageTools } from "./image/index.js";
+export { botTools } from "./bot/index.js";
 
 export interface RegistryOptions {
   /**
@@ -78,8 +80,8 @@ export function createDefaultRegistry(opts: RegistryOptions = {}): ToolRegistry 
   for (const tool of fsCandidates) {
     if (hasFs && enabled.has(tool.name)) registry.register(tool);
   }
-  // db / ssh / browser tools don't need a workdir — register by user preference only.
-  for (const tool of [...dbTools, ...sshTools, ...browserTools]) {
+  // db / ssh / browser / bot tools don't need file helpers — register by user preference only.
+  for (const tool of [...dbTools, ...sshTools, ...browserTools, ...botTools]) {
     if (enabled.has(tool.name)) registry.register(tool);
   }
   // task_update is always registered — it's a built-in tool (default true,

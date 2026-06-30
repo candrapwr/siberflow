@@ -114,7 +114,7 @@ npm unlink -w @siberflow/cli
 
 The Telegram host runs Siberflow through Bot API long polling. Each private chat, group, supergroup, and forum thread gets its own persistent Siberflow session and its own workspace directory under `~/.siberflow/telegram-workdirs` by default.
 
-Telegram provider/model can be overridden with `SIBERFLOW_TELEGRAM_PROVIDER` and `SIBERFLOW_TELEGRAM_MODEL`. API keys are still read from the provider's global key env. Telegram tools are controlled through `SIBERFLOW_TELEGRAM_TOOLS`; the default is `run_browser`.
+Telegram provider/model can be overridden with `SIBERFLOW_TELEGRAM_PROVIDER` and `SIBERFLOW_TELEGRAM_MODEL`. API keys are read from the provider's global key env by default, or from `SIBERFLOW_TELEGRAM_API_KEY` when you want a bot-specific key. Telegram tools are controlled through `SIBERFLOW_TELEGRAM_TOOLS`; the default is `run_browser`. The Telegram system prompt includes the active chat type, chat ID, optional thread ID, and current user metadata so tools can act in the correct chat context.
 
 ```bash
 npm install
@@ -134,13 +134,27 @@ TELEGRAM_API_BASE_URL=https://api.telegram.org
 SIBERFLOW_TELEGRAM_WORKDIR_ROOT=~/.siberflow/telegram-workdirs
 SIBERFLOW_TELEGRAM_PROVIDER=deepseek
 SIBERFLOW_TELEGRAM_MODEL=deepseek-v4-flash
-SIBERFLOW_TELEGRAM_TOOLS=run_browser
+SIBERFLOW_TELEGRAM_BASE_URL=
+SIBERFLOW_TELEGRAM_API_KEY=
+SIBERFLOW_TELEGRAM_TOOLS=run_browser,analyze_image,bot_script
 ```
+
+For an OpenAI-compatible custom provider used only by Telegram:
+
+```bash
+SIBERFLOW_TELEGRAM_PROVIDER=custom
+SIBERFLOW_TELEGRAM_BASE_URL=https://api.example.com/v1
+SIBERFLOW_TELEGRAM_CUSTOM_PROVIDER_NAME=my-provider
+SIBERFLOW_TELEGRAM_CUSTOM_DEFAULT_MODEL=model-name
+SIBERFLOW_TELEGRAM_API_KEY=...
+```
+
+`SIBERFLOW_TELEGRAM_BASE_URL` is the model provider API root. It is different from `TELEGRAM_API_BASE_URL`, which points to Telegram's Bot API.
 
 Streaming behavior:
 
 - Private chats use Telegram Bot API `sendRichMessageDraft` while the model streams, then persist the final response with `sendRichMessage`.
-- Groups and supergroups receive the final `sendRichMessage` only, because Telegram rich message drafts are scoped to private chats.
+- Groups and supergroups show a short tool status message when a tool runs, then replace that status with the final `sendRichMessage` result.
 - The bot does not use `editMessageText` or other message-edit APIs for streaming.
 
 Commands:
@@ -348,6 +362,16 @@ Enable it through settings or env, for example:
 SIBERFLOW_TELEGRAM_TOOLS=run_browser,analyze_image
 ```
 
+## Bot Script Tool (`bot_script`)
+
+`bot_script` is an opt-in core tool backed by the active bot host. In Telegram it runs a small JavaScript body with a `bot` helper for the active chat/thread: `bot.chat`, `bot.sendMessage`, `bot.sendPhoto`, and `bot.sendDocument`. It does not include file manipulation helpers. Enable `read_file`, `write_file`, `edit_file`, `copy_file`, or `list_dir` separately when the bot should work with files in its session workdir.
+
+Enable it explicitly:
+
+```bash
+SIBERFLOW_TELEGRAM_TOOLS=run_browser,analyze_image,bot_script
+```
+
 ## Per-Tool Toggle
 
 Default enabled tools are only:
@@ -356,7 +380,7 @@ Default enabled tools are only:
 read_file,write_file,edit_file,copy_file,list_dir
 ```
 
-Other tools such as `exec`, `db_query`, `ssh_exec`, `sftp`, `excel_script`, `docx_script`, `pdf_script`, `run_browser`, and `analyze_image` are opt-in. `task_update` and `ask_user` are core UX tools and are always available.
+Other tools such as `exec`, `db_query`, `ssh_exec`, `sftp`, `excel_script`, `docx_script`, `pdf_script`, `run_browser`, `analyze_image`, and `bot_script` are opt-in. `task_update` and `ask_user` are core UX tools and are always available.
 
 | Interface | How to configure |
 |---|---|

@@ -49,6 +49,8 @@ export interface AgentOptions {
    * back to a no-op message.
    */
   askUser?: ToolContext["askUser"];
+  /** Optional bot host injected for bot_script. */
+  botScript?: ToolContext["botScript"];
   /** Optional context optimization (default: disabled). */
   contextOptimize?: ContextOptimizeConfig;
   /** Enable task checklist injection (the task_update tool must also be registered). */
@@ -103,6 +105,7 @@ export class Agent {
       ...(this.tasksEnabled ? { taskStore: this.taskStore } : {}),
       ...(opts.uploadDir ? { uploadDir: opts.uploadDir } : {}),
       ...(opts.askUser ? { askUser: opts.askUser } : {}),
+      ...(opts.botScript ? { botScript: opts.botScript } : {}),
     };
 
     if (opts.systemPrompt) {

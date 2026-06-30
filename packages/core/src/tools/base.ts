@@ -24,6 +24,13 @@ export interface AskUserResponse {
   answer: string;
 }
 
+export interface BotScriptHost {
+  readonly chat: Record<string, unknown>;
+  sendMessage(text: string): Promise<unknown>;
+  sendPhoto(path: string, caption?: string): Promise<unknown>;
+  sendDocument(path: string, caption?: string): Promise<unknown>;
+}
+
 export interface ToolContext {
   /** Sandbox root — all file operations must resolve inside this directory. */
   projectDir: string;
@@ -44,6 +51,12 @@ export interface ToolContext {
    * back gracefully.
    */
   askUser?: (req: AskUserRequest) => Promise<AskUserResponse>;
+  /**
+   * Host-specific bot automation surface. Currently injected by the Telegram
+   * host for `bot_script`; absent in CLI/Desktop/VS Code unless they provide a
+   * bot integration.
+   */
+  botScript?: BotScriptHost;
 }
 
 export interface Tool {
