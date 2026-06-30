@@ -102,12 +102,11 @@ export class Agent {
   /**
    * Consecutive run_browser call counter. Tracks how many run_browser calls
    * have happened IN A ROW without any other tool in between. Reset to 0 when
-   * a non-run_browser tool is called. When it exceeds
-   * MAX_CONSECUTIVE_RUN_BROWSER, further run_browser calls are short-circuited
-   * with an informational tool result so the model breaks the browsing loop.
-   * Guards against the agent getting stuck scraping/browsing endlessly.
+   * a non-run_browser tool is called, AND at the start of every turn (send()).
+   * When it exceeds MAX_CONSECUTIVE_RUN_BROWSER, further run_browser calls are
+   * short-circuited with an informational tool result so the model breaks the
+   * browsing loop. Guards against the agent getting stuck scraping endlessly.
    */
-  private lastToolName: string | null = null;
   private consecutiveRunBrowserCount = 0;
 
   constructor(opts: AgentOptions) {
@@ -187,6 +186,10 @@ export class Agent {
   async send(userInput: string, events: AgentEvents = {}): Promise<string> {
     const baseMessageCount = this.messages.length;
     const baseTasks = this.taskStore.get().map((t) => ({ ...t }));
+    // Reset the per-turn consecutive run_browser counter so a new user turn
+    // starts fresh (the Agent instance is reused across turns in long-lived
+    // hosts like Telegram, so without this the streak would carry over).
+    this.consecutiveRunBrowserCount = 0;
     this.messages.push({ role: "user", content: userInput });
 
     try {
@@ -281,17 +284,19 @@ export class Agent {
           const call = assistant.toolCalls[idx]!;
 
           // Track consecutive run_browser calls to guard against infinite
-          // browsing loops. Only run_browser is bounded; any other tool call
-          // resets the streak. When the streak exceeds the cap, we do NOT
-          // execute the tool — we return an informational string so the model
-          // sees the limit and (usually) stops browsing to answer.
+          // browsing loops. "Consecutive" is defined across the whole turn:
+          // every run_browser call increments the streak; any OTHER tool call
+          // in the same message (or a later one) resets it to 0. When the
+          // streak exceeds the cap, we do NOT execute the tool — we return an
+          // informational string so the model sees the limit and (usually)
+          // stops browsing to answer.
+          //
+          // Note: streak state lives on the Agent instance but is reset at the
+          // start of every turn (send()), so it never carries over between
+          // independent turns even though the Agent is reused.
           let result: string;
           if (call.name === "run_browser") {
-            if (this.lastToolName === "run_browser") {
-              this.consecutiveRunBrowserCount++;
-            } else {
-              this.consecutiveRunBrowserCount = 1;
-            }
+            this.consecutiveRunBrowserCount++;
             if (this.consecutiveRunBrowserCount > MAX_CONSECUTIVE_RUN_BROWSER) {
               debug(
                 `⚠ run_browser consecutive limit hit (${this.consecutiveRunBrowserCount}/${MAX_CONSECUTIVE_RUN_BROWSER}) — short-circuiting with limit message`,
@@ -305,7 +310,7 @@ export class Agent {
               );
             }
           } else {
-            // Any non-run_browser tool resets the consecutive streak.
+            // Any non-run_browser tool call resets the consecutive streak.
             this.consecutiveRunBrowserCount = 0;
             result = await this.registry.execute(
               call.name,
@@ -313,7 +318,6 @@ export class Agent {
               this.ctx,
             );
           }
-          this.lastToolName = call.name;
 
           events.onToolResult?.(idx, call.name, result);
           if (this.tasksEnabled && call.name === "task_update") {
