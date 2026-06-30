@@ -320,6 +320,12 @@ class BotRunner {
     if (message.chat.type === "channel") return;
     const messageText = message.text ?? message.caption ?? "";
     if (!messageText) return;
+    if (
+      message.chat.type !== "private" &&
+      !isAddressedToBot(messageText, this.botUsername)
+    ) {
+      return;
+    }
 
     if (isCommand(messageText, "start")) {
       await this.clearSessionFiles(message);
@@ -365,10 +371,6 @@ class BotRunner {
 
     const mentionInput = stripBotMention(text, this.botUsername);
     if (mentionInput !== null) return mentionInput;
-
-    if (message.reply_to_message) {
-      return text.trim();
-    }
 
     return "";
   }
@@ -1178,6 +1180,12 @@ function stripBotMention(text: string, botUsername: string): string | null {
   const pattern = new RegExp(`@${escapeRegExp(username)}\\b`, "i");
   if (!pattern.test(text)) return null;
   return text.replace(pattern, "").trim();
+}
+
+function isAddressedToBot(text: string, botUsername: string): boolean {
+  const username = botUsername.trim();
+  if (!username) return false;
+  return new RegExp(`@${escapeRegExp(username)}\\b`, "i").test(text);
 }
 
 function isCommand(text: string, command: string): boolean {
