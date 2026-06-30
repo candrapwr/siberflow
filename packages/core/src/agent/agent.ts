@@ -18,8 +18,17 @@ import type {
 } from "./types.js";
 
 const MAX_AUTO_CONTINUES = 4;
+/** Maximum number of consecutive run_browser calls allowed in a single turn
+ * before the agent short-circuits further calls with a limit message. */
+const MAX_CONSECUTIVE_RUN_BROWSER = 8;
 const CONTINUE_NUDGE =
   "Your previous message was cut off by the output length limit. Continue from exactly where you stopped — do not repeat anything you already wrote, and do not add a preamble.";
+/** Message returned as a tool result when run_browser exceeds the consecutive
+ * call limit, telling the model to stop browsing and answer. */
+const RUN_BROWSER_LIMIT_MESSAGE =
+  `run_browser consecutive limit reached: you have called run_browser ${MAX_CONSECUTIVE_RUN_BROWSER} times in a row ` +
+  "without using any other tool in between. Stop the browsing loop now and give a final answer based on the information you have already gathered. " +
+  "If you truly need more browsing, mix in another tool call (e.g. read_file, task_update) between run_browser calls to reset the consecutive counter.";
 
 export interface AgentOptions {
   provider: Provider;
@@ -90,6 +99,16 @@ export class Agent {
   private readonly autoContinue: boolean;
   private readonly taskStore = new TaskStore();
   private readonly messages: Message[] = [];
+  /**
+   * Consecutive run_browser call counter. Tracks how many run_browser calls
+   * have happened IN A ROW without any other tool in between. Reset to 0 when
+   * a non-run_browser tool is called. When it exceeds
+   * MAX_CONSECUTIVE_RUN_BROWSER, further run_browser calls are short-circuited
+   * with an informational tool result so the model breaks the browsing loop.
+   * Guards against the agent getting stuck scraping/browsing endlessly.
+   */
+  private lastToolName: string | null = null;
+  private consecutiveRunBrowserCount = 0;
 
   constructor(opts: AgentOptions) {
     this.provider = opts.provider;
@@ -260,11 +279,42 @@ export class Agent {
         for (let idx = 0; idx < assistant.toolCalls.length; idx++) {
           throwIfAborted(events.signal);
           const call = assistant.toolCalls[idx]!;
-          const result = await this.registry.execute(
-            call.name,
-            call.arguments,
-            this.ctx,
-          );
+
+          // Track consecutive run_browser calls to guard against infinite
+          // browsing loops. Only run_browser is bounded; any other tool call
+          // resets the streak. When the streak exceeds the cap, we do NOT
+          // execute the tool — we return an informational string so the model
+          // sees the limit and (usually) stops browsing to answer.
+          let result: string;
+          if (call.name === "run_browser") {
+            if (this.lastToolName === "run_browser") {
+              this.consecutiveRunBrowserCount++;
+            } else {
+              this.consecutiveRunBrowserCount = 1;
+            }
+            if (this.consecutiveRunBrowserCount > MAX_CONSECUTIVE_RUN_BROWSER) {
+              debug(
+                `⚠ run_browser consecutive limit hit (${this.consecutiveRunBrowserCount}/${MAX_CONSECUTIVE_RUN_BROWSER}) — short-circuiting with limit message`,
+              );
+              result = RUN_BROWSER_LIMIT_MESSAGE;
+            } else {
+              result = await this.registry.execute(
+                call.name,
+                call.arguments,
+                this.ctx,
+              );
+            }
+          } else {
+            // Any non-run_browser tool resets the consecutive streak.
+            this.consecutiveRunBrowserCount = 0;
+            result = await this.registry.execute(
+              call.name,
+              call.arguments,
+              this.ctx,
+            );
+          }
+          this.lastToolName = call.name;
+
           events.onToolResult?.(idx, call.name, result);
           if (this.tasksEnabled && call.name === "task_update") {
             events.onTasksUpdated?.(this.taskStore.get());

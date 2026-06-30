@@ -409,6 +409,18 @@ class BotRunner {
       const baseInput = this.normalizeIncomingInput(message);
       if (!baseInput) return;
 
+      // Acknowledge the message IMMEDIATELY with a typing indicator, before
+      // any session load, image download, or queue wait. This closes the gap
+      // where the chat showed no feedback while getRuntime() / withReplyContext()
+      // ran, or while the turn waited behind another queued turn in the serial
+      // per-session queue. Fire-and-forget: a failure here must never block
+      // message handling.
+      void this.api
+        .sendChatAction(message.chat.id, "typing", message.message_thread_id)
+        .catch((err) =>
+          console.error(`Telegram typing error: ${(err as Error).message}`),
+        );
+
       const runtime = await this.getRuntime(message);
       const input = await this.withReplyContext(message, baseInput, runtime.session.projectDir);
       if (!input) return;
@@ -466,6 +478,27 @@ class BotRunner {
         this.turnQueues.delete(sessionId);
       }
     });
+
+    // Keep the typing indicator alive WHILE this turn waits behind the previous
+    // one in the serial queue. Telegram's typing expires after ~5s; without
+    // refresh the chat looks frozen during the queue wait (which can be long
+    // if the prior turn is doing a slow tool call). This heartbeat runs until
+    // our runTurn starts (runTurn sets up its own heartbeat) — whichever ends
+    // first stops the queue-wait heartbeat. Fire-and-forget, never throws.
+    if (prev !== Promise.resolve()) {
+      const typingTimer = setInterval(() => {
+        void this.api
+          .sendChatAction(message.chat.id, "typing", message.message_thread_id)
+          .catch(() => {
+            /* best-effort: network blips during queue wait are non-fatal */
+          });
+      }, GROUP_TYPING_INTERVAL_MS);
+      // Stop the queue-wait heartbeat once the turn actually begins. We detect
+      // "began" by racing prev against a microtask after runTurn kicks off:
+      // prev resolves right before runTurn is called, so we clear on the same
+      // tick the turn starts running.
+      void prev.finally(() => clearInterval(typingTimer));
+    }
   }
 
   /** Best-effort error notification to a chat. Swallows its own errors so it
@@ -695,10 +728,15 @@ class BotRunner {
     const draftId = canDraft ? newTelegramRandomId() : 0;
     let activeToolStatus = "";
     let toolHeartbeat: ReturnType<typeof setInterval> | null = null;
-    let groupTyping: ReturnType<typeof setInterval> | null = null;
+    let typingHeartbeat: ReturnType<typeof setInterval> | null = null;
+    // Per-turn tool-call step counter. Incremented on every onToolCallStart,
+    // so it is GLOBAL across the whole turn (spanning multiple LLM iterations
+    // and multiple tool calls). Shown as "Step N — ⏳ ..." so the user can see
+    // the agent making progress (e.g. Step 1, Step 2, Step 3) instead of one
+    // opaque "⏳ Memproses..." for the entire turn.
+    let toolStep = 0;
     const groupStatus: {
       promise?: Promise<number | undefined>;
-      lastText?: string;
     } = {};
 
     const sendDraft = (text: string): void => {
@@ -720,10 +758,10 @@ class BotRunner {
       activeToolStatus = "";
     };
 
-    const clearGroupTyping = (): void => {
-      if (groupTyping) {
-        clearInterval(groupTyping);
-        groupTyping = null;
+    const clearTypingHeartbeat = (): void => {
+      if (typingHeartbeat) {
+        clearInterval(typingHeartbeat);
+        typingHeartbeat = null;
       }
     };
 
@@ -740,12 +778,13 @@ class BotRunner {
       }
     };
 
-    /** Fire-and-forget typing indicator refresh for group/supergroup chats.
-     * Telegram's "typing..." indicator expires after ~5s; without periodic
-     * refresh the chat looks frozen (no feedback) while the assistant is
-     * streaming or a long tool runs. All calls are swallowed on failure so a
+    /** Fire-and-forget typing indicator refresh. Telegram's "typing..."
+     * indicator expires after ~5s; without periodic refresh the chat looks
+     * frozen (no feedback) while the assistant is streaming or a long tool
+     * runs. Applies to BOTH private and group chats — private chats previously
+     * had no typing indicator at all. All calls are swallowed on failure so a
      * network blip can never become an unhandled rejection. */
-    const pokeGroupTyping = (): void => {
+    const pokeTyping = (): void => {
       void this.api
         .sendChatAction(message.chat.id, "typing", message.message_thread_id)
         .catch((err) =>
@@ -755,9 +794,12 @@ class BotRunner {
 
     const showGroupToolStatus = (status: string): void => {
       if (canDraft) return;
-      pokeGroupTyping();
-      if (groupStatus.lastText === status) return;
-      groupStatus.lastText = status;
+      pokeTyping();
+      // NOTE: no dedup. Previously we skipped the edit when the new status text
+      // equaled the previous one — but with a step counter ("Step 1 — ...",
+      // "Step 2 — ...") two consecutive calls always differ in the number, and
+      // even when the tool name repeats (two run_browser calls) the user needs
+      // to see the step advance. So always send/edit.
 
       if (!groupStatus.promise) {
         groupStatus.promise = this.api
@@ -789,12 +831,12 @@ class BotRunner {
       });
     };
 
-    if (!canDraft) {
-      // Initial typing indicator + recurring refresh for the whole turn. This
-      // keeps the group chat from looking "stuck" while the assistant works.
-      pokeGroupTyping();
-      groupTyping = setInterval(pokeGroupTyping, GROUP_TYPING_INTERVAL_MS);
-    }
+    // Typing indicator for ALL chat types (private + group + supergroup).
+    // Refreshed every ~4s because Telegram's "typing..." expires after ~5s.
+    // Previously only groups had this — private chats had no feedback at all
+    // while the model was thinking.
+    pokeTyping();
+    typingHeartbeat = setInterval(pokeTyping, GROUP_TYPING_INTERVAL_MS);
 
     // Per-turn abort controller so an in-flight LLM request can be cancelled
     // cleanly if this turn throws. Mirrors Desktop/VSCode hosts.
@@ -822,7 +864,8 @@ class BotRunner {
               if (meta.usage) runtime.pendingUsage = meta.usage;
             },
             onToolCallStart: (_index, name) => {
-              const status = toolStatusText(name);
+              toolStep++;
+              const status = `Step ${toolStep} — ${toolStatusText(name)}`;
               if (!canDraft) {
                 showGroupToolStatus(status);
                 return;
@@ -836,7 +879,7 @@ class BotRunner {
       );
 
       clearToolHeartbeat();
-      clearGroupTyping();
+      clearTypingHeartbeat();
       content = final || content || "(empty response)";
       if (canDraft && !draftSent) {
         await this.api.sendMessageDraft(message.chat.id, draftId, content);
@@ -848,7 +891,7 @@ class BotRunner {
       await this.persist(runtime);
     } catch (err) {
       clearToolHeartbeat();
-      clearGroupTyping();
+      clearTypingHeartbeat();
       // Cancel any in-flight LLM request from this turn so it doesn't linger.
       abort.abort();
       const text = `Error: ${(err as Error).message}`;
