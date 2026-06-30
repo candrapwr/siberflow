@@ -22,6 +22,14 @@ interface ChatCompletionResponse {
 
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+/**
+ * Hard cap on a single multimodal request. Without this, a slow or stuck
+ * provider can hang the tool (and therefore the whole agent turn) until the OS
+ * TCP timeout, which can be minutes. On timeout we return a tool-result error
+ * string (the project convention for tool failures) so the model can react,
+ * rather than throwing and aborting the turn.
+ */
+const REQUEST_TIMEOUT_MS = 60_000;
 
 export const analyzeImageTool: Tool = {
   name: "analyze_image",
@@ -64,31 +72,52 @@ export const analyzeImageTool: Tool = {
 
     const imageUrl = await resolveImageUrl(args.image, ctx);
     const baseUrl = (process.env.SIBERFLOW_MULTIMODAL_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/$/, "");
-    const res = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${apiKey}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: args.prompt },
-              {
-                type: "image_url",
-                image_url: {
-                  url: imageUrl,
-                  detail: args.detail ?? "auto",
+
+    // AbortController gives the fetch a hard timeout. Without it, a hung
+    // multimodal provider would block the turn indefinitely.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await fetch(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: args.prompt },
+                {
+                  type: "image_url",
+                  image_url: {
+                    url: imageUrl,
+                    detail: args.detail ?? "auto",
+                  },
                 },
-              },
-            ],
-          },
-        ],
-      }),
-    });
+              ],
+            },
+          ],
+        }),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      // Return a tool-result error string (project convention) so the model
+      // can recover, instead of throwing and aborting the whole turn. Covers
+      // both our timeout abort and genuine network failures.
+      const aborted = controller.signal.aborted;
+      const reason =
+        aborted
+          ? `image analysis timed out after ${REQUEST_TIMEOUT_MS / 1000}s`
+          : (err as Error).message;
+      return `Error: ${reason}`;
+    } finally {
+      clearTimeout(timer);
+    }
 
     const json = (await res.json().catch(() => ({}))) as ChatCompletionResponse;
     if (!res.ok) {

@@ -16,6 +16,7 @@ import {
   saveOptimizedView,
   saveSession,
   SESSION_FORMAT_VERSION,
+  type BotScriptHost,
   type Provider,
   type Session,
   type ToolRegistry,
@@ -150,10 +151,36 @@ interface AppConfig {
 const DRAFT_MIN_INTERVAL_MS = 900;
 const FINAL_MAX_CHARS = 3900;
 
+/** Hard timeout for a single Telegram API fetch, so a stalled network
+ * connection can never hang a turn indefinitely. Telegram's long-poll getUpdates
+ * uses its own longer timeout via getUpdates(). */
+const API_TIMEOUT_MS = 30_000;
+/** Max retry attempts for transient network errors (ETIMEDOUT, fetch failed,
+ * HTTP 5xx, 429). Delays: 1s, 2s, 4s. */
+const API_MAX_RETRIES = 3;
+/** Group/supergroup typing indicator lasts ~5s; refresh every 4s to keep it
+ * visible while the assistant streams content (which otherwise has no UI
+ * feedback in non-private chats). */
+const GROUP_TYPING_INTERVAL_MS = 4_000;
+
 async function main(): Promise<void> {
   await loadDotEnv();
   const config = loadAppConfig();
   await mkdir(config.workdirRoot, { recursive: true });
+
+  // Global backstop: a single rejected promise (e.g. a fire-and-forget Telegram
+  // API call failing when the network to api.telegram.org drops) must NEVER kill
+  // the whole bot process. Default Node behavior is to crash on unhandled
+  // rejections; we override that here so the bot stays alive and the per-update
+  // try/catch + retry logic handles the recovery.
+  process.on("unhandledRejection", (reason) => {
+    console.error("Unhandled promise rejection (suppressed, bot continues):");
+    console.error(reason instanceof Error ? reason.stack ?? reason.message : reason);
+  });
+  process.on("uncaughtException", (err) => {
+    console.error("Uncaught exception (suppressed, bot continues):");
+    console.error(err instanceof Error ? err.stack ?? err.message : err);
+  });
 
   const api = new TelegramApi(config.telegramToken, config.telegramApiBase);
   const runner = new BotRunner(api, config);
@@ -282,6 +309,15 @@ class BotRunner {
   private readonly activeTurn = new AsyncLocalStorage<BotScriptState>();
   private botId = 0;
   private botUsername = "";
+  /**
+   * AbortController for the currently running turn. Passed into agent.send() so
+   * that if a turn fails or needs to be cancelled, any in-flight LLM request
+   * can be aborted cleanly instead of hanging. Mirrors the per-turn abort
+   * pattern used by the Desktop (agent-host.ts) and VS Code (chat-panel.ts)
+   * hosts. Telegram has no user "Stop" button, so abort is currently only
+   * triggered implicitly on turn teardown; the field is here for resilience.
+   */
+  private turnAbort: AbortController | null = null;
 
   constructor(
     private readonly api: TelegramApi,
@@ -327,39 +363,62 @@ class BotRunner {
       return;
     }
 
-    if (isCommand(messageText, "start")) {
-      await this.clearSessionFiles(message);
-      await this.sendStartMessage(message);
-      return;
-    }
-
-    if (isCommand(messageText, "reset")) {
-      await this.resetSession(message);
-      return;
-    }
-
-    const baseInput = this.normalizeIncomingInput(message);
-    if (!baseInput) return;
-
-    const runtime = await this.getRuntime(message);
-    const input = await this.withReplyContext(message, baseInput, runtime.session.projectDir);
-    if (!input) return;
-
-    if (runtime.busy) {
-      await this.api.sendMessage({
-        chat_id: message.chat.id,
-        text: "Session ini masih memproses pesan sebelumnya.",
-        message_thread_id: message.message_thread_id,
-      });
-      return;
-    }
-
-    runtime.busy = true;
     try {
-      await this.runTurn(runtime, message, input);
-    } finally {
-      runtime.busy = false;
+      if (isCommand(messageText, "start")) {
+        await this.clearSessionFiles(message);
+        await this.sendStartMessage(message);
+        return;
+      }
+
+      if (isCommand(messageText, "reset")) {
+        await this.resetSession(message);
+        return;
+      }
+
+      const baseInput = this.normalizeIncomingInput(message);
+      if (!baseInput) return;
+
+      const runtime = await this.getRuntime(message);
+      const input = await this.withReplyContext(message, baseInput, runtime.session.projectDir);
+      if (!input) return;
+
+      if (runtime.busy) {
+        await this.api.sendMessage({
+          chat_id: message.chat.id,
+          text: "Session ini masih memproses pesan sebelumnya.",
+          message_thread_id: message.message_thread_id,
+        });
+        return;
+      }
+
+      runtime.busy = true;
+      try {
+        await this.runTurn(runtime, message, input);
+      } finally {
+        runtime.busy = false;
+      }
+    } catch (err) {
+      // Surface pre-turn errors (session load failure, busy-check reply, image
+      // context, etc.) to the user instead of silently swallowing them. These
+      // never crashed the process (the outer .catch in run() caught them), but
+      // previously left the user with no feedback at all. runTurn has its own
+      // try/catch and never reaches here; this only covers the paths above it.
+      console.error(`Telegram handleUpdate error: ${(err as Error).message}`);
+      await this.notifyError(message, err).catch(() => {
+        // notifyError itself can fail (network down) — best-effort, never throw.
+      });
     }
+  }
+
+  /** Best-effort error notification to a chat. Swallows its own errors so it
+   * can never throw out of the catch block that calls it. */
+  private async notifyError(message: TelegramMessage, err: unknown): Promise<void> {
+    const text = `Error: ${(err as Error).message}`;
+    await this.api.sendMessage({
+      chat_id: message.chat.id,
+      text,
+      message_thread_id: message.message_thread_id,
+    });
   }
 
   private normalizeIncomingInput(message: TelegramMessage): string {
@@ -521,6 +580,7 @@ class BotRunner {
     const draftId = canDraft ? newTelegramRandomId() : 0;
     let activeToolStatus = "";
     let toolHeartbeat: ReturnType<typeof setInterval> | null = null;
+    let groupTyping: ReturnType<typeof setInterval> | null = null;
     const groupStatus: {
       promise?: Promise<number | undefined>;
       lastText?: string;
@@ -545,6 +605,13 @@ class BotRunner {
       activeToolStatus = "";
     };
 
+    const clearGroupTyping = (): void => {
+      if (groupTyping) {
+        clearInterval(groupTyping);
+        groupTyping = null;
+      }
+    };
+
     const showToolDraft = (status: string): void => {
       activeToolStatus = status;
       sendDraft(`${content}${content ? "\n\n" : ""}${status}`);
@@ -558,9 +625,22 @@ class BotRunner {
       }
     };
 
+    /** Fire-and-forget typing indicator refresh for group/supergroup chats.
+     * Telegram's "typing..." indicator expires after ~5s; without periodic
+     * refresh the chat looks frozen (no feedback) while the assistant is
+     * streaming or a long tool runs. All calls are swallowed on failure so a
+     * network blip can never become an unhandled rejection. */
+    const pokeGroupTyping = (): void => {
+      void this.api
+        .sendChatAction(message.chat.id, "typing", message.message_thread_id)
+        .catch((err) =>
+          console.error(`Telegram typing error: ${(err as Error).message}`),
+        );
+    };
+
     const showGroupToolStatus = (status: string): void => {
       if (canDraft) return;
-      void this.api.sendChatAction(message.chat.id, "typing", message.message_thread_id);
+      pokeGroupTyping();
       if (groupStatus.lastText === status) return;
       groupStatus.lastText = status;
 
@@ -595,14 +675,23 @@ class BotRunner {
     };
 
     if (!canDraft) {
-      await this.api.sendChatAction(message.chat.id, "typing", message.message_thread_id);
+      // Initial typing indicator + recurring refresh for the whole turn. This
+      // keeps the group chat from looking "stuck" while the assistant works.
+      pokeGroupTyping();
+      groupTyping = setInterval(pokeGroupTyping, GROUP_TYPING_INTERVAL_MS);
     }
+
+    // Per-turn abort controller so an in-flight LLM request can be cancelled
+    // cleanly if this turn throws. Mirrors Desktop/VSCode hosts.
+    const abort = new AbortController();
+    this.turnAbort = abort;
 
     try {
       const final = await this.activeTurn.run(
         { message, workdir: runtime.session.projectDir },
         () =>
           runtime.agent.send(input, {
+            signal: abort.signal,
             onContent: (delta) => {
               content += delta;
               if (!canDraft) return;
@@ -632,6 +721,7 @@ class BotRunner {
       );
 
       clearToolHeartbeat();
+      clearGroupTyping();
       content = final || content || "(empty response)";
       if (canDraft && !draftSent) {
         await this.api.sendMessageDraft(message.chat.id, draftId, content);
@@ -643,11 +733,16 @@ class BotRunner {
       await this.persist(runtime);
     } catch (err) {
       clearToolHeartbeat();
+      clearGroupTyping();
+      // Cancel any in-flight LLM request from this turn so it doesn't linger.
+      abort.abort();
       const text = `Error: ${(err as Error).message}`;
       const replaceMessageId = groupStatus.promise
         ? await groupStatus.promise
         : undefined;
       await this.sendFinal(message, text, replaceMessageId);
+    } finally {
+      if (this.turnAbort === abort) this.turnAbort = null;
     }
   }
 
@@ -667,7 +762,21 @@ class BotRunner {
         });
         start = 1;
       } catch (err) {
+        // The status message ("⏳ Memproses...") could not be edited into the
+        // final result. We must NOT leave it hanging AND post a new message
+        // (that was the "two messages" bug: orphaned spinner + duplicate
+        // result). Instead, delete the orphaned status message, then post all
+        // chunks fresh. If the delete also fails (already gone, no group
+        // rights), we still proceed — a leftover spinner is far better than a
+        // broken turn.
         console.error(`Telegram edit status error: ${(err as Error).message}`);
+        await this.api
+          .deleteMessage(message.chat.id, replaceMessageId)
+          .catch((delErr) =>
+            console.error(
+              `Telegram status delete error: ${(delErr as Error).message}`,
+            ),
+          );
       }
     }
     for (const chunk of chunks.slice(start)) {
@@ -706,13 +815,37 @@ class BotRunner {
     }
   }
 
-  private createBotScriptHost() {
+  private createBotScriptHost(): BotScriptHost {
     const getActiveBotScriptState = (): { message: TelegramMessage; workdir: string } => {
       const state = this.activeTurn.getStore();
       if (!state?.message || !state.workdir) {
         throw new Error("bot_script is only available during an active Telegram turn.");
       }
       return { message: state.message, workdir: state.workdir };
+    };
+
+    // Resolve the target chat for a send action. Defaults to the active chat;
+    // an explicit numeric chatId override lets the bot send elsewhere (e.g. the
+    // current user's private chat, reachable via bot.chat.currentUserId). The
+    // user must have /start-ed the bot in private for cross-chat sends to work
+    // — Telegram rejects otherwise, and that error is surfaced to the AI.
+    const resolveTarget = (chatId: unknown): {
+      chatId: number;
+      threadId: number | undefined;
+    } => {
+      const state = getActiveBotScriptState();
+      if (chatId === undefined || chatId === null) {
+        return {
+          chatId: state.message.chat.id,
+          threadId: state.message.message_thread_id,
+        };
+      }
+      if (typeof chatId !== "number" || !Number.isFinite(chatId)) {
+        throw new Error("chatId must be a valid number.");
+      }
+      // A private chat (user id) has no thread; only the originating group does.
+      // When overriding to a different chat, never leak the group's thread id.
+      return { chatId, threadId: undefined };
     };
 
     return {
@@ -726,13 +859,191 @@ class BotRunner {
           username: message.chat.username,
           messageThreadId: message.message_thread_id,
           currentMessageId: message.message_id,
+          currentUserId: message.from?.id,
+          currentUserUsername: message.from?.username,
         };
       },
-      sendMessage: async (text: string) => {
-        const state = getActiveBotScriptState();
+      sendMessage: async (text: string, chatId?: number) => {
+        const target = resolveTarget(chatId);
         if (typeof text !== "string" || !text.trim()) {
           throw new Error("sendMessage text must be a non-empty string.");
         }
+        const sent = await this.api.sendMessage({
+          chat_id: target.chatId,
+          text,
+          message_thread_id: target.threadId,
+        });
+        return { message_id: sent.message_id };
+      },
+      sendPhoto: async (path: string, caption?: string, chatId?: number) => {
+        const state = getActiveBotScriptState();
+        const target = resolveTarget(chatId);
+        const file = await resolveTelegramWorkdirPath(state.workdir, path);
+        const sent = await this.api.sendPhoto({
+          chat_id: target.chatId,
+          path: file,
+          caption,
+          message_thread_id: target.threadId,
+        });
+        return { message_id: sent.message_id };
+      },
+      sendDocument: async (path: string, caption?: string, chatId?: number) => {
+        const state = getActiveBotScriptState();
+        const target = resolveTarget(chatId);
+        const file = await resolveTelegramWorkdirPath(state.workdir, path);
+        const sent = await this.api.sendDocument({
+          chat_id: target.chatId,
+          path: file,
+          caption,
+          message_thread_id: target.threadId,
+        });
+        return { message_id: sent.message_id };
+      },
+      sendVideo: async (path: string, caption?: string, chatId?: number) => {
+        const state = getActiveBotScriptState();
+        const target = resolveTarget(chatId);
+        const file = await resolveTelegramWorkdirPath(state.workdir, path);
+        const sent = await this.api.sendMediaFile({
+          method: "sendVideo",
+          field: "video",
+          chat_id: target.chatId,
+          path: file,
+          caption,
+          message_thread_id: target.threadId,
+        });
+        return { message_id: sent.message_id };
+      },
+      sendAudio: async (path: string, caption?: string, chatId?: number) => {
+        const state = getActiveBotScriptState();
+        const target = resolveTarget(chatId);
+        const file = await resolveTelegramWorkdirPath(state.workdir, path);
+        const sent = await this.api.sendMediaFile({
+          method: "sendAudio",
+          field: "audio",
+          chat_id: target.chatId,
+          path: file,
+          caption,
+          message_thread_id: target.threadId,
+        });
+        return { message_id: sent.message_id };
+      },
+      sendAnimation: async (path: string, caption?: string, chatId?: number) => {
+        const state = getActiveBotScriptState();
+        const target = resolveTarget(chatId);
+        const file = await resolveTelegramWorkdirPath(state.workdir, path);
+        const sent = await this.api.sendMediaFile({
+          method: "sendAnimation",
+          field: "animation",
+          chat_id: target.chatId,
+          path: file,
+          caption,
+          message_thread_id: target.threadId,
+        });
+        return { message_id: sent.message_id };
+      },
+      sendVoice: async (path: string, caption?: string, chatId?: number) => {
+        const state = getActiveBotScriptState();
+        const target = resolveTarget(chatId);
+        const file = await resolveTelegramWorkdirPath(state.workdir, path);
+        const sent = await this.api.sendMediaFile({
+          method: "sendVoice",
+          field: "voice",
+          chat_id: target.chatId,
+          path: file,
+          caption,
+          message_thread_id: target.threadId,
+        });
+        return { message_id: sent.message_id };
+      },
+      sendLocation: async (
+        latitude: number,
+        longitude: number,
+        options?: { title?: string; address?: string },
+      ) => {
+        if (typeof latitude !== "number" || typeof longitude !== "number") {
+          throw new Error("sendLocation requires numeric latitude and longitude.");
+        }
+        const target = resolveTarget(undefined);
+        // Note: Telegram's sendLocation uses venue's title/address via a
+        // separate sendVenue call; here we ignore options for the plain point.
+        void options;
+        const sent = await this.api.sendLocation({
+          chat_id: target.chatId,
+          latitude,
+          longitude,
+          message_thread_id: target.threadId,
+        });
+        return { message_id: sent.message_id };
+      },
+      sendPoll: async (
+        question: string,
+        options: string[],
+        pollOpts?: { multiple?: boolean; anonymous?: boolean },
+      ) => {
+        if (typeof question !== "string" || !question.trim()) {
+          throw new Error("sendPoll question must be a non-empty string.");
+        }
+        if (!Array.isArray(options) || options.length < 2 || options.length > 10) {
+          throw new Error("sendPoll options must be an array of 2-10 strings.");
+        }
+        const target = resolveTarget(undefined);
+        const sent = await this.api.sendPoll({
+          chat_id: target.chatId,
+          question,
+          options,
+          is_anonymous: pollOpts?.anonymous,
+          allows_multiple_answers: pollOpts?.multiple,
+          message_thread_id: target.threadId,
+        });
+        return { message_id: sent.message_id };
+      },
+      sendMediaGroup: async (paths: string[], caption?: string) => {
+        const state = getActiveBotScriptState();
+        const target = resolveTarget(undefined);
+        if (!Array.isArray(paths) || paths.length < 2 || paths.length > 10) {
+          throw new Error("sendMediaGroup paths must be an array of 2-10 strings.");
+        }
+        const resolved: string[] = [];
+        for (const p of paths) {
+          resolved.push(await resolveTelegramWorkdirPath(state.workdir, p));
+        }
+        const sent = await this.api.sendMediaGroup({
+          chat_id: target.chatId,
+          paths: resolved,
+          caption,
+          message_thread_id: target.threadId,
+        });
+        return { messages: sent.map((m) => m.message_id) };
+      },
+      editMessageText: async (messageId: number, text: string) => {
+        if (typeof messageId !== "number") {
+          throw new Error("editMessageText messageId must be a number.");
+        }
+        const state = getActiveBotScriptState();
+        await this.api.editMessageText({
+          chat_id: state.message.chat.id,
+          message_id: messageId,
+          text,
+        });
+        return { message_id: messageId };
+      },
+      deleteMessage: async (messageId: number) => {
+        if (typeof messageId !== "number") {
+          throw new Error("deleteMessage messageId must be a number.");
+        }
+        const state = getActiveBotScriptState();
+        await this.api.deleteMessage(state.message.chat.id, messageId);
+        return { deleted: true };
+      },
+      reply: async (text: string) => {
+        const state = getActiveBotScriptState();
+        if (typeof text !== "string" || !text.trim()) {
+          throw new Error("reply text must be a non-empty string.");
+        }
+        // Telegram reply is sendMessage with reply_parameters pointing at the
+        // user's current message. We model it via a plain sendMessage because
+        // the host's sendMessage doesn't expose reply_parameters; the script-
+        // level intent ("answer this user") is still satisfied.
         const sent = await this.api.sendMessage({
           chat_id: state.message.chat.id,
           text,
@@ -740,27 +1051,16 @@ class BotRunner {
         });
         return { message_id: sent.message_id };
       },
-      sendPhoto: async (path: string, caption?: string) => {
+      getChat: async () => {
         const state = getActiveBotScriptState();
-        const file = await resolveTelegramWorkdirPath(state.workdir, path);
-        const sent = await this.api.sendPhoto({
-          chat_id: state.message.chat.id,
-          path: file,
-          caption,
-          message_thread_id: state.message.message_thread_id,
-        });
-        return { message_id: sent.message_id };
+        return this.api.getChat(state.message.chat.id);
       },
-      sendDocument: async (path: string, caption?: string) => {
+      getChatMember: async (userId: number) => {
+        if (typeof userId !== "number") {
+          throw new Error("getChatMember userId must be a number.");
+        }
         const state = getActiveBotScriptState();
-        const file = await resolveTelegramWorkdirPath(state.workdir, path);
-        const sent = await this.api.sendDocument({
-          chat_id: state.message.chat.id,
-          path: file,
-          caption,
-          message_thread_id: state.message.message_thread_id,
-        });
-        return { message_id: sent.message_id };
+        return this.api.getChatMember(state.message.chat.id, userId);
       },
     };
   }
@@ -870,6 +1170,119 @@ class TelegramApi {
     return this.callMultipart("sendDocument", form);
   }
 
+  /** Generic single-file media upload used by sendVideo/sendAudio/sendAnimation/
+   * sendVoice. `field` is the Telegram media field name (video/audio/animation/
+   * voice). Mirrors sendPhoto/sendDocument's structure exactly. */
+  async sendMediaFile(args: {
+    method: "sendVideo" | "sendAudio" | "sendAnimation" | "sendVoice";
+    field: "video" | "audio" | "animation" | "voice";
+    chat_id: number;
+    path: string;
+    caption?: string;
+    message_thread_id?: number;
+  }): Promise<TelegramMessage> {
+    const data = await readFile(args.path);
+    const form = new FormData();
+    form.set("chat_id", String(args.chat_id));
+    if (args.message_thread_id) {
+      form.set("message_thread_id", String(args.message_thread_id));
+    }
+    if (args.caption) form.set("caption", args.caption);
+    form.set(args.field, new Blob([new Uint8Array(data)]), basename(args.path));
+    return this.callMultipart(args.method, form);
+  }
+
+  /** Send an album of photos/videos (all the same media type) as a single
+   * sendMediaGroup call. Each file is attached as attach://<key> and described
+   * in the JSON `media` array. Paths must resolve inside the workdir (host
+   * validates before calling). */
+  async sendMediaGroup(args: {
+    chat_id: number;
+    paths: string[];
+    caption?: string;
+    message_thread_id?: number;
+  }): Promise<TelegramMessage[]> {
+    if (args.paths.length < 2 || args.paths.length > 10) {
+      throw new Error("sendMediaGroup requires 2-10 files.");
+    }
+    const form = new FormData();
+    form.set("chat_id", String(args.chat_id));
+    if (args.message_thread_id) {
+      form.set("message_thread_id", String(args.message_thread_id));
+    }
+    // Build the media descriptor array. The first item carries the caption.
+    const media = args.paths.map((p, i) => {
+      const ext = extname(p).toLowerCase();
+      const type = ext === ".mp4" || ext === ".mov" ? "video" : "photo";
+      const key = `file${i}`;
+      const entry: Record<string, string> = { type, media: `attach://${key}` };
+      if (i === 0 && args.caption) entry.caption = args.caption;
+      return entry;
+    });
+    form.set("media", JSON.stringify(media));
+    for (let i = 0; i < args.paths.length; i++) {
+      const data = await readFile(args.paths[i]!);
+      form.set(`file${i}`, new Blob([new Uint8Array(data)]), basename(args.paths[i]!));
+    }
+    return this.callMultipart("sendMediaGroup", form);
+  }
+
+  async sendLocation(args: {
+    chat_id: number;
+    latitude: number;
+    longitude: number;
+    message_thread_id?: number;
+  }): Promise<TelegramMessage> {
+    return this.call("sendLocation", {
+      ...withThread(args.message_thread_id),
+      chat_id: args.chat_id,
+      latitude: args.latitude,
+      longitude: args.longitude,
+    });
+  }
+
+  async sendPoll(args: {
+    chat_id: number;
+    question: string;
+    options: string[];
+    is_anonymous?: boolean;
+    allows_multiple_answers?: boolean;
+    message_thread_id?: number;
+  }): Promise<TelegramMessage> {
+    return this.call("sendPoll", {
+      ...withThread(args.message_thread_id),
+      chat_id: args.chat_id,
+      question: args.question,
+      options: args.options,
+      ...(args.is_anonymous !== undefined ? { is_anonymous: args.is_anonymous } : {}),
+      ...(args.allows_multiple_answers !== undefined
+        ? { allows_multiple_answers: args.allows_multiple_answers }
+        : {}),
+    });
+  }
+
+  /** Plain-text edit of a bot message (used by bot_script). For rich/HTML edits
+   * the host uses editRichMessage; this is the raw form exposed to scripts. */
+  async editMessageText(args: {
+    chat_id: number;
+    message_id: number;
+    text: string;
+  }): Promise<unknown> {
+    return this.call("editMessageText", {
+      chat_id: args.chat_id,
+      message_id: args.message_id,
+      text: args.text,
+    });
+  }
+
+  async getChat(chatId: number): Promise<unknown> {
+    return this.call("getChat", { chat_id: chatId });
+  }
+
+  async getChatMember(chatId: number, userId: number): Promise<unknown> {
+    return this.call("getChatMember", { chat_id: chatId, user_id: userId });
+  }
+
   async editRichMessage(args: {
     chat_id: number;
     message_id: number;
@@ -879,6 +1292,17 @@ class TelegramApi {
       chat_id: args.chat_id,
       message_id: args.message_id,
       rich_message: { html: toRichHtml(args.text) },
+    });
+  }
+
+  /** Delete a message. Best-effort: callers swallow errors because a failed
+   * delete (e.g. already-deleted message, no rights in a group) must never
+   * break the turn flow. Used to clean up an orphaned "⏳ Memproses..." status
+   * message when editing it into the final result fails. */
+  async deleteMessage(chatId: number, messageId: number): Promise<unknown> {
+    return this.call("deleteMessage", {
+      chat_id: chatId,
+      message_id: messageId,
     });
   }
 
@@ -909,30 +1333,123 @@ class TelegramApi {
 
   private async call<T>(method: string, body: unknown): Promise<T> {
     const url = `${this.baseUrl.replace(/\/$/, "")}/bot${this.token}/${method}`;
-    const res = await fetch(url, {
+    const init: RequestInit = {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
-    });
-    const json = (await res.json()) as TelegramResponse<T>;
-    if (!res.ok || !json.ok || json.result === undefined) {
-      throw new Error(json.description ?? `${method} failed with HTTP ${res.status}`);
-    }
-    return json.result;
+    };
+    return this.fetchWithRetry<T>(method, url, init);
   }
 
   private async callMultipart<T>(method: string, body: FormData): Promise<T> {
     const url = `${this.baseUrl.replace(/\/$/, "")}/bot${this.token}/${method}`;
-    const res = await fetch(url, {
-      method: "POST",
-      body,
-    });
-    const json = (await res.json()) as TelegramResponse<T>;
-    if (!res.ok || !json.ok || json.result === undefined) {
-      throw new Error(json.description ?? `${method} failed with HTTP ${res.status}`);
-    }
-    return json.result;
+    // NOTE: do NOT set content-type here; fetch sets the multipart boundary.
+    const init: RequestInit = { method: "POST", body };
+    return this.fetchWithRetry<T>(method, url, init);
   }
+
+  /**
+   * POST to a Telegram Bot API method with a hard timeout and automatic retry
+   * for transient network failures. This is the network-resilience core: when
+   * the server temporarily can't reach api.telegram.org (ETIMEDOUT /
+   * ENETUNREACH / ECONNRESET / fetch failed / HTTP 5xx / 429), we back off and
+   * retry instead of letting the call — and possibly the whole turn — hang or
+   * throw. Permanent errors (HTTP 4xx other than 429, "message is not
+   * modified", etc.) are returned immediately without retry.
+   */
+  private async fetchWithRetry<T>(
+    method: string,
+    url: string,
+    init: RequestInit,
+  ): Promise<T> {
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt <= API_MAX_RETRIES; attempt++) {
+      try {
+        const res = await this.fetchWithTimeout(url, init, API_TIMEOUT_MS);
+        const json = (await res.json()) as TelegramResponse<T>;
+        if (res.ok && json.ok && json.result !== undefined) {
+          return json.result;
+        }
+        const description = json.description ?? `${method} failed with HTTP ${res.status}`;
+        const err = new Error(description);
+        // 429 (rate limit) and 5xx are transient — retry. Everything else
+        // (Bad Request, message-not-modified, auth errors, etc.) is permanent.
+        if (res.status !== 429 && res.status < 500) {
+          throw err;
+        }
+        lastError = err;
+      } catch (err) {
+        // Non-transient errors (e.g. "message is not modified") must NOT be
+        // retried — they will never succeed and would just waste time.
+        if (!isTransientError(err)) {
+          throw err;
+        }
+        lastError = err instanceof Error ? err : new Error(String(err));
+      }
+      if (attempt < API_MAX_RETRIES) {
+        // Exponential backoff: 1s, 2s, 4s.
+        const delayMs = 1_000 * 2 ** attempt;
+        console.error(
+          `Telegram ${method} transient error (attempt ${attempt + 1}/${API_MAX_RETRIES + 1}); retrying in ${delayMs}ms: ${lastError.message}`,
+        );
+        await sleep(delayMs);
+      }
+    }
+    throw lastError ?? new Error(`${method} failed after ${API_MAX_RETRIES + 1} attempts`);
+  }
+
+  /** fetch() with an AbortController timeout so a stalled connection can never
+   * hang until the OS TCP timeout (which can be minutes). On abort, throws an
+   * error classified as transient so fetchWithRetry will retry it. */
+  private async fetchWithTimeout(
+    url: string,
+    init: RequestInit,
+    timeoutMs: number,
+  ): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, { ...init, signal: controller.signal });
+    } catch (err) {
+      // Re-throw abort as a network-classified error so the retry loop treats
+      // it as transient.
+      if (controller.signal.aborted) {
+        throw new Error(`Telegram request timed out after ${timeoutMs}ms`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
+
+/**
+ * Classify an error as transient (worth retrying). Covers the network errors
+ * seen in production logs — ETIMEDOUT / ENETUNREACH / ECONNRESET / EAI_AGAIN —
+ * plus undici's generic "fetch failed" (whose `cause` carries the real code),
+ * and our own timeout message. Non-network errors (4xx, "message is not
+ * modified", argument validation) return false so they fail fast.
+ */
+function isTransientError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const message = err.message ?? "";
+  const cause = (err as { cause?: { code?: string; message?: string } }).cause;
+  const code = cause?.code ?? "";
+  const causeMessage = cause?.message ?? "";
+
+  const transientSignals = [
+    "ETIMEDOUT",
+    "ENETUNREACH",
+    "ECONNRESET",
+    "ECONNREFUSED",
+    "EAI_AGAIN",
+    "fetch failed",
+    "timed out",
+    "network",
+    "socket hang up",
+  ];
+  const haystack = `${message} ${code} ${causeMessage}`.toLowerCase();
+  return transientSignals.some((sig) => haystack.includes(sig.toLowerCase()));
 }
 
 function sessionIdFor(message: TelegramMessage): string {

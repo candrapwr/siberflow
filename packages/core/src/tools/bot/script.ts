@@ -9,10 +9,53 @@ interface Args {
 export const botScriptTool: Tool = {
   name: "bot_script",
   description:
-    "Run a small JavaScript automation script against the current bot host. " +
-    "Use it for bot actions such as sending a message, photo, or document to the active chat/thread. " +
-    "It does not provide file manipulation helpers; enable read_file/write_file/list_dir/etc. separately when file work is needed. " +
-    "Shell/process access is blocked: child_process, execSync, spawn, require, dynamic import, process, eval, and Function are not allowed.",
+    "Run JavaScript automation against the active bot host (e.g. the Telegram bot). " +
+    "Write any JS; the host injects a `bot` helper. Use it to send messages and media, " +
+    "run polls, share locations, edit/delete the bot's own messages, and inspect chat info.\n\n" +
+    "# Available helpers (the `bot` object)\n" +
+    "## bot.chat (read-only metadata of the ACTIVE chat)\n" +
+    "- bot.chat.id — active chat id (group/supergroup/private)\n" +
+    "- bot.chat.type — 'private' | 'group' | 'supergroup'\n" +
+    "- bot.chat.title — group title (if any)\n" +
+    "- bot.chat.username — chat @username (if any)\n" +
+    "- bot.chat.messageThreadId — forum thread id (if any)\n" +
+    "- bot.chat.currentMessageId — the user message id that triggered this turn\n" +
+    "- bot.chat.currentUserId — the id of the user who sent the current message\n" +
+    "- bot.chat.currentUserUsername — that user's @username (if any)\n\n" +
+    "## Send actions (target the active chat by default; pass an explicit chatId to send elsewhere)\n" +
+    "Every send action accepts an OPTIONAL last argument `chatId` (a number) to override the " +
+    "destination. This enables cross-chat sends — e.g. a user in a GROUP asks you to send them " +
+    "something in PRIVATE: use bot.chat.currentUserId as the chatId. IMPORTANT: cross-chat sends " +
+    "to a private chat only work if that user has already /start-ed the bot in private; otherwise " +
+    "Telegram returns a 'Forbidden' error, which you should explain to the user.\n" +
+    "- bot.sendMessage(text, chatId?) -> { message_id }\n" +
+    "- bot.sendPhoto(path, caption?, chatId?) -> { message_id }   (image file from the workdir)\n" +
+    "- bot.sendDocument(path, caption?, chatId?) -> { message_id } (any file from the workdir)\n" +
+    "- bot.sendVideo(path, caption?, chatId?) -> { message_id }\n" +
+    "- bot.sendAudio(path, caption?, chatId?) -> { message_id }   (shown in the music player)\n" +
+    "- bot.sendAnimation(path, caption?, chatId?) -> { message_id } (GIF)\n" +
+    "- bot.sendVoice(path, caption?, chatId?) -> { message_id }   (.ogg voice message)\n" +
+    "- bot.sendMediaGroup(paths, caption?) -> { messages: [...] } (album of 2-10 photos/videos)\n" +
+    "- bot.sendLocation(latitude, longitude) -> { message_id }\n" +
+    "- bot.sendPoll(question, options, { multiple?, anonymous? }) -> { message_id } (options = 2-10 strings)\n" +
+    "- bot.reply(text) -> { message_id } (answers the current user in the active chat)\n\n" +
+    "## Message manipulation (active chat only)\n" +
+    "- bot.editMessageText(messageId, text) — edit one of the bot's OWN messages\n" +
+    "- bot.deleteMessage(messageId) — delete a message in the active chat\n\n" +
+    "## Chat info (active chat only)\n" +
+    "- bot.getChat() — chat info (title, type, member count, etc.)\n" +
+    "- bot.getChatMember(userId) — a member's status and user info\n\n" +
+    "# Rules\n" +
+    "- All media file paths MUST point inside the session workdir (relative paths work). " +
+    "Paths escaping the workdir are rejected. To create/modify files, enable read_file/write_file/etc.\n" +
+    "- Chat-info and message-manipulation actions (getChat, getChatMember, editMessageText, " +
+    "deleteMessage, reply) ALWAYS operate on the active chat and ignore any chatId override.\n" +
+    "- Admin/moderation actions (ban/kick/mute/promote members, set chat title, etc.) are NOT " +
+    "available — do not attempt them.\n" +
+    "- console.log/warn/error is available; logged lines are returned to you under 'Logs:'.\n" +
+    "- Shell/process access is blocked: child_process, execSync, spawn, require, dynamic import, " +
+    "process, eval, and Function are not allowed.\n" +
+    "- Execution is sandboxed and times out after 15 seconds.",
   parameters: {
     type: "object",
     properties: {

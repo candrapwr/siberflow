@@ -25,10 +25,47 @@ export interface AskUserResponse {
 }
 
 export interface BotScriptHost {
+  /** Metadata about the active chat/thread. Read-only.
+   * Keys include: id, type, title?, username?, messageThreadId?,
+   * currentMessageId, currentUserId?, currentUserUsername?. Hosts may add more. */
   readonly chat: Record<string, unknown>;
+  // ── existing ──────────────────────────────────────────────────────────────
   sendMessage(text: string): Promise<unknown>;
   sendPhoto(path: string, caption?: string): Promise<unknown>;
   sendDocument(path: string, caption?: string): Promise<unknown>;
+  // ── curated Telegram Bot API surface ──────────────────────────────────────
+  /** Send a video file from the workdir. */
+  sendVideo(path: string, caption?: string): Promise<unknown>;
+  /** Send an audio file (shown in the music player) from the workdir. */
+  sendAudio(path: string, caption?: string): Promise<unknown>;
+  /** Send an animation/GIF from the workdir. */
+  sendAnimation(path: string, caption?: string): Promise<unknown>;
+  /** Send a voice message (.ogg) from the workdir. */
+  sendVoice(path: string, caption?: string): Promise<unknown>;
+  /** Send a point on the map. */
+  sendLocation(
+    latitude: number,
+    longitude: number,
+    options?: { title?: string; address?: string },
+  ): Promise<unknown>;
+  /** Send a native poll. `options` are the answer choices (2-10 strings). */
+  sendPoll(
+    question: string,
+    options: string[],
+    options2?: { multiple?: boolean; anonymous?: boolean },
+  ): Promise<unknown>;
+  /** Send an album of photos/videos (same media type) from the workdir. */
+  sendMediaGroup(paths: string[], caption?: string): Promise<unknown>;
+  /** Edit the text of one of the bot's own messages in the active chat. */
+  editMessageText(messageId: number, text: string): Promise<unknown>;
+  /** Delete a message in the active chat (bot needs rights in groups). */
+  deleteMessage(messageId: number): Promise<unknown>;
+  /** Reply to the user's current message with text. */
+  reply(text: string): Promise<unknown>;
+  /** Fetch info about the active chat (title, type, member count, etc.). */
+  getChat(): Promise<unknown>;
+  /** Fetch info about a chat member (status, user, join date). */
+  getChatMember(userId: number): Promise<unknown>;
 }
 
 export interface ToolContext {
