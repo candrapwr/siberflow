@@ -22,10 +22,16 @@ export interface CustomProviderSettings {
   defaultModel: string;
 }
 
+export interface MultimodalProviderSettings {
+  baseUrl: string;
+  model: string;
+}
+
 /** Persisted settings shape (stored in userData/siberflow-settings.json). */
 export interface SettingsValues {
   provider: ProviderName;
   customProvider: CustomProviderSettings;
+  multimodalProvider: MultimodalProviderSettings;
   model: string;
   contextOptimize: boolean;
   contextOptimizeMode: "drop" | "summary" | "recent";
@@ -45,6 +51,10 @@ export const DEFAULT_SETTINGS: SettingsValues = {
     name: "custom",
     baseUrl: "",
     defaultModel: "",
+  },
+  multimodalProvider: {
+    baseUrl: "https://api.openai.com/v1",
+    model: "",
   },
   model: "",
   contextOptimize: true,
@@ -117,7 +127,7 @@ export interface PickedFile {
 
 export type MainEvent =
   | { type: "ready"; banner: BannerInfo; session: CurrentSessionInfo | null; hideTools: boolean; tasksEnabled: boolean; enabledTools: string[] }
-  | { type: "require-settings"; mustConfigure: boolean; values: SettingsValues; hasApiKey: boolean }
+  | { type: "require-settings"; mustConfigure: boolean; values: SettingsValues; hasApiKey: boolean; hasMultimodalApiKey: boolean }
   | { type: "settings-saved" }
   | { type: "session-changed"; session: CurrentSessionInfo | null }
   | { type: "session-list"; sessions: SessionSummary[] }
@@ -165,8 +175,8 @@ export interface RendererCalls {
    * awaiting tool.
    */
   answerUser: (id: string, status: "answer" | "cancel", answer: string) => Promise<void>;
-  getSettings: () => Promise<{ values: SettingsValues; hasApiKey: boolean }>;
-  saveSettings: (values: SettingsValues, apiKey: string | null) => Promise<void>;
+  getSettings: () => Promise<{ values: SettingsValues; hasApiKey: boolean; hasMultimodalApiKey: boolean }>;
+  saveSettings: (values: SettingsValues, apiKey: string | null, multimodalApiKey: string | null) => Promise<void>;
   renameSession: (id: string, name: string) => Promise<void>;
   getUsage: () => Promise<UsageInfo | null>;
   onEvent: (callback: (event: MainEvent) => void) => () => void;

@@ -131,6 +131,26 @@
           },
           "description": "Configuration used when siberflow.provider is custom."
         },
+        "siberflow.multimodalProvider": {
+          "type": "object",
+          "default": {
+            "baseUrl": "https://api.openai.com/v1",
+            "model": ""
+          },
+          "properties": {
+            "baseUrl": {
+              "type": "string",
+              "default": "https://api.openai.com/v1",
+              "description": "OpenAI-compatible API root URL for analyze_image. Siberflow appends /chat/completions."
+            },
+            "model": {
+              "type": "string",
+              "default": "",
+              "description": "Multimodal model used by analyze_image."
+            }
+          },
+          "description": "Configuration used by analyze_image."
+        },
         "siberflow.model": {
           "type": "string",
           "default": "",

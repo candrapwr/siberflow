@@ -17,7 +17,7 @@ export type ExtToView =
   | { kind: "info"; message: string }
   | { kind: "session_changed"; session: SessionInfo | null }
   | { kind: "usage"; usage: SessionUsage; optSaved: number }
-  | { kind: "settings"; values: SettingsValues; hasApiKey: boolean; mustConfigure: boolean }
+  | { kind: "settings"; values: SettingsValues; hasApiKey: boolean; hasMultimodalApiKey: boolean; mustConfigure: boolean }
   | { kind: "history"; messages: HistoryMessage[] }
   | { kind: "doc_files_picked"; files: PickedFile[] }
   | { kind: "doc_pick_error"; message: string }
@@ -56,7 +56,7 @@ export type ViewToExt =
   | { kind: "regenerate" }
   | { kind: "edit_last"; input: string }
   | { kind: "command"; command: "new" | "load" | "delete" | "clearAll" | "usage" | "tools" | "settings" }
-  | { kind: "save_settings"; values: SettingsValues; apiKey: string | null }
+  | { kind: "save_settings"; values: SettingsValues; apiKey: string | null; multimodalApiKey: string | null }
   | { kind: "pick_doc_files" }
   | { kind: "answer_user"; id: string; status: "answer" | "cancel"; answer: string };
 
@@ -68,11 +68,17 @@ export interface CustomProviderSettings {
   defaultModel: string;
 }
 
+export interface MultimodalProviderSettings {
+  baseUrl: string;
+  model: string;
+}
+
 export type OptimizeMode = "drop" | "summary" | "recent";
 
 export interface SettingsValues {
   provider: ProviderName;
   customProvider: CustomProviderSettings;
+  multimodalProvider: MultimodalProviderSettings;
   model: string;
   contextOptimize: boolean;
   contextOptimizeMode: OptimizeMode;

@@ -22,8 +22,8 @@ const api: RendererCalls = {
   answerUser: (id, status, answer) =>
     ipcRenderer.invoke("siberflow:answerUser", id, status, answer),
   getSettings: () => ipcRenderer.invoke("siberflow:getSettings"),
-  saveSettings: (values, apiKey) =>
-    ipcRenderer.invoke("siberflow:saveSettings", values, apiKey),
+  saveSettings: (values, apiKey, multimodalApiKey) =>
+    ipcRenderer.invoke("siberflow:saveSettings", values, apiKey, multimodalApiKey),
   renameSession: (id, name) =>
     ipcRenderer.invoke("siberflow:renameSession", id, name),
   getUsage: () => ipcRenderer.invoke("siberflow:getUsage"),

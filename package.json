@@ -7,7 +7,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build -w @siberflow/core && npm run build -w @siberflow/cli && npm run build -w siberflow-chat",
+    "build": "npm run build -w @siberflow/core && npm run build -w @siberflow/cli && npm run build -w siberflow-chat && npm run build -w @siberflow/telegram",
     "build:core": "npm run build -w @siberflow/core",
     "build:desktop": "npm run build -w @siberflow/core && npm run build -w siberflow-desktop",
     "dev:desktop": "npm run dev -w siberflow-desktop",
@@ -20,6 +20,9 @@
     "build:vscode": "npm run build -w siberflow-chat",
     "watch:vscode": "npm run watch -w siberflow-chat",
     "package:vscode": "npm run package -w siberflow-chat",
+    "build:telegram": "npm run build -w @siberflow/telegram",
+    "dev:telegram": "npm run dev -w @siberflow/telegram",
+    "telegram": "npm run start -w @siberflow/telegram",
     "dev:cli": "npm run dev --workspace=@siberflow/cli",
     "cli": "npm run start --workspace=@siberflow/cli",
     "clean": "rm -rf packages/*/dist packages/*/out"

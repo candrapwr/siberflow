@@ -302,6 +302,7 @@ const TOGGLE_TOOLS = [
   { name: "docx_script", label: "docx_script", group: "Document" },
   { name: "pdf_script", label: "pdf_script", group: "Document" },
   { name: "run_browser", label: "run_browser", group: "Browser" },
+  { name: "analyze_image", label: "analyze_image", group: "Image" },
 ];
 
 const CUSTOM_PROVIDER_DEFAULT = {
@@ -313,6 +314,7 @@ const CUSTOM_PROVIDER_DEFAULT = {
 function showSettingsModal(
   values: SettingsValues,
   hasApiKey: boolean,
+  hasMultimodalApiKey: boolean,
   mustConfigure: boolean,
 ): void {
   // Remove existing modal if any
@@ -374,6 +376,23 @@ function showSettingsModal(
       <div class="form-row">
         <label>Model override</label>
         <input type="text" id="cfg-model" placeholder="(leave empty for provider default)">
+      </div>
+    </div>
+    <div class="form-section">
+      <div class="form-section-title">Multimodal image analysis</div>
+      <div class="form-row">
+        <label>Base URL</label>
+        <input type="text" id="cfg-mm-baseurl" placeholder="https://api.openai.com/v1">
+        <div class="form-help">OpenAI-compatible root URL. analyze_image appends /chat/completions.</div>
+      </div>
+      <div class="form-row">
+        <label>Model</label>
+        <input type="text" id="cfg-mm-model" placeholder="gpt-4o-mini">
+      </div>
+      <div class="form-row">
+        <label>API key</label>
+        <input type="password" id="cfg-mm-apikey" placeholder="${hasMultimodalApiKey ? "(stored — leave blank to keep)" : "paste your key"}" autocomplete="off">
+        <div class="form-help">Used only by analyze_image. Enable analyze_image in Tools.</div>
       </div>
     </div>
     <div class="form-section">
@@ -440,6 +459,8 @@ function showSettingsModal(
   const customNameInput = modal.querySelector("#cfg-custom-name") as HTMLInputElement;
   const customBaseUrlInput = modal.querySelector("#cfg-custom-baseurl") as HTMLInputElement;
   const customModelInput = modal.querySelector("#cfg-custom-model") as HTMLInputElement;
+  const mmBaseUrlInput = modal.querySelector("#cfg-mm-baseurl") as HTMLInputElement;
+  const mmModelInput = modal.querySelector("#cfg-mm-model") as HTMLInputElement;
   const updateCustomVisibility = () => {
     customWrap.style.display = providerSelect.value === "custom" ? "" : "none";
   };
@@ -448,6 +469,8 @@ function showSettingsModal(
   customNameInput.value = customProvider.name;
   customBaseUrlInput.value = customProvider.baseUrl;
   customModelInput.value = customProvider.defaultModel;
+  mmBaseUrlInput.value = values.multimodalProvider?.baseUrl ?? "https://api.openai.com/v1";
+  mmModelInput.value = values.multimodalProvider?.model ?? "";
   updateCustomVisibility();
   // (cfg-tasks checkbox removed — task_update is now always-on, not toggleable)
   (modal.querySelector("#cfg-optimize") as HTMLInputElement).checked = values.contextOptimize;
@@ -491,11 +514,16 @@ function showSettingsModal(
   modal.querySelector("#cfg-save")?.addEventListener("click", () => {
     const provider = providerSelect.value as SettingsValues["provider"];
     const apiKeyRaw = (modal.querySelector("#cfg-apikey") as HTMLInputElement).value;
+    const multimodalApiKeyRaw = (modal.querySelector("#cfg-mm-apikey") as HTMLInputElement).value;
     const model = modelInput.value;
     const customProvider = {
       name: customNameInput.value.trim() || "custom",
       baseUrl: customBaseUrlInput.value.trim().replace(/\/+$/, ""),
       defaultModel: customModelInput.value.trim(),
+    };
+    const multimodalProvider = {
+      baseUrl: mmBaseUrlInput.value.trim().replace(/\/+$/, ""),
+      model: mmModelInput.value.trim(),
     };
     if (provider === "custom" && (!customProvider.baseUrl || !customProvider.defaultModel)) {
       alert("Custom provider needs a base URL and default model.");
@@ -521,12 +549,15 @@ function showSettingsModal(
 
     // null = leave existing key unchanged. "" = explicit clear. Non-empty = update.
     const apiKey: string | null = apiKeyRaw.length === 0 ? null : apiKeyRaw;
+    const multimodalApiKey: string | null =
+      multimodalApiKeyRaw.length === 0 ? null : multimodalApiKeyRaw;
 
     vscode.postMessage({
       kind: "save_settings",
       values: {
         provider,
         customProvider,
+        multimodalProvider,
         model,
         contextOptimize,
         contextOptimizeMode,
@@ -538,6 +569,7 @@ function showSettingsModal(
         enabledTools,
       },
       apiKey,
+      multimodalApiKey,
     });
     backdrop.remove();
   });
@@ -1354,7 +1386,7 @@ window.addEventListener("message", (ev) => {
       }
       // Keep the composer upload toggle in sync with the latest tool set.
       state.enabledTools = msg.values.enabledTools;
-      showSettingsModal(msg.values, msg.hasApiKey, msg.mustConfigure);
+      showSettingsModal(msg.values, msg.hasApiKey, msg.hasMultimodalApiKey, msg.mustConfigure);
       break;
     case "history":
       if (messagesEl) messagesEl.innerHTML = "";

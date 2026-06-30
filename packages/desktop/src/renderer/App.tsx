@@ -38,6 +38,7 @@ export default function App() {
   const [settingsData, setSettingsData] = useState<{
     values: SettingsValues;
     hasApiKey: boolean;
+    hasMultimodalApiKey: boolean;
     mustConfigure: boolean;
   } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -84,11 +85,12 @@ export default function App() {
       setSettingsData({
         values: state.settingsValues as unknown as SettingsValues,
         hasApiKey: state.hasApiKey,
+        hasMultimodalApiKey: state.hasMultimodalApiKey,
         mustConfigure: state.mustConfigure,
       });
       setShowSettings(true);
     }
-  }, [state.requireSettings, state.settingsValues, state.hasApiKey, state.mustConfigure]);
+  }, [state.requireSettings, state.settingsValues, state.hasApiKey, state.hasMultimodalApiKey, state.mustConfigure]);
 
   // Auto-dismiss notices after 5s — one timer per notice id, cleaned up on unmount.
   // Errors persist (user-visible) until dismissed manually; info/warn auto-dismiss.
@@ -387,6 +389,7 @@ export default function App() {
         <SettingsModal
           values={settingsData.values}
           hasApiKey={settingsData.hasApiKey}
+          hasMultimodalApiKey={settingsData.hasMultimodalApiKey}
           mustConfigure={settingsData.mustConfigure}
           onClose={() => {
             setShowSettings(false);

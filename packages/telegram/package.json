@@ -1,0 +1,23 @@
+{
+  "name": "@siberflow/telegram",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "siberflow-telegram": "./bin/siberflow-telegram.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@siberflow/core": "0.1.0",
+    "marked": "^14.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}

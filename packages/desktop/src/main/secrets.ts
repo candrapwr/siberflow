@@ -6,6 +6,8 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ProviderName } from "@shared/protocol";
 
+export const MULTIMODAL_SECRET_KEY = "multimodal";
+
 interface KeyStore {
   [provider: string]: string; // base64 of encrypted buffer
 }
@@ -35,7 +37,7 @@ export function isEncryptionAvailable(): boolean {
 }
 
 /** Read a stored API key for the given provider, or null if absent. */
-export function getApiKey(provider: ProviderName): string | null {
+export function getApiKey(provider: ProviderName | typeof MULTIMODAL_SECRET_KEY): string | null {
   const store = readStore();
   const blob = store[provider];
   if (!blob) return null;
@@ -49,7 +51,7 @@ export function getApiKey(provider: ProviderName): string | null {
 }
 
 /** Encrypt and persist an API key for the given provider. */
-export function setApiKey(provider: ProviderName, key: string): void {
+export function setApiKey(provider: ProviderName | typeof MULTIMODAL_SECRET_KEY, key: string): void {
   if (!isEncryptionAvailable()) {
     throw new Error("OS keychain is unavailable; cannot store API key securely.");
   }
@@ -59,7 +61,7 @@ export function setApiKey(provider: ProviderName, key: string): void {
 }
 
 /** Remove the stored API key for the given provider. */
-export function deleteApiKey(provider: ProviderName): void {
+export function deleteApiKey(provider: ProviderName | typeof MULTIMODAL_SECRET_KEY): void {
   const store = readStore();
   delete store[provider];
   writeStore(store);

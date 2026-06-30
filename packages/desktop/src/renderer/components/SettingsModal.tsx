@@ -20,6 +20,7 @@ const TOGGLE_TOOLS = [
   { name: "docx_script", label: "docx_script", group: "Document" },
   { name: "pdf_script", label: "pdf_script", group: "Document" },
   { name: "run_browser", label: "run_browser", group: "Browser" },
+  { name: "analyze_image", label: "analyze_image", group: "Image" },
 ] as const;
 
 const CUSTOM_PROVIDER_DEFAULT = {
@@ -31,6 +32,7 @@ const CUSTOM_PROVIDER_DEFAULT = {
 interface SettingsModalProps {
   values: SettingsValues;
   hasApiKey: boolean;
+  hasMultimodalApiKey: boolean;
   mustConfigure: boolean;
   onClose: () => void;
 }
@@ -38,6 +40,7 @@ interface SettingsModalProps {
 export const SettingsModal = memo(function SettingsModal({
   values,
   hasApiKey,
+  hasMultimodalApiKey,
   mustConfigure,
   onClose,
 }: SettingsModalProps) {
@@ -50,6 +53,7 @@ export const SettingsModal = memo(function SettingsModal({
     },
   });
   const [apiKey, setApiKey] = useState("");
+  const [multimodalApiKey, setMultimodalApiKey] = useState("");
   const [error, setError] = useState("");
   const set = <K extends keyof SettingsValues>(key: K, val: SettingsValues[K]) =>
     setForm((f) => ({ ...f, [key]: val }));
@@ -86,8 +90,13 @@ export const SettingsModal = memo(function SettingsModal({
           baseUrl: form.customProvider.baseUrl.trim().replace(/\/+$/, ""),
           defaultModel: form.customProvider.defaultModel.trim(),
         },
+        multimodalProvider: {
+          baseUrl: form.multimodalProvider.baseUrl.trim().replace(/\/+$/, ""),
+          model: form.multimodalProvider.model.trim(),
+        },
       },
       apiKey.length > 0 ? apiKey : null,
+      multimodalApiKey.length > 0 ? multimodalApiKey : null,
     );
     onClose();
   };
@@ -204,6 +213,40 @@ export const SettingsModal = memo(function SettingsModal({
               onChange={(e) => set("requestDelayMs", Number(e.target.value))}
             />
             <div className="form-help">Jeda sebelum setiap request ke AI (anti rate-limit / block). 0 = tanpa delay. Default 1500 (1.5 detik).</div>
+          </div>
+        </div>
+
+        <div className="form-section">
+          <div className="form-section-title">Multimodal image analysis</div>
+          <div className="form-row">
+            <label>Base URL</label>
+            <input
+              type="text"
+              value={form.multimodalProvider.baseUrl}
+              onChange={(e) => set("multimodalProvider", { ...form.multimodalProvider, baseUrl: e.target.value })}
+              placeholder="https://api.openai.com/v1"
+            />
+            <div className="form-help">OpenAI-compatible root URL. analyze_image appends /chat/completions.</div>
+          </div>
+          <div className="form-row">
+            <label>Model</label>
+            <input
+              type="text"
+              value={form.multimodalProvider.model}
+              onChange={(e) => set("multimodalProvider", { ...form.multimodalProvider, model: e.target.value })}
+              placeholder="gpt-4o-mini"
+            />
+          </div>
+          <div className="form-row">
+            <label>API key</label>
+            <input
+              type="password"
+              value={multimodalApiKey}
+              onChange={(e) => setMultimodalApiKey(e.target.value)}
+              placeholder={hasMultimodalApiKey ? "(stored — leave blank to keep)" : "paste your key"}
+              autoComplete="off"
+            />
+            <div className="form-help">Used only by analyze_image. Enable analyze_image in Tools.</div>
           </div>
         </div>
 
