@@ -520,6 +520,15 @@ class BotRunner {
         `external_reply=${external}`,
         `downloadedReplyImage=${replyImage ?? "none"}`,
       );
+      // Raw dump of the reply_to_message object to see EXACTLY what fields
+      // Telegram sent. Privacy-mode stripping vs. a parsing bug look identical
+      // in the summary above, so this reveals the ground truth (e.g. whether
+      // `text`/`photo` keys are literally absent vs. present-but-empty). Trimmed
+      // to keep the log readable; this only runs with SIBERFLOW_DEBUG=true.
+      if (replied) {
+        const raw = JSON.stringify(sanitizeForLog(replied));
+        debug(`[reply] raw reply_to_message=${raw.length > 800 ? raw.slice(0, 800) + "…(truncated)" : raw}`);
+      }
     }
     return withTelegramImageContext(message, input, {
       replyImagePath: replyImage,
@@ -1566,6 +1575,37 @@ function sessionNameFor(chat: TelegramChat): string {
     return chat.username ? `@${chat.username}` : fullName || `user ${chat.id}`;
   }
   return chat.title ?? `${chat.type} ${chat.id}`;
+}
+
+/**
+ * Reduce a Telegram Message object to its diagnostic-relevant fields for the
+ * debug log. Drops heavy/noisy fields (full photo size arrays, file bytes) and
+ * keeps the ones that tell us WHY context came through or didn't: text,
+ * caption, media type flags, sender, and the reply chain. Privacy-mode
+ * stripping vs. a real absence both look the same from the code's perspective,
+ * so this raw view is what disambiguates them.
+ */
+function sanitizeForLog(message: TelegramMessage): Record<string, unknown> {
+  const out: Record<string, unknown> = {
+    message_id: message.message_id,
+    from: message.from
+      ? { id: message.from.id, username: message.from.username, is_bot: message.from.is_bot }
+      : undefined,
+    chat_type: message.chat.type,
+    text_len: message.text?.length ?? 0,
+    caption_len: message.caption?.length ?? 0,
+    has_photo: !!message.photo?.length,
+    photo_count: message.photo?.length ?? 0,
+    document: message.document
+      ? { file_name: message.document.file_name, mime_type: message.document.mime_type }
+      : undefined,
+    sticker: message.sticker ? { emoji: message.sticker.emoji } : undefined,
+    animation: !!message.animation,
+    video: !!message.video,
+    voice: !!message.voice,
+    audio: !!message.audio,
+  };
+  return out;
 }
 
 function telegramSystemContext(message: TelegramMessage, workdir: string): string {
