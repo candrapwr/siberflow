@@ -106,6 +106,15 @@ interface TelegramMessage {
   quote?: TelegramTextQuote;
   text?: string;
   caption?: string;
+  /**
+   * Rich message content. When the bot sends a message via sendRichMessage,
+   * Telegram stores the content here as structured blocks — and `text` comes
+   * back EMPTY when a user later replies to that message (confirmed via raw
+   * dump). So for replies to rich messages we read the text out of blocks[].
+   * The schema is intentionally loose (unknown) because Telegram's RichText /
+   * RichBlocks union is large; we only need to flatten text from it.
+   */
+  rich_message?: { blocks?: unknown[] };
   photo?: TelegramPhotoSize[];
   document?: TelegramDocument;
   sticker?: TelegramMedia & { emoji?: string; set_name?: string };
@@ -496,7 +505,22 @@ class BotRunner {
     // in which case the quote field is the reliable source of the replied text.
     if (isDebug()) {
       const replied = message.reply_to_message;
-      const replyHasText = !!replied && !!(replied.text ?? replied.caption ?? "").trim();
+      const rawText = replied ? (replied.text ?? replied.caption ?? "").trim() : "";
+      // Mirror the actual resolution logic used by withTelegramImageContext:
+      // plain text → rich_message blocks → quote. The "resolved" preview is the
+      // ground truth of WHAT THE MODEL WILL SEE for the replied content.
+      let resolvedText = rawText;
+      let source = "none";
+      if (resolvedText) {
+        source = "text";
+      } else if (replied?.rich_message?.blocks) {
+        resolvedText = extractRichMessageText(replied.rich_message.blocks).trim();
+        if (resolvedText) source = "rich_message";
+      }
+      if (!resolvedText) {
+        resolvedText = message.quote?.text?.trim() ?? "";
+        if (resolvedText) source = "quote";
+      }
       const quoteText = message.quote?.text?.trim() ?? "";
       const external = !!message.external_reply;
       const replyMedia = replied
@@ -514,11 +538,12 @@ class BotRunner {
         : "n/a";
       debug(
         `[reply] reply_to_message=${replied ? "present" : "absent"}`,
-        `replyHasText=${replyHasText}`,
+        `source=${source}`,
+        `resolvedText=${resolvedText ? `"${resolvedText.slice(0, 80)}"` : "empty"}`,
         `replyMedia=${replyMedia}`,
-        `quote=${quoteText ? `"${quoteText.slice(0, 60)}"` : "empty"}`,
         `external_reply=${external}`,
         `downloadedReplyImage=${replyImage ?? "none"}`,
+        `quote=${quoteText ? `"${quoteText.slice(0, 60)}"` : "empty"}`,
       );
       // Raw dump of the reply_to_message object to see EXACTLY what fields
       // Telegram sent. Privacy-mode stripping vs. a parsing bug look identical
@@ -1579,6 +1604,55 @@ function sessionNameFor(chat: TelegramChat): string {
 }
 
 /**
+ * Recursively flatten ALL text out of a Telegram rich_message's blocks.
+ *
+ * Why this exists: when a user REPLIES to one of the bot's own messages that
+ * was sent via sendRichMessage, Telegram returns that message with an EMPTY
+ * `text` field (and empty `caption`). The actual content lives inside
+ * `rich_message.blocks[]`, where each block (paragraph, heading, pre, list,
+ * blockquote, table, …) carries a `text` of type RichText. RichText itself is
+ * a recursive union — it can be:
+ *   - a plain string                          -> take it
+ *   - an array of RichText                    -> recurse + join
+ *   - an object { type:"bold"/"italic"/…, text: RichText } -> recurse into .text
+ *
+ * We do not care about formatting here; we only need the plain-text content so
+ * the model can read what the replied-to bot message said. This walks every
+ * node defensively (typeof checks, arrays, objects) and joins with spaces/new-
+ * lines so the result is readable. Zero memory retained — pure function.
+ */
+function extractRichMessageText(blocks: unknown[] | undefined): string {
+  if (!Array.isArray(blocks) || blocks.length === 0) return "";
+  const lines: string[] = [];
+  for (const block of blocks) {
+    const text = block && typeof block === "object"
+      ? flattenRichText((block as { text?: unknown }).text)
+      : "";
+    if (text) lines.push(text);
+  }
+  return lines.join("\n").trim();
+}
+
+/** Flatten a single RichText node (string | array | {type,text}) into a string. */
+function flattenRichText(node: unknown): string {
+  if (node == null) return "";
+  if (typeof node === "string") return node;
+  if (Array.isArray(node)) {
+    return node
+      .map((child) => flattenRichText(child))
+      .filter((s) => s.length > 0)
+      .join("");
+  }
+  if (typeof node === "object") {
+    // Styled node: { type: "bold"|"italic"|"code"|..., text: RichText }.
+    // Some nodes (link/mention/skip) may also carry `content` instead of `text`.
+    const obj = node as { text?: unknown; content?: unknown };
+    return flattenRichText(obj.text ?? obj.content);
+  }
+  return "";
+}
+
+/**
  * Dump ALL top-level keys present on an object (typically a Telegram Message),
  * with a short type + preview per key. Used for diagnostics only
  * (SIBERFLOW_DEBUG=true) to discover which fields Telegram actually sends for
@@ -1716,8 +1790,18 @@ function withTelegramImageContext(
   //      replying — Telegram sends this even when reply_to_message is stripped
   //      or its text is empty, so it's the most reliable text source in groups
   //      with default privacy mode).
-  // Media metadata is layered on top regardless of the text source.
-  const repliedText = replied ? (replied.text ?? replied.caption ?? "").trim() : "";
+  // Resolve the replied message's text. Priority:
+  //   1. reply_to_message.text / caption — full plain text, when available.
+  //   2. reply_to_message.rich_message.blocks — for the bot's OWN rich messages
+  //      Telegram returns an EMPTY text field but the content is in rich_message.
+  //      We flatten the blocks into plain text here (zero retained memory).
+  //   3. message.quote — the user-selected quote fragment (fallback in groups
+  //      with privacy mode stripping the replied text).
+  let repliedText = replied ? (replied.text ?? replied.caption ?? "").trim() : "";
+  if (!repliedText && replied?.rich_message?.blocks) {
+    const rich = extractRichMessageText(replied.rich_message.blocks).trim();
+    if (rich) repliedText = rich;
+  }
   const quoteText = message.quote?.text?.trim() ?? "";
   const external = message.external_reply;
   // external_reply carries only media metadata + a link, not the text; its text
