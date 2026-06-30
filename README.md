@@ -154,8 +154,13 @@ SIBERFLOW_TELEGRAM_API_KEY=...
 Streaming behavior:
 
 - Private chats use Telegram Bot API `sendRichMessageDraft` while the model streams, then persist the final response with `sendRichMessage`.
-- Groups and supergroups show a short tool status message when a tool runs, then replace that status with the final `sendRichMessage` result.
-- The bot does not use `editMessageText` or other message-edit APIs for streaming.
+- Groups and supergroups show a short tool status message when a tool runs, then replace that status with the final `sendRichMessage` result. Because Telegram draft streaming is only available in private chats, the bot keeps a `typing…` indicator alive (refreshed every ~4 s) while a group turn runs, so the chat does not appear frozen.
+- The bot does not use `editMessageText` or other message-edit APIs for streaming. (It does use `deleteMessage` internally to clean up an orphaned tool-status message when editing it into the final result fails.)
+
+Network resilience:
+
+- Every Telegram API call has a hard 30 s timeout and is retried up to 3 times with exponential backoff (1 s → 2 s → 4 s) for transient network errors (`ETIMEDOUT`, `ENETUNREACH`, `ECONNRESET`, `fetch failed`, HTTP 5xx, 429). Permanent errors (HTTP 4xx other than 429, `message is not modified`) fail fast without retry.
+- A global handler suppresses unhandled promise rejections and uncaught exceptions so a single failed call can never crash the bot process; the per-update try/catch surfaces the error to the user instead.
 
 Commands:
 
@@ -364,9 +369,40 @@ SIBERFLOW_TELEGRAM_TOOLS=run_browser,analyze_image
 
 ## Bot Script Tool (`bot_script`)
 
-`bot_script` is an opt-in core tool backed by the active bot host. In Telegram it runs a small JavaScript body with a `bot` helper for the active chat/thread: `bot.chat`, `bot.sendMessage`, `bot.sendPhoto`, and `bot.sendDocument`. It does not include file manipulation helpers. Enable `read_file`, `write_file`, `edit_file`, `copy_file`, or `list_dir` separately when the bot should work with files in its session workdir.
+`bot_script` is an opt-in core tool backed by the active bot host. In Telegram it runs a JavaScript body inside a locked-down `node:vm` sandbox with a `bot` helper that exposes a curated slice of the Telegram Bot API. It does not include file manipulation helpers — enable `read_file`, `write_file`, `edit_file`, `copy_file`, or `list_dir` separately when the bot should work with files in its session workdir.
 
-Enable it explicitly:
+The script has 15 seconds to complete; shell/process access (`child_process`, `exec`, `spawn`, `require`, dynamic `import`, `process`, `eval`, `Function`) is blocked.
+
+### `bot` helpers
+
+**`bot.chat`** — read-only metadata of the active chat:
+
+| Field | Description |
+|---|---|
+| `id` | active chat id (group/supergroup/private) |
+| `type` | `private` \| `group` \| `supergroup` |
+| `title`, `username` | group title / @username (if any) |
+| `messageThreadId` | forum thread id (if any) |
+| `currentMessageId` | the user message id that triggered this turn |
+| `currentUserId` | id of the user who sent the current message |
+| `currentUserUsername` | that user's @username (if any) |
+
+**Send actions** target the active chat by default. Every send action accepts an optional last `chatId` argument (a number) to send to a different chat — enabling **cross-chat sends**. For example, a user in a group can ask the bot to deliver a result to their private chat by passing `chatId = bot.chat.currentUserId`. Cross-chat sends to a private chat only work if the user has already `/start`-ed the bot there; otherwise Telegram returns `Forbidden`, which is surfaced to the model.
+
+- `sendMessage(text, chatId?)`, `reply(text)`
+- `sendPhoto(path, caption?, chatId?)`, `sendDocument(path, caption?, chatId?)`, `sendVideo(...)`, `sendAudio(...)`, `sendAnimation(...)`, `sendVoice(...)` — files must be inside the session workdir
+- `sendMediaGroup(paths, caption?)` — album of 2–10 photos/videos
+- `sendLocation(latitude, longitude)`
+- `sendPoll(question, options, { multiple?, anonymous? })` — `options` is 2–10 strings
+
+**Message manipulation & chat info** always operate on the active chat:
+
+- `editMessageText(messageId, text)`, `deleteMessage(messageId)`
+- `getChat()`, `getChatMember(userId)`
+
+Admin/moderation actions (ban/kick/mute/promote members, set chat title, etc.) are **not** exposed. `console.log/warn/error` is available; logged lines are returned to the model under `Logs:`.
+
+Enable `bot_script` explicitly:
 
 ```bash
 SIBERFLOW_TELEGRAM_TOOLS=run_browser,analyze_image,bot_script
