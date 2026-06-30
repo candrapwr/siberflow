@@ -523,11 +523,12 @@ class BotRunner {
       // Raw dump of the reply_to_message object to see EXACTLY what fields
       // Telegram sent. Privacy-mode stripping vs. a parsing bug look identical
       // in the summary above, so this reveals the ground truth (e.g. whether
-      // `text`/`photo` keys are literally absent vs. present-but-empty). Trimmed
-      // to keep the log readable; this only runs with SIBERFLOW_DEBUG=true.
+      // the text is in a field we don't read like `rich_message`/`entities`).
+      // We dump ALL top-level keys present, not just the ones we think matter,
+      // plus their types/short previews — this only runs with SIBERFLOW_DEBUG.
       if (replied) {
-        const raw = JSON.stringify(sanitizeForLog(replied));
-        debug(`[reply] raw reply_to_message=${raw.length > 800 ? raw.slice(0, 800) + "…(truncated)" : raw}`);
+        const raw = dumpAllKeys(replied);
+        debug(`[reply] raw reply_to_message keys=${raw}`);
       }
     }
     return withTelegramImageContext(message, input, {
@@ -1217,7 +1218,7 @@ class TelegramApi {
     chat_id: number;
     text: string;
     message_thread_id?: number;
-  }): Promise<unknown> {
+  }): Promise<TelegramMessage> {
     return this.call("sendRichMessage", {
       ...withThread(args.message_thread_id),
       chat_id: args.chat_id,
@@ -1578,34 +1579,54 @@ function sessionNameFor(chat: TelegramChat): string {
 }
 
 /**
- * Reduce a Telegram Message object to its diagnostic-relevant fields for the
- * debug log. Drops heavy/noisy fields (full photo size arrays, file bytes) and
- * keeps the ones that tell us WHY context came through or didn't: text,
- * caption, media type flags, sender, and the reply chain. Privacy-mode
- * stripping vs. a real absence both look the same from the code's perspective,
- * so this raw view is what disambiguates them.
+ * Dump ALL top-level keys present on an object (typically a Telegram Message),
+ * with a short type + preview per key. Used for diagnostics only
+ * (SIBERFLOW_DEBUG=true) to discover which fields Telegram actually sends for
+ * a replied-to message — e.g. whether the bot's rich-message text lives in a
+ * field we don't currently read (rich_message, entities, etc.). We do NOT
+ * assume a schema: we iterate the runtime keys so we never miss an unexpected
+ * field, and we redact long values (arrays of file_ids, base64) to keep the
+ * log readable.
  */
-function sanitizeForLog(message: TelegramMessage): Record<string, unknown> {
-  const out: Record<string, unknown> = {
-    message_id: message.message_id,
-    from: message.from
-      ? { id: message.from.id, username: message.from.username, is_bot: message.from.is_bot }
-      : undefined,
-    chat_type: message.chat.type,
-    text_len: message.text?.length ?? 0,
-    caption_len: message.caption?.length ?? 0,
-    has_photo: !!message.photo?.length,
-    photo_count: message.photo?.length ?? 0,
-    document: message.document
-      ? { file_name: message.document.file_name, mime_type: message.document.mime_type }
-      : undefined,
-    sticker: message.sticker ? { emoji: message.sticker.emoji } : undefined,
-    animation: !!message.animation,
-    video: !!message.video,
-    voice: !!message.voice,
-    audio: !!message.audio,
-  };
-  return out;
+function dumpAllKeys(obj: object): string {
+  const source = obj as Record<string, unknown>;
+  const parts: string[] = [];
+  for (const key of Object.keys(source)) {
+    const value = source[key];
+    const preview = previewValue(value);
+    parts.push(`${key}=${preview}`);
+  }
+  return parts.join(" | ");
+}
+
+function previewValue(value: unknown): string {
+  if (value === undefined || value === null) return "null";
+  if (typeof value === "string") {
+    const truncated =
+      value.length > 80 ? value.slice(0, 80) + `…(+${value.length - 80})` : value;
+    return `"${truncated.replace(/\n/g, "\\n")}"`;
+  }
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "[]";
+    return `[${value.length}× ${previewValue(value[0])}]`;
+  }
+  if (typeof value === "object") {
+    // Nested object: show its keys (one level) so we can spot rich_message.html
+    // or entities without dumping the whole thing.
+    const keys = Object.keys(value as Record<string, unknown>);
+    if (keys.length === 0) return "{}";
+    const sampled = keys
+      .slice(0, 6)
+      .map((k) => {
+        const v = (value as Record<string, unknown>)[k];
+        return `${k}:${previewValue(v)}`;
+      })
+      .join(",");
+    const more = keys.length > 6 ? `…(+${keys.length - 6} keys)` : "";
+    return `{${sampled}${more}}`;
+  }
+  return String(value);
 }
 
 function telegramSystemContext(message: TelegramMessage, workdir: string): string {
