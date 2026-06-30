@@ -456,7 +456,7 @@ class BotRunner {
       buildSystemPrompt({
         interface: "telegram",
         enabledToolNames: this.config.registry.list().map((t) => t.name),
-      }) + telegramSystemContext(message);
+      }) + telegramSystemContext(message, workdir);
 
     const agent = new Agent({
       provider: this.config.provider,
@@ -953,7 +953,7 @@ function sessionNameFor(chat: TelegramChat): string {
   return chat.title ?? `${chat.type} ${chat.id}`;
 }
 
-function telegramSystemContext(message: TelegramMessage): string {
+function telegramSystemContext(message: TelegramMessage, workdir: string): string {
   const chat = message.chat;
   const lines = [
     "",
@@ -961,6 +961,7 @@ function telegramSystemContext(message: TelegramMessage): string {
     "# Telegram runtime context",
     `Chat type: ${chat.type}`,
     `Chat ID: ${chat.id}`,
+    `Session workdir: ${workdir}`,
   ];
   if (chat.title) lines.push(`Chat title: ${chat.title}`);
   if (chat.username) lines.push(`Chat username: @${chat.username}`);
@@ -974,6 +975,12 @@ function telegramSystemContext(message: TelegramMessage): string {
     );
   }
   lines.push(
+    "",
+    "# Telegram hard tool safety rules",
+    "These rules override any previous behavior or examples.",
+    "When using any tool in Telegram, never access, read, write, list, upload, send, or reference files outside the session workdir above.",
+    "Do not use shell access in Telegram. Do not call exec or ask for shell commands. If shell access was used in any previous Telegram turn, treat that as a mistake and do not repeat it.",
+    "If a requested action requires files outside the session workdir or shell access, refuse that part and explain that Telegram tools are limited to the session workdir.",
     "When using bot_script, operate only in this current Telegram chat/thread and current session workdir.",
     "Do not invent Telegram chat IDs; use bot.chat for the active chat metadata.",
   );
