@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import type { Tool, ToolContext } from "../base.js";
+import { assertNoShellLikeScriptAccess } from "../script-safety.js";
 
 interface Args {
   script: string;
@@ -179,6 +180,33 @@ function buildWorkerSource(): string {
   return `
 import puppeteer from ${JSON.stringify(`file://${ppPath}`)};
 const parent = process;
+const forbiddenScriptPatterns = [
+  ["child_process", /\\b(?:node:)?child_process\\b/],
+  ["execSync", /\\bexecSync\\s*\\(/],
+  ["execFileSync", /\\bexecFileSync\\s*\\(/],
+  ["spawnSync", /\\bspawnSync\\s*\\(/],
+  ["exec", /\\bexec\\s*\\(/],
+  ["execFile", /\\bexecFile\\s*\\(/],
+  ["spawn", /\\bspawn\\s*\\(/],
+  ["fork", /\\bfork\\s*\\(/],
+  ["require", /\\brequire\\s*\\(/],
+  ["dynamic import", /\\bimport\\s*\\(/],
+  ["process", /\\bprocess\\b/],
+  ["new Function", /\\bnew\\s+Function\\s*\\(/],
+  ["Function constructor", /\\bFunction\\s*\\(/],
+  ["eval", /\\beval\\s*\\(/],
+];
+
+function assertNoShellLikeScriptAccess(script) {
+  const hits = forbiddenScriptPatterns.filter(([, pattern]) => pattern.test(script)).map(([name]) => name);
+  if (hits.length === 0) return;
+  throw new Error(
+    "run_browser blocked the script because shell/process access is not allowed here. " +
+      "Forbidden usage detected: " + [...new Set(hits)].join(", ") + ". " +
+      "Remove all child_process/exec/spawn/require/import/process/eval/Function usage. " +
+      "Use only Puppeteer APIs and files inside the current workdir."
+  );
+}
 
 async function launchBrowser() {
   // Try Chrome first, then Edge. If neither is installed, throw a clear message.
@@ -198,6 +226,7 @@ parent.on("message", async (msg) => {
   const { script, url, timeoutMs } = msg;
   let browser;
   try {
+    assertNoShellLikeScriptAccess(String(script || ""));
     browser = await launchBrowser();
     const page = await browser.newPage();
     if (url && typeof url === "string" && url.length > 0) {
@@ -257,6 +286,8 @@ export const runBrowserTool: Tool = {
     "sleep, use `await new Promise(r => setTimeout(r, ms))` instead.\n" +
     "- Prefer waiting for a specific selector over a fixed sleep whenever possible.\n" +
     "- You are free to use any Puppeteer method — the sandbox is isolated per call.\n" +
+    "- Do not use shell/process access in scripts: child_process, execSync, spawn, require, " +
+    "dynamic import, process, eval, and Function are blocked.\n" +
     "- File paths in your script (page.screenshot({ path }), downloads, setInputFiles) resolve " +
     "relative to the PROJECT directory — use relative paths like 'out.png' or 'screenshots/page.png' " +
     "and the file lands in the project folder. Do NOT use absolute paths unless necessary.",
@@ -295,6 +326,7 @@ function parseArgs(args: unknown): Args {
   if (typeof script !== "string" || script.trim() === "") {
     throw new Error("`script` is required and must be a non-empty string");
   }
+  assertNoShellLikeScriptAccess(script, "run_browser");
   let url: string | undefined;
   if (input.url !== undefined) {
     if (typeof input.url !== "string" || input.url.trim() === "") {
