@@ -6,8 +6,8 @@
     "siberflow-telegram": "./bin/siberflow-telegram.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "dev": "tsx src/index.ts",
+    "build": "tsc --build",
+    "dev": "npm run build -w @siberflow/core && tsx src/index.ts",
     "start": "node dist/index.js",
     "clean": "rm -rf dist"
   },
