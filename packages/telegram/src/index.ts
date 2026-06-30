@@ -1825,7 +1825,9 @@ function withTelegramImageContext(
   const repliedContext = (() => {
     if (replied && (repliedText || hasMediaReply)) {
       // Full replied message available — richest context (text + media).
-      return describeRepliedMessage(replied, images.replyImagePath);
+      // Pass the already-resolved repliedText so describeRepliedMessage does
+      // NOT re-read the empty message.text field for rich bot messages.
+      return describeRepliedMessage(replied, images.replyImagePath, repliedText);
     }
     // Fall back to whatever fragments Telegram gave us: the selected quote
     // text, and/or external_reply media metadata.
@@ -1921,9 +1923,20 @@ function describeExternalReply(reply: TelegramExternalReplyInfo): string {
 function describeRepliedMessage(
   message: TelegramMessage,
   downloadedImagePath?: string,
+  /** Pre-resolved text for the replied message. The caller
+   * (withTelegramImageContext) already resolves text → rich_message.blocks →
+   * quote in priority order. If supplied and non-empty, we use it INSTEAD of
+   * re-reading message.text, because message.text is EMPTY for the bot's own
+   * rich messages (the content lives in rich_message.blocks, which the caller
+   * has already flattened). Without this, the rich_message fix had no effect:
+   * the caller resolved the text but this function threw it away and re-read
+   * the empty field. */
+  resolvedText?: string,
 ): string {
   const parts: string[] = [];
-  const text = (message.text ?? message.caption ?? "").trim();
+  const text =
+    (resolvedText && resolvedText.trim()) ||
+    (message.text ?? message.caption ?? "").trim();
   if (text) parts.push(text);
 
   if (downloadedImagePath) {
