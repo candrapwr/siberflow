@@ -530,8 +530,8 @@ class BotRunner {
     input: string,
     workdir: string,
   ): Promise<string> {
-    const replyImage = await this.downloadMessageImage(message.reply_to_message, workdir);
-    const directImage = await this.downloadMessageImage(message, workdir);
+    const replyImage = await this.downloadMessageFile(message.reply_to_message, workdir);
+    const directImage = await this.downloadMessageFile(message, workdir);
     // Diagnostic: log what Telegram actually sent for the reply/quote fields.
     // Enabled only with SIBERFLOW_DEBUG=true. Helps diagnose group privacy-mode
     // cases where reply_to_message is present but its text is empty/stripped —
@@ -539,7 +539,7 @@ class BotRunner {
     if (isDebug()) {
       const replied = message.reply_to_message;
       const rawText = replied ? (replied.text ?? replied.caption ?? "").trim() : "";
-      // Mirror the actual resolution logic used by withTelegramImageContext:
+      // Mirror the actual resolution logic used by withTelegramMessageContext:
       // plain text → rich_message blocks → quote. The "resolved" preview is the
       // ground truth of WHAT THE MODEL WILL SEE for the replied content.
       let resolvedText = rawText;
@@ -589,40 +589,39 @@ class BotRunner {
         debug(`[reply] raw reply_to_message keys=${raw}`);
       }
     }
-    return withTelegramImageContext(message, input, {
-      replyImagePath: replyImage,
-      directImagePath: directImage,
+    return withTelegramMessageContext(message, input, {
+      replyFilePath: replyImage,
+      directFilePath: directImage,
     });
   }
 
-  private async downloadMessageImage(
+  /**
+   * Download ANY media attachment from a Telegram message to the session
+   * workdir, not just images. Handles photo, document (any mime), video,
+   * audio, voice, animation (GIF), and sticker. Returns the local file path on
+   * success, or undefined if the message has no downloadable media / the
+   * download failed (e.g. file > 20MB getFile limit). All downloads land in
+   * `{workdir}/_telegram/` so the project dir stays organized.
+   */
+  private async downloadMessageFile(
     message: TelegramMessage | undefined,
     workdir: string,
   ): Promise<string | undefined> {
     if (!message) return undefined;
 
-    let fileId: string | undefined;
-    let originalName = "telegram-image";
-    if (message.photo?.length) {
-      const largest = message.photo[message.photo.length - 1]!;
-      fileId = largest.file_id;
-      originalName = `photo-${message.message_id}.jpg`;
-    } else if (message.document?.mime_type?.startsWith("image/")) {
-      fileId = message.document.file_id;
-      originalName = message.document.file_name ?? `image-${message.message_id}`;
-    }
-    if (!fileId) return undefined;
+    const resolved = resolveMediaFile(message);
+    if (!resolved) return undefined;
 
     try {
-      const data = await this.api.downloadFile(fileId);
+      const data = await this.api.downloadFile(resolved.fileId);
       const dir = join(workdir, "_telegram");
       await mkdir(dir, { recursive: true });
-      const safeName = sanitizeLocalFileName(originalName, message.message_id);
+      const safeName = sanitizeLocalFileName(resolved.name, message.message_id);
       const path = join(dir, safeName);
       await writeFile(path, data);
       return path;
     } catch (err) {
-      console.error(`Telegram image download error: ${(err as Error).message}`);
+      console.error(`Telegram file download error: ${(err as Error).message}`);
       return undefined;
     }
   }
@@ -1810,15 +1809,15 @@ function normalizeInput(text: string): string {
   return stripCommand(trimmed) ?? trimmed;
 }
 
-interface TelegramImageContext {
-  replyImagePath?: string;
-  directImagePath?: string;
+interface TelegramMessageContext {
+  replyFilePath?: string;
+  directFilePath?: string;
 }
 
-function withTelegramImageContext(
+function withTelegramMessageContext(
   message: TelegramMessage,
   input: string,
-  images: TelegramImageContext,
+  files: TelegramMessageContext,
 ): string {
   const trimmedInput = input.trim();
   if (!trimmedInput) return "";
@@ -1870,7 +1869,7 @@ function withTelegramImageContext(
       // Full replied message available — richest context (text + media).
       // Pass the already-resolved repliedText so describeRepliedMessage does
       // NOT re-read the empty message.text field for rich bot messages.
-      return describeRepliedMessage(replied, images.replyImagePath, repliedText);
+      return describeRepliedMessage(replied, files.replyFilePath, repliedText);
     }
     // Fall back to whatever fragments Telegram gave us: the selected quote
     // text, and/or external_reply media metadata.
@@ -1884,7 +1883,7 @@ function withTelegramImageContext(
     return parts.filter((p) => p.trim()).join("\n\n");
   })();
 
-  const directContext = describeDirectMessageImage(message, images.directImagePath);
+  const directContext = describeDirectAttachment(message, files.directFilePath);
   if (!repliedContext && !directContext) return trimmedInput;
 
   const blocks: string[] = [];
@@ -1937,15 +1936,72 @@ function withTelegramImageContext(
   return blocks.join("\n\n");
 }
 
-function describeDirectMessageImage(
+/**
+ * Build the context block for a file attached to the user's CURRENT message
+ * (not a reply — that's handled separately). Covers ALL media types: photo,
+ * document, video, audio, voice, animation, sticker. Returns "" when the
+ * message has no attachment. When there is one, the block includes the local
+ * file path (so the model can read/process it with file tools), metadata
+ * (name, mime, size), and the caption the user typed alongside the file.
+ */
+function describeDirectAttachment(
   message: TelegramMessage,
-  downloadedImagePath?: string,
+  downloadedFilePath?: string,
 ): string {
-  if (!message.photo?.length && !message.document?.mime_type?.startsWith("image/")) {
+  if (
+    !message.photo?.length &&
+    !message.document &&
+    !message.sticker &&
+    !message.animation &&
+    !message.video &&
+    !message.voice &&
+    !message.audio
+  ) {
     return "";
   }
-  return describeRepliedMessage(message, downloadedImagePath)
-    .replaceAll("Replied message contains", "Current message contains");
+  const lines: string[] = [
+    "# Telegram current message attachment",
+    "The user's current message includes an attached file. Use the local file path to read/process it.",
+  ];
+  // Media type + metadata.
+  if (message.photo?.length) {
+    const largest = message.photo[message.photo.length - 1]!;
+    lines.push(`- Type: photo (${largest.width}x${largest.height}${formatBytes(largest.file_size)})`);
+  }
+  if (message.document) {
+    lines.push(`- Type: document${message.document.mime_type ? ` (${message.document.mime_type})` : ""}`);
+    if (message.document.file_name) lines.push(`- File name: ${message.document.file_name}`);
+    if (message.document.file_size) lines.push(`- Size: ${message.document.file_size} bytes`);
+  }
+  if (message.sticker) {
+    lines.push(`- Type: sticker${message.sticker.emoji ? ` (${message.sticker.emoji})` : ""}`);
+  }
+  if (message.animation) {
+    lines.push(`- Type: animation/GIF${message.animation.file_name ? ` (${message.animation.file_name})` : ""}${formatBytes(message.animation.file_size)}`);
+  }
+  if (message.video) {
+    lines.push(`- Type: video${message.video.file_name ? ` (${message.video.file_name})` : ""}${formatBytes(message.video.file_size)}`);
+  }
+  if (message.voice) {
+    lines.push(`- Type: voice message${message.voice.duration ? `, duration ${message.voice.duration}s` : ""}${formatBytes(message.voice.file_size)}`);
+  }
+  if (message.audio) {
+    lines.push(`- Type: audio${message.audio.title ? ` (${message.audio.title})` : ""}${formatBytes(message.audio.file_size)}`);
+  }
+  // Caption = the user's instruction tied to this file.
+  const caption = (message.caption ?? "").trim();
+  if (caption) {
+    lines.push(`- Caption (user's instruction with this file): ${caption}`);
+  }
+  // Local file path — the actionable piece for tools (analyze_image, pdf_script, etc.).
+  if (downloadedFilePath) {
+    lines.push(`- Local file path: ${downloadedFilePath}`);
+  } else {
+    // Download failed (likely > 20MB getFile limit). Tell the model so it can
+    // explain the limitation instead of pretending the file is available.
+    lines.push("- Local file path: (unavailable — file may exceed the 20MB download limit)");
+  }
+  return lines.join("\n");
 }
 
 function describeExternalReply(reply: TelegramExternalReplyInfo): string {
@@ -1967,7 +2023,7 @@ function describeRepliedMessage(
   message: TelegramMessage,
   downloadedImagePath?: string,
   /** Pre-resolved text for the replied message. The caller
-   * (withTelegramImageContext) already resolves text → rich_message.blocks →
+   * (withTelegramMessageContext) already resolves text → rich_message.blocks →
    * quote in priority order. If supplied and non-empty, we use it INSTEAD of
    * re-reading message.text, because message.text is EMPTY for the bot's own
    * rich messages (the content lives in rich_message.blocks, which the caller
@@ -2034,6 +2090,58 @@ function formatBytes(bytes: number | undefined): string {
   return typeof bytes === "number" ? `, ${bytes} bytes` : "";
 }
 
+/**
+ * Resolve the downloadable media (file_id + suggested name) from a Telegram
+ * message, for ANY attachment type — photo, document, video, audio, voice,
+ * animation, sticker. Returns undefined when the message has no downloadable
+ * media. The suggested name keeps the original extension when available so the
+ * model can pick the right tool (pdf_script for .pdf, excel_script for .xlsx,
+ * analyze_image for images, etc.).
+ */
+function resolveMediaFile(message: TelegramMessage): { fileId: string; name: string } | undefined {
+  if (message.photo?.length) {
+    const largest = message.photo[message.photo.length - 1]!;
+    return { fileId: largest.file_id, name: `photo-${message.message_id}.jpg` };
+  }
+  if (message.document) {
+    return {
+      fileId: message.document.file_id,
+      name: message.document.file_name ?? `document-${message.message_id}`,
+    };
+  }
+  if (message.video) {
+    const ext = message.video.file_name && /\.(mp4|mov|avi|mkv|webm)$/i.test(message.video.file_name)
+      ? ""
+      : ".mp4";
+    return {
+      fileId: message.video.file_id,
+      name: message.video.file_name ?? `video-${message.message_id}${ext}`,
+    };
+  }
+  if (message.audio) {
+    const ext = message.audio.file_name && /\.(mp3|m4a|ogg|wav|flac)$/i.test(message.audio.file_name)
+      ? ""
+      : ".mp3";
+    return {
+      fileId: message.audio.file_id,
+      name: message.audio.file_name ?? `audio-${message.message_id}${ext}`,
+    };
+  }
+  if (message.voice) {
+    return { fileId: message.voice.file_id, name: `voice-${message.message_id}.ogg` };
+  }
+  if (message.animation) {
+    return { fileId: message.animation.file_id, name: `animation-${message.message_id}.gif` };
+  }
+  if (message.sticker) {
+    // Static stickers are .webp; animated stickers are .tgs (Lottie). We can't
+    // tell from the update which kind it is, so default to .webp — the model
+    // gets the file and the metadata block notes it is a sticker.
+    return { fileId: message.sticker.file_id, name: `sticker-${message.message_id}.webp` };
+  }
+  return undefined;
+}
+
 function sanitizeLocalFileName(name: string, fallbackId: number): string {
   const ext = extname(name).toLowerCase() || ".jpg";
   const stem = name
@@ -2042,7 +2150,7 @@ function sanitizeLocalFileName(name: string, fallbackId: number): string {
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
-  return `${stem || `telegram-image-${fallbackId}`}${ext}`;
+  return `${stem || `telegram-file-${fallbackId}`}${ext}`;
 }
 
 function stripCommand(text: string): string | null {

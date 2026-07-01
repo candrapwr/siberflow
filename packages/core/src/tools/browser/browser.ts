@@ -5,7 +5,11 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import type { Tool, ToolContext } from "../base.js";
-import { assertNoShellLikeScriptAccess } from "../script-safety.js";
+import {
+  assertNoLocalBrowserUrl,
+  assertNoLocalUrlInScript,
+  assertNoShellLikeScriptAccess,
+} from "../script-safety.js";
 
 interface Args {
   script: string;
@@ -229,6 +233,26 @@ parent.on("message", async (msg) => {
     assertNoShellLikeScriptAccess(String(script || ""));
     browser = await launchBrowser();
     const page = await browser.newPage();
+
+    // DEFENSE-IN-DEPTH: block any local scheme navigation at the network layer,
+    // even if the script bypasses the regex safety check. file://, chrome://,
+    // about:, devtools:// let the browser read/write HOST files outside the
+    // project sandbox — this was a full-server compromise vector. We abort
+    // every request whose URL does NOT start with http(s)://, ws(s)://, data:,
+    // or blob: — those four are the only schemes needed for legitimate web
+    // automation (pages, AJAX, WebSockets, in-page blobs/data). Everything
+    // else (file://, chrome://, about:, devtools:, view-source:, ...) is
+    // rejected because it exposes the host filesystem or browser internals.
+    await page.setRequestInterception(true);
+    page.on("request", (req) => {
+      const u = req.url();
+      if (/^(https?|wss?):\/\//i.test(u) || /^(data|blob):/i.test(u)) {
+        req.continue();
+      } else {
+        req.abort("accessdenied");
+      }
+    });
+
     if (url && typeof url === "string" && url.length > 0) {
       await page.goto(url, { waitUntil: "networkidle2", timeout: timeoutMs || 30000 });
     }
@@ -327,11 +351,16 @@ function parseArgs(args: unknown): Args {
     throw new Error("`script` is required and must be a non-empty string");
   }
   assertNoShellLikeScriptAccess(script, "run_browser");
+  // Block local browser URL schemes (file://, chrome://, about:, ...) that
+  // would let the script read/write host files outside the project sandbox.
+  // This is the primary guard; the script body is also scanned below.
+  assertNoLocalUrlInScript(script, "run_browser");
   let url: string | undefined;
   if (input.url !== undefined) {
     if (typeof input.url !== "string" || input.url.trim() === "") {
       throw new Error("`url` must be a non-empty string when provided");
     }
+    assertNoLocalBrowserUrl(input.url, "run_browser");
     url = input.url;
   }
   let timeoutMs: number | undefined;
