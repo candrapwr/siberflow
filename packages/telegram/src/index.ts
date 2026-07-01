@@ -6,6 +6,7 @@ import { marked } from "marked";
 import {
   Agent,
   buildSystemPrompt,
+  cliTools,
   createDefaultRegistry,
   createProvider,
   deleteSession,
@@ -164,6 +165,10 @@ interface AppConfig {
   maxIterations: number;
   autoContinue: boolean;
   contextOptimize: ReturnType<typeof loadConfigFromEnv>["contextOptimize"];
+  /** Telegram user IDs allowed to use the shell (exec) tool in private chats. */
+  adminUserIds: Set<number>;
+  /** Telegram usernames (lowercase, no @) allowed to use exec in private chats. */
+  adminUsernames: Set<string>;
 }
 
 const DRAFT_MIN_INTERVAL_MS = 900;
@@ -229,6 +234,8 @@ function loadAppConfig(): AppConfig {
     interaction: false,
   });
 
+  const { adminUserIds, adminUsernames } = resolveTelegramAdmins();
+
   return {
     telegramToken,
     telegramApiBase:
@@ -246,7 +253,39 @@ function loadAppConfig(): AppConfig {
     maxIterations: coreConfig.maxIterations,
     autoContinue: coreConfig.autoContinue,
     contextOptimize: coreConfig.contextOptimize,
+    adminUserIds,
+    adminUsernames,
   };
+}
+
+/**
+ * Parse SIBERFLOW_TELEGRAM_ADMINS into two sets: numeric user IDs and
+ * usernames (lowercase, without @). Both formats are accepted in a single
+ * comma-separated list, e.g. "123456789,@candrapwr,arievengeance". User IDs
+ * are the most reliable identifier (usernames can change or be freed); we keep
+ * usernames too as a convenience. An admin gets shell (exec) access in private
+ * chats only — see BotRunner.isAdmin / getRuntime.
+ */
+function resolveTelegramAdmins(
+  env: NodeJS.ProcessEnv = process.env,
+): { adminUserIds: Set<number>; adminUsernames: Set<string> } {
+  const adminUserIds = new Set<number>();
+  const adminUsernames = new Set<string>();
+  const raw = env.SIBERFLOW_TELEGRAM_ADMINS;
+  if (!raw) return { adminUserIds, adminUsernames };
+  for (const entry of raw.split(",")) {
+    const trimmed = entry.trim();
+    if (!trimmed) continue;
+    // Pure number → treat as a Telegram user ID.
+    if (/^\d+$/.test(trimmed)) {
+      adminUserIds.add(Number.parseInt(trimmed, 10));
+      continue;
+    }
+    // Otherwise treat as a username: strip a leading @ and lowercase.
+    const username = trimmed.replace(/^@/, "").toLowerCase();
+    if (username) adminUsernames.add(username);
+  }
+  return { adminUserIds, adminUsernames };
 }
 
 function withTelegramProviderEnv(
@@ -355,6 +394,43 @@ class BotRunner {
     private readonly config: AppConfig,
   ) {}
 
+  /**
+   * Whether a Telegram user is a configured bot admin (by numeric user id or
+   * by username). Admins get shell (exec) access in PRIVATE chats only — see
+   * getRuntime, which builds a separate registry with exec enabled for a
+   * private admin session. Username matching is case-insensitive and ignores a
+   * leading @. User IDs are preferred since usernames can change.
+   */
+  private isAdmin(user: TelegramUser | undefined): boolean {
+    if (!user) return false;
+    if (this.config.adminUserIds.has(user.id)) return true;
+    if (user.username && this.config.adminUsernames.has(user.username.toLowerCase())) {
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Build a per-session registry for an admin private chat: same tools as the
+   * default registry PLUS the shell (exec) tool. This is created once per
+   * admin private session and cached alongside the Agent in the sessions map.
+   * Exec runs with the host shell (full server access) — appropriate for a
+   * trusted admin managing the server, and only reachable in private chat.
+   */
+  private createAdminRegistry(): ToolRegistry {
+    const registry = createDefaultRegistry({
+      enabledTools: resolveTelegramTools(),
+      tasks: false,
+      interaction: false,
+    });
+    // Register every CLI tool (currently just execTool). These names never
+    // collide with the default registry because Telegram strips exec by default.
+    for (const tool of cliTools) {
+      if (!registry.get(tool.name)) registry.register(tool);
+    }
+    return registry;
+  }
+
   async run(): Promise<void> {
     const me = await this.api.getMe();
     this.botId = me.id;
@@ -364,6 +440,12 @@ class BotRunner {
     );
     console.log(`Workdir root: ${this.config.workdirRoot}`);
     console.log(`Enabled tools: ${this.config.registry.list().map((t) => t.name).join(", ")}`);
+    const adminCount = this.config.adminUserIds.size + this.config.adminUsernames.size;
+    if (adminCount > 0) {
+      console.log(
+        `Admin shell access enabled for ${adminCount} admin(s) in private chats (exec tool).`,
+      );
+    }
 
     for (;;) {
       try {
@@ -658,15 +740,22 @@ class BotRunner {
     session.provider = this.config.provider.name;
     session.model = this.config.model;
 
+    // Admin private chats get a per-session registry that includes the shell
+    // (exec) tool for server administration. Every other chat (groups, and
+    // private chats with non-admins) uses the shared default registry without
+    // exec. This keeps shell access out of shared group sessions entirely.
+    const adminPrivate = message.chat.type === "private" && this.isAdmin(message.from);
+    const registry = adminPrivate ? this.createAdminRegistry() : this.config.registry;
+
     const systemPrompt =
       buildSystemPrompt({
         interface: "telegram",
-        enabledToolNames: this.config.registry.list().map((t) => t.name),
-      }) + telegramSystemContext(message, workdir);
+        enabledToolNames: registry.list().map((t) => t.name),
+      }) + telegramSystemContext(message, workdir, adminPrivate);
 
     const agent = new Agent({
       provider: this.config.provider,
-      registry: this.config.registry,
+      registry,
       model: this.config.model,
       projectDir: workdir,
       systemPrompt,
@@ -1745,7 +1834,11 @@ function previewValue(value: unknown): string {
   return String(value);
 }
 
-function telegramSystemContext(message: TelegramMessage, workdir: string): string {
+function telegramSystemContext(
+  message: TelegramMessage,
+  workdir: string,
+  adminShell = false,
+): string {
   const chat = message.chat;
   const lines = [
     "",
@@ -1771,11 +1864,23 @@ function telegramSystemContext(message: TelegramMessage, workdir: string): strin
     "# Telegram hard tool safety rules",
     "These rules override any previous behavior or examples.",
     "When using any tool in Telegram, never access, read, write, list, upload, send, or reference files outside the session workdir above.",
-    "Do not use shell access in Telegram. Do not call exec or ask for shell commands. If shell access was used in any previous Telegram turn, treat that as a mistake and do not repeat it.",
-    "If a requested action requires files outside the session workdir or shell access, refuse that part and explain that Telegram tools are limited to the session workdir.",
-    "When using bot_script, operate only in this current Telegram chat/thread and current session workdir.",
-    "Do not invent Telegram chat IDs; use bot.chat for the active chat metadata.",
   );
+  if (adminShell) {
+    // Admin private chat: shell (exec) is intentionally enabled for server
+    // administration. The no-shell rule below does NOT apply to this session.
+    lines.push(
+      "EXCEPTION (admin session): you are operating in a PRIVATE chat with a configured admin. The exec (shell) tool IS available and is intended for server administration — you may run shell commands anywhere on the host (full access). Other file tools still respect the workdir sandbox above.",
+      "When using bot_script, operate only in this current Telegram chat/thread and current session workdir.",
+      "Do not invent Telegram chat IDs; use bot.chat for the active chat metadata.",
+    );
+  } else {
+    lines.push(
+      "Do not use shell access in Telegram. Do not call exec or ask for shell commands. If shell access was used in any previous Telegram turn, treat that as a mistake and do not repeat it.",
+      "If a requested action requires files outside the session workdir or shell access, refuse that part and explain that Telegram tools are limited to the session workdir.",
+      "When using bot_script, operate only in this current Telegram chat/thread and current session workdir.",
+      "Do not invent Telegram chat IDs; use bot.chat for the active chat metadata.",
+    );
+  }
   return lines.join("\n");
 }
 
