@@ -439,6 +439,9 @@ class BotRunner {
       `Siberflow Telegram bot started as @${me.username ?? me.first_name}.`,
     );
     console.log(`Workdir root: ${this.config.workdirRoot}`);
+    console.log(
+      `SIBERFLOW_TELEGRAM_TOOLS env (raw): ${JSON.stringify(process.env.SIBERFLOW_TELEGRAM_TOOLS)}`,
+    );
     console.log(`Enabled tools: ${this.config.registry.list().map((t) => t.name).join(", ")}`);
     const adminCount = this.config.adminUserIds.size + this.config.adminUsernames.size;
     if (adminCount > 0) {
