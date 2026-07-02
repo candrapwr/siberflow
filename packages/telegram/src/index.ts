@@ -1897,12 +1897,60 @@ function withSystemPrompt(
   return [{ role: "system", content: systemPrompt }, ...next];
 }
 
+/**
+ * Human-readable, tool-specific status shown in the group status message /
+ * private draft while a tool runs. Each tool gets a phrase describing what it
+ * is doing so the user has a clear, non-generic idea of progress. Falls back to
+ * a generic line for tools without a dedicated entry.
+ */
 function toolStatusText(name: string): string {
   switch (name) {
+    // File operations
+    case "read_file":
+      return "📄 Membaca file...";
+    case "write_file":
+      return "✍️ Menulis file...";
+    case "edit_file":
+      return "✏️ Mengedit file...";
+    case "copy_file":
+      return "📋 Menyalin file...";
+    case "list_dir":
+      return "📂 Melihat isi folder...";
+    // Shell
+    case "exec":
+      return "⚙️ Menjalankan perintah shell...";
+    // Database
+    case "db_query":
+      return "🗄️ Mengakses database...";
+    // SSH
+    case "ssh_exec":
+      return "🔌 Menjalankan perintah di server remote...";
+    case "sftp":
+      return "📡 Transfer file via SFTP...";
+    // Documents
+    case "excel_script":
+      return "📊 Memproses file Excel...";
+    case "docx_script":
+      return "📝 Memproses dokumen Word...";
+    case "pdf_script":
+      return "📕 Memproses dokumen PDF...";
+    // Browser
     case "run_browser":
-      return "⏳ Mencari info...";
+      return "🌐 Membuka halaman web...";
+    // Image
+    case "analyze_image":
+      return "🔍 Menganalisis gambar...";
+    // Web search
+    case "web_search":
+      return "🔎 Mencari di web...";
+    // Bot
     case "bot_script":
-      return "⏳ Menjalankan aksi Telegram...";
+      return "📨 Menjalankan aksi Telegram...";
+    // Interaction / task
+    case "ask_user":
+      return "❓ Menunggu jawaban Anda...";
+    case "task_update":
+      return "✅ Memperbarui daftar tugas...";
     default:
       return "⏳ Memproses...";
   }

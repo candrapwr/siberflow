@@ -3,7 +3,8 @@
 
 import { app, BrowserWindow, shell } from "electron";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { registerIpc, getMainWindow, setMainWindow } from "./ipc.js";
 
 // Override the app name so the OS (dock/menubar/taskbar) shows "Siberflow"
@@ -11,8 +12,14 @@ import { registerIpc, getMainWindow, setMainWindow } from "./ipc.js";
 // literally named Electron.
 app.setName("Siberflow");
 
-// ESM-friendly: __dirname is available in Electron main when bundled.
-// In production, __dirname is out/main, so out/ is one level up.
+// ESM-safe directory resolution. `__dirname` is a CommonJS global and is NOT
+// defined when the main process is bundled/run as an ES module (which happens
+// here because packages/desktop/package.json has "type": "module"). The
+// portable replacement is import.meta.url → fileURLToPath → dirname. This
+// works in both dev (tsx/electron-vite) and production (packaged app), and
+// resolves to out/main in production so out/ is one level up.
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 const OUT_DIR = join(__dirname, "..");
 
 /** Resolve the app icon. Uses .icns on mac, .ico on win, .png otherwise. */
