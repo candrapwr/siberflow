@@ -201,7 +201,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         await this.runCommand(msg.command);
         break;
       case "save_settings":
-        await this.saveSettings(msg.values, msg.apiKey, msg.multimodalApiKey);
+        await this.saveSettings(msg.values, msg.apiKey, msg.multimodalApiKey, msg.exaApiKey);
         break;
       case "pick_doc_files":
         await this.pickDocFiles();
@@ -291,6 +291,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (this.settings.debug) process.env.SIBERFLOW_DEBUG = "true";
     else delete process.env.SIBERFLOW_DEBUG;
     await this.applyMultimodalEnv();
+    await this.applyExaEnv();
 
     if (!this.apiKey) {
       await this.openSettings(true);
@@ -306,11 +307,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.settings = readSettings();
     this.apiKey = await this.loadApiKey(this.settings.provider);
     await this.applyMultimodalEnv();
+    await this.applyExaEnv();
     this.post({
       kind: "settings",
       values: this.settings,
       hasApiKey: !!this.apiKey,
       hasMultimodalApiKey: !!(await this.loadMultimodalApiKey()),
+      hasExaApiKey: !!(await this.loadExaApiKey()),
       mustConfigure,
     });
   }
@@ -319,6 +322,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     values: SettingsValues,
     apiKey: string | null,
     multimodalApiKey: string | null,
+    exaApiKey: string | null,
   ): Promise<void> {
     values = normalizeSettings(values);
     if (values.provider === "custom" && (!values.customProvider.baseUrl || !values.customProvider.defaultModel)) {
@@ -359,6 +363,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (values.debug) process.env.SIBERFLOW_DEBUG = "true";
     else delete process.env.SIBERFLOW_DEBUG;
     await this.applyMultimodalEnv(multimodalApiKey);
+    await this.applyExaEnv(exaApiKey);
 
     if (!this.apiKey) {
       this.readyForChat = false;
@@ -370,6 +375,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         values,
         hasApiKey: false,
         hasMultimodalApiKey: !!(await this.loadMultimodalApiKey()),
+        hasExaApiKey: !!(await this.loadExaApiKey()),
         mustConfigure: true,
       });
       this.post({ kind: "error", message: `API key for ${values.provider} required.` });
@@ -423,6 +429,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const key = await this.loadMultimodalApiKey();
     if (key) process.env.SIBERFLOW_MULTIMODAL_API_KEY = key;
     else delete process.env.SIBERFLOW_MULTIMODAL_API_KEY;
+  }
+
+  /**
+   * Web search (Exa) API key handling. The key gates whether the web_search
+   * tool can be enabled in the UI — the toggle is disabled until a key is
+   * stored, so the model never sees the tool without a usable credential.
+   */
+  private async loadExaApiKey(): Promise<string | null> {
+    const v = await this.ctx.secrets.get(exaSecretKey());
+    return v ?? null;
+  }
+
+  private async applyExaEnv(apiKeyInput: string | null = null): Promise<void> {
+    if (apiKeyInput !== null) {
+      if (apiKeyInput.length > 0) await this.ctx.secrets.store(exaSecretKey(), apiKeyInput);
+      else await this.ctx.secrets.delete(exaSecretKey());
+    }
+    const key = await this.loadExaApiKey();
+    if (key) process.env.SIBERFLOW_EXA_API_KEY = key;
+    else delete process.env.SIBERFLOW_EXA_API_KEY;
   }
 
   private rebuildAgent(): void {
@@ -1034,6 +1060,10 @@ function secretKeyFor(provider: ProviderName): string {
 
 function multimodalSecretKey(): string {
   return "siberflow.apiKey.multimodal";
+}
+
+function exaSecretKey(): string {
+  return "siberflow.apiKey.exa";
 }
 
 function normalizeSettings(values: SettingsValues): SettingsValues {
