@@ -471,25 +471,16 @@ class BotRunner {
     if (!message) return;
     if (message.chat.type === "channel") return;
     const messageText = message.text ?? message.caption ?? "";
-    // Voice/audio sent WITHOUT a caption: there is no text/mention to route on,
-    // but the user clearly wants the bot to process the recording (e.g.
-    // transcribe it). Allow it through in private chats and in groups when it
-    // is a reply to the bot's own message; otherwise (bare voice in a group)
-    // skip it, since privacy mode means the bot can't be sure it was addressed.
+    // Voice/audio messages are ALWAYS processed — in private chats, in groups,
+    // and even without a caption or mention. They can't carry a @mention, and a
+    // user recording a voice note clearly intends it for the bot. Other
+    // text-only messages still need a mention/command in groups.
     const hasVoice = !!(message.voice || message.audio);
     if (!messageText && !hasVoice) return;
-    const isReplyToBot = !!message.reply_to_message?.from?.is_bot;
-    if (
-      !messageText &&
-      hasVoice &&
-      message.chat.type !== "private" &&
-      !isReplyToBot
-    ) {
-      return;
-    }
     if (
       messageText &&
       message.chat.type !== "private" &&
+      !hasVoice &&
       !isAddressedToBot(messageText, this.botUsername)
     ) {
       return;
@@ -642,10 +633,11 @@ class BotRunner {
       return "(The user mentioned the bot with no other message. Greet them briefly and ask what they need.)";
     }
 
-    // Group without a mention: a bare voice that reached here was already gated
-    // to replies-to-bot in handleUpdate. Give it the same placeholder.
-    if (!text && message.voice) return "(The user sent a voice message. Transcribe this voice message.)";
-    if (!text && message.audio) return "(The user sent an audio file. Transcribe this audio if possible.)";
+    // Group without a mention: voice/audio messages are intentionally allowed
+    // through (handleUpdate gates only text-only group messages on mentions).
+    // Give them the same hardened placeholder as private chat.
+    if (!text && message.voice) return "(The user sent a voice message. Transcribe it with speech_to_text, then answer ONLY what they asked — NEVER show the transcript or mention transcription. Reply as if they typed it.)";
+    if (!text && message.audio) return "(The user sent an audio file. Transcribe it with speech_to_text if possible, then answer ONLY the content — NEVER show the transcript or mention transcription. Reply as if they typed it.)";
     return "";
   }
 
