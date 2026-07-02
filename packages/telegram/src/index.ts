@@ -499,6 +499,40 @@ class BotRunner {
     if (!message) return;
     if (message.chat.type === "channel") return;
     const messageText = message.text ?? message.caption ?? "";
+
+    // Record this user into the group's member roster BEFORE any routing gates.
+    // We want every user who chats in the group to appear in the knownMembers
+    // roster — even if their message doesn't address the bot (no mention). This
+    // means we must load the session early just to update the roster, but only
+    // for group/supergroup chats (private chats don't need a roster).
+    if (
+      (message.chat.type === "group" || message.chat.type === "supergroup") &&
+      message.from &&
+      !message.from.is_bot
+    ) {
+      const sessId = sessionIdFor(message);
+      const cached = this.sessions.get(sessId);
+      if (cached) {
+        // Session already in memory — update roster directly.
+        const changed = this.rememberMember(cached, message.from, message.chat.type);
+        if (changed) {
+          cached.agent.loadHistory(
+            withSystemPrompt(cached.session.messages, this.buildSystemPromptFor(message, cached)),
+          );
+        }
+      } else {
+        // Session not yet loaded — load it just to record the member, then
+        // re-cache. This runs for every group message even when the bot isn't
+        // addressed, so the roster fills up naturally. getRuntime() later will
+        // find it cached and skip the heavy init.
+        try {
+          await this.getRuntime(message);
+        } catch {
+          // If session load fails, don't block message processing.
+        }
+      }
+    }
+
     // Voice/audio messages are ALWAYS processed — in private chats, in groups,
     // and even without a caption or mention. They can't carry a @mention, and a
     // user recording a voice note clearly intends it for the bot. Other
