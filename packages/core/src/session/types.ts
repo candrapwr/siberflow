@@ -23,6 +23,13 @@ export interface Session {
   usage: SessionUsage;
   /** Task checklist (present when task tracking is/was used). */
   tasks?: Task[];
+  /**
+   * Known chat members for group/supergroup Telegram sessions. Maps Telegram
+   * user id → username (lowercase, without @). Built incrementally as members
+   * send messages; persisted so it survives bot restarts alongside the chat
+   * history. Absent/empty in private chats and sessions that predate the feature.
+   */
+  knownMembers?: Record<string, string>;
 }
 
 export interface SessionSummary {

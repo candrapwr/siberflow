@@ -147,6 +147,14 @@ interface RuntimeSession {
   agent: Agent;
   session: Session;
   pendingUsage?: UsageStats;
+  /**
+   * Map of Telegram user id → username (lowercase, without @) for users who
+   * have chatted in this group session. Used to populate the system prompt
+   * with the known member roster so the model can address/mention people by
+   * name. In private chats this is effectively just the one user. Deduped by
+   * user id — a re-seen id just refreshes its username.
+   */
+  knownMembers: Map<number, string>;
 }
 
 interface BotScriptState {
@@ -429,6 +437,26 @@ class BotRunner {
       if (!registry.get(tool.name)) registry.register(tool);
     }
     return registry;
+  }
+
+  /**
+   * Record a group member (id → username) into the session's knownMembers map.
+   * Deduped by id: re-seeing the same id just refreshes the stored username.
+   * Returns true if the roster CHANGED (new member or updated username), so the
+   * caller can decide whether to re-inject the system prompt with the new roster.
+   * In private chats this is a no-op (roster isn't useful — it's just the one user).
+   */
+  private rememberMember(
+    runtime: RuntimeSession,
+    user: TelegramUser | undefined,
+    chatType: string,
+  ): boolean {
+    if (!user || chatType === "private") return false;
+    const username = user.username?.toLowerCase().trim();
+    const existing = runtime.knownMembers.get(user.id);
+    if (existing === username) return false; // unchanged
+    runtime.knownMembers.set(user.id, username ?? "");
+    return true; // roster changed
   }
 
   async run(): Promise<void> {
@@ -745,7 +773,17 @@ class BotRunner {
   private async getRuntime(message: TelegramMessage): Promise<RuntimeSession> {
     const id = sessionIdFor(message);
     const cached = this.sessions.get(id);
-    if (cached) return cached;
+    if (cached) {
+      // Record the current sender into the roster. If the roster changed, we
+      // must re-inject the system prompt so the model sees the new member list.
+      const changed = this.rememberMember(cached, message.from, message.chat.type);
+      if (changed) {
+        cached.agent.loadHistory(
+          withSystemPrompt(cached.session.messages, this.buildSystemPromptFor(message, cached)),
+        );
+      }
+      return cached;
+    }
 
     const loaded = await loadSession(id);
     const now = new Date().toISOString();
@@ -781,12 +819,19 @@ class BotRunner {
     const adminPrivate = message.chat.type === "private" && this.isAdmin(message.from);
     const registry = adminPrivate ? this.createAdminRegistry() : this.config.registry;
 
-    const systemPrompt =
-      buildSystemPrompt({
-        interface: "telegram",
-        enabledToolNames: registry.list().map((t) => t.name),
-      }) + telegramSystemContext(message, workdir, adminPrivate);
+    const runtime: RuntimeSession = {
+      agent: undefined as unknown as Agent,
+      session,
+      // Rehydrate the persisted roster (Record<idStr, username>) back into a
+      // Map<number, string> for in-memory use. Old sessions without the field
+      // start empty and fill as members chat.
+      knownMembers: new Map(
+        Object.entries(session.knownMembers ?? {}).map(([k, v]) => [Number(k), v]),
+      ),
+    };
+    this.rememberMember(runtime, message.from, message.chat.type);
 
+    const systemPrompt = this.buildSystemPromptFor(message, runtime, registry, adminPrivate);
     const agent = new Agent({
       provider: this.config.provider,
       registry,
@@ -801,10 +846,28 @@ class BotRunner {
       botScript: this.createBotScriptHost(),
     });
     agent.loadHistory(withSystemPrompt(session.messages, systemPrompt));
+    runtime.agent = agent;
 
-    const runtime: RuntimeSession = { agent, session };
     this.sessions.set(id, runtime);
     return runtime;
+  }
+
+  /**
+   * Build the per-session system prompt, including the known-member roster for
+   * group/supergroup chats. The roster lets the model address people by name
+   * (e.g. via bot_script cross-chat send) and understand who participates.
+   */
+  private buildSystemPromptFor(
+    message: TelegramMessage,
+    runtime: RuntimeSession,
+    registry: ToolRegistry = this.config.registry,
+    adminPrivate = false,
+  ): string {
+    const base = buildSystemPrompt({
+      interface: "telegram",
+      enabledToolNames: registry.list().map((t) => t.name),
+    });
+    return base + telegramSystemContext(message, runtime.session.projectDir, adminPrivate, runtime.knownMembers);
   }
 
   private async resetSession(message: TelegramMessage): Promise<void> {
@@ -1081,6 +1144,15 @@ class BotRunner {
     }
     runtime.session.messages = [...runtime.agent.history()];
     runtime.session.updatedAt = new Date().toISOString();
+    // Persist the known-member roster so it survives bot restarts alongside
+    // the chat history. Map → plain object (id-as-string keys for JSON).
+    if (runtime.knownMembers.size > 0) {
+      const obj: Record<string, string> = {};
+      for (const [uid, uname] of runtime.knownMembers) obj[String(uid)] = uname;
+      runtime.session.knownMembers = obj;
+    } else {
+      delete runtime.session.knownMembers;
+    }
     await saveSession(runtime.session);
     if (this.config.contextOptimize.enabled) {
       const { messages: optimized } = optimizeContext(
@@ -1872,6 +1944,7 @@ function telegramSystemContext(
   message: TelegramMessage,
   workdir: string,
   adminShell = false,
+  knownMembers?: Map<number, string>,
 ): string {
   const chat = message.chat;
   const lines = [
@@ -1892,6 +1965,14 @@ function telegramSystemContext(
       `Current user ID: ${message.from.id}`,
       `Current user name: ${message.from.username ? `@${message.from.username}` : message.from.first_name}`,
     );
+  }
+  // Known member roster for group/supergroup chats. Lets the model address
+  // people by name/id (e.g. for cross-chat bot_script sends). Deduped by id.
+  if (knownMembers && knownMembers.size > 0 && chat.type !== "private") {
+    const roster = [...knownMembers.entries()]
+      .map(([uid, uname]) => (uname ? `${uid} (@${uname})` : `${uid}`))
+      .join(", ");
+    lines.push(`Known members (${knownMembers.size}): ${roster}`);
   }
   lines.push(
     "",
