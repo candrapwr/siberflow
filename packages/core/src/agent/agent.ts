@@ -13,22 +13,30 @@ import type {
   AssistantMessage,
   FinishReason,
   Message,
+  ToolCall,
   ToolResultMessage,
   UsageStats,
 } from "./types.js";
 
 const MAX_AUTO_CONTINUES = 4;
-/** Maximum number of consecutive run_browser calls allowed in a single turn
- * before the agent short-circuits further calls with a limit message. */
-const MAX_CONSECUTIVE_RUN_BROWSER = 8;
+/** Default maximum consecutive run_browser calls before the agent forces a
+ * final answer. Overridable via SIBERFLOW_MAX_CONSECUTIVE_RUN_BROWSER env. */
+const DEFAULT_MAX_CONSECUTIVE_RUN_BROWSER = 10;
 const CONTINUE_NUDGE =
   "Your previous message was cut off by the output length limit. Continue from exactly where you stopped — do not repeat anything you already wrote, and do not add a preamble.";
-/** Message returned as a tool result when run_browser exceeds the consecutive
- * call limit, telling the model to stop browsing and answer. */
-const RUN_BROWSER_LIMIT_MESSAGE =
-  `run_browser consecutive limit reached: you have called run_browser ${MAX_CONSECUTIVE_RUN_BROWSER} times in a row ` +
-  "without using any other tool in between. Stop the browsing loop now and give a final answer based on the information you have already gathered. " +
-  "If you truly need more browsing, mix in another tool call (e.g. read_file, task_update) between run_browser calls to reset the consecutive counter.";
+
+/**
+ * Resolve the run_browser consecutive-call cap from the environment, falling
+ * back to the built-in default. Reads at module load so changing it only needs
+ * a process restart. A value of 0 disables the cap entirely (no limit).
+ */
+const MAX_CONSECUTIVE_RUN_BROWSER = (() => {
+  const raw = process.env.SIBERFLOW_MAX_CONSECUTIVE_RUN_BROWSER;
+  if (raw === undefined) return DEFAULT_MAX_CONSECUTIVE_RUN_BROWSER;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_MAX_CONSECUTIVE_RUN_BROWSER;
+  return n;
+})();
 
 export interface AgentOptions {
   provider: Provider;
@@ -297,11 +305,27 @@ export class Agent {
           let result: string;
           if (call.name === "run_browser") {
             this.consecutiveRunBrowserCount++;
-            if (this.consecutiveRunBrowserCount > MAX_CONSECUTIVE_RUN_BROWSER) {
+            // A limit of 0 means disabled — never force a stop.
+            if (
+              MAX_CONSECUTIVE_RUN_BROWSER > 0 &&
+              this.consecutiveRunBrowserCount > MAX_CONSECUTIVE_RUN_BROWSER
+            ) {
               debug(
-                `⚠ run_browser consecutive limit hit (${this.consecutiveRunBrowserCount}/${MAX_CONSECUTIVE_RUN_BROWSER}) — short-circuiting with limit message`,
+                `⚠ run_browser consecutive limit hit (${this.consecutiveRunBrowserCount}/${MAX_CONSECUTIVE_RUN_BROWSER}) — forcing final answer`,
               );
-              result = RUN_BROWSER_LIMIT_MESSAGE;
+              // Do NOT execute the tool, and do NOT return the limit message as
+              // a normal tool result — the model previously treated it as
+              // browser data and kept calling run_browser past the cap. Instead
+              // we send ONE final LLM call that forbids any further tool calls
+              // and asks for a direct answer, then return that answer as the
+              // turn's final text (breaking out of the tool-call loop for good).
+              const stopAnswer = await this.forceFinalAnswer(requestMessages, toolSchemas, events, call);
+              this.messages.push(stopAnswer.assistant);
+              events.onAssistantEnd?.(stopAnswer.assistant, {
+                finishReason: stopAnswer.finishReason,
+                ...(stopAnswer.usage ? { usage: stopAnswer.usage } : {}),
+              });
+              return stopAnswer.assistant.content ?? "";
             } else {
               result = await this.registry.execute(
                 call.name,
@@ -406,6 +430,48 @@ export class Agent {
       throw new Error("Provider stream ended without a final message");
     }
     return { assistant, finishReason, ...(usage ? { usage } : {}) };
+  }
+
+  /**
+   * Force the model to produce a FINAL text answer with NO further tool calls,
+   * used when the run_browser consecutive limit is hit. We append the original
+   * (limited) tool call as a stub tool result, plus a hard-stop user nudge, and
+   * call the provider with an EMPTY tools array so the model physically cannot
+   * request any tool. Whatever it returns becomes the turn's final text.
+   */
+  private async forceFinalAnswer(
+    requestMessages: Message[],
+    _toolSchemas: ReturnType<typeof toSchema>[],
+    events: AgentEvents,
+    blockedCall: ToolCall,
+  ): Promise<{ assistant: AssistantMessage; finishReason: FinishReason; usage?: UsageStats }> {
+    const finalMessages: Message[] = [
+      ...requestMessages,
+      {
+        role: "assistant",
+        content: null,
+        toolCalls: [blockedCall],
+      },
+      {
+        role: "tool",
+        toolCallId: blockedCall.id,
+        name: blockedCall.name,
+        content:
+          `run_browser was NOT executed: you have reached the hard limit of ${MAX_CONSECUTIVE_RUN_BROWSER} consecutive calls. ` +
+          "No more browsing is allowed in this turn.",
+      },
+      {
+        role: "user",
+        content:
+          `You have hit the hard limit of ${MAX_CONSECUTIVE_RUN_BROWSER} consecutive run_browser calls in this turn. ` +
+          "Do NOT call run_browser (or any other tool) again. You are not allowed any more tool calls. " +
+          "Stop browsing immediately and write your FINAL answer to the user now, using only the information you have already gathered. " +
+          "If you cannot fully answer, say so plainly and summarize what you did find.",
+      },
+    ];
+    events.onAssistantStart?.();
+    const result = await this.runStream(finalMessages, [], events);
+    return result;
   }
 
   /**
