@@ -412,6 +412,28 @@ Tool scraping/interaksi halaman web via **headless Chrome/Edge menggunakan Puppe
 
 **Packaging VSCode (penting)**: `vsce` meng-ignore seluruh `node_modules/` walau di-whitelist di `.vscodeignore`. Karena ini monorepo (npm workspaces), `puppeteer-core` ter-hoist ke root. Solusinya: script `scripts/stage-puppeteer.mjs` (hook `prepackage`/`postpackage`) copy `puppeteer-core` dari root ke `vendor/puppeteer-core` sebelum `vsce package`, hapus setelahnya. `chat-panel.ts` arahkan env var ke `<extensionPath>/vendor/puppeteer-core`.
 
+### Web search tool (`web_search`)
+
+Tool search web + baca konten via **Exa API**. Satu tool, dua mode via parameter `mode`: `"search"` (POST `/search`, 10 hasil + highlights, FIXED) atau `"content"` (POST `/contents`, ambil teks URL, `maxCharacters` default 500 max 15000). Kategori `web` — terdaftar di bucket network-only (gak butuh workdir), default OFF (opt-in via `SIBERFLOW_TOOLS`/`SIBERFLOW_TELEGRAM_TOOLS`).
+
+**API key wajib**: `SIBERFLOW_EXA_API_KEY` (dari env). Tanpa key → tool return error string. Di Desktop/VS Code, key disimpan via safeStorage/SecretStorage dan toggle UI disabled sampai key diset. Baca di `execute` langsung dari `process.env` (pola sama dengan `analyze_image`/`SIBERFLOW_MULTIMODAL_API_KEY`), bukan via config. Implementasi di `tools/web/search.ts` — `fetch` dibungkus `AbortController` 60s, semua error distop ke string.
+
+### Speech tools (`text_to_speech`, `speech_to_text`)
+
+Tool text↔speech via **Python libraries** (bukan API berbayar). Kategori `speech` — bucket network-only (sebenarnya butuh workdir untuk I/O file, tapi di-register di bucket non-FS agar selalu tersedia). Default OFF.
+
+- **`text_to_speech`**: edge-tts (Microsoft Edge neural voices). Voice default `id-ID-ArdiNeural` (cowok Indonesia), fokus Indonesia. Output MP3 ke path di workdir.
+- **`speech_to_text`**: SpeechRecognition (Google Web Speech). Language default `id-ID`. Auto-convert non-WAV (`.ogg`, `.mp3`, `.m4a`) ke WAV 16kHz mono via `ffmpeg` sebelum recognition.
+
+**Cara kerja**: tool generate skrip Python ke temp file, `spawn("python3", ["-u", scriptPath])`, capture stdout+stderr, timeout 60s + force-kill SIGKILL setelah grace 5s. String argumen di-encode base64 di skrip (hindari shell-escaping issue). Implementasi di `tools/speech/voice.ts`, pattern spawn di-copy dari `cli/exec.ts`.
+
+**Prerequisite host (WAJIB, gak bundled)**:
+```bash
+pip install edge-tts SpeechRecognition
+sudo apt install ffmpeg   # untuk ogg→wav di speech_to_text
+```
+Kalau python3/library/ffmpeg kurang, **full error python dikembalikan ke AI** sebagai tool result (bukan throw) — AI bisa diagnose & jelaskan ke user. Tool ini TIDAK ada di TOGGLE_TOOLS UI Desktop/VSCode — enable via env saja (`SIBERFLOW_TOOLS`/`SIBERFLOW_TELEGRAM_TOOLS`).
+
 ### Per-tool toggle (`enabledTools`)
 
 Tool selain file ops default OFF untuk prompt ringan + blast-radius security kecil. Filter di `createDefaultRegistry({ enabledTools: Set<string> })`:

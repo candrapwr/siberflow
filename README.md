@@ -375,6 +375,53 @@ Enable it through settings or env, for example:
 SIBERFLOW_TELEGRAM_TOOLS=run_browser,analyze_image
 ```
 
+## Web Search Tool (`web_search`)
+
+`web_search` searches the web and reads page content via the Exa API. It has two modes: `search` (up to 10 results with highlights) and `content` (full text of one URL, up to `maxCharacters`). Prefer this over `run_browser` for read-only web research — it is faster and lighter.
+
+Requires an Exa API key. Set it via env, or in Desktop/VS Code settings (the toggle is disabled until a key is stored):
+
+```bash
+SIBERFLOW_EXA_API_KEY=...
+# Optional base URL override (defaults to https://api.exa.ai):
+# SIBERFLOW_EXA_BASE_URL=https://api.exa.ai
+```
+
+Enable through settings or env:
+
+```bash
+SIBERFLOW_TELEGRAM_TOOLS=run_browser,web_search
+```
+
+## Speech Tools (`text_to_speech`, `speech_to_text`)
+
+These tools convert text ↔ speech via Python libraries (no API key required):
+
+- **`text_to_speech`** - synthesizes an MP3 from text using `edge-tts` (Microsoft Edge neural voices). Voice defaults to `id-ID-ArdiNeural` (Indonesian male). Output is written to a path inside the project workdir.
+- **`speech_to_text`** - transcribes an audio file to text using `SpeechRecognition` (Google Web Speech). Recognition defaults to Indonesian (`id-ID`). Non-WAV files (`.ogg`, `.mp3`, `.m4a`, etc.) are automatically converted to 16 kHz mono WAV with `ffmpeg` before recognition.
+
+### Host prerequisites (required)
+
+These tools shell out to `python3`, so the host must have Python and the libraries installed. If anything is missing, the full Python error is returned to the model so it can explain the failure to the user.
+
+```bash
+# Python 3 + the libraries
+pip install edge-tts SpeechRecognition
+
+# ffmpeg (required by speech_to_text for ogg/mp3/m4a → wav conversion)
+sudo apt install ffmpeg          # Debian/Ubuntu
+# brew install ffmpeg            # macOS
+# choco install ffmpeg           # Windows
+```
+
+They are opt-in (off by default) and are not added to the Desktop/VS Code settings UI — enable them through env:
+
+```bash
+SIBERFLOW_TELEGRAM_TOOLS=run_browser,web_search,text_to_speech,speech_to_text
+# or for CLI:
+# SIBERFLOW_TOOLS=...,text_to_speech,speech_to_text
+```
+
 ## Bot Script Tool (`bot_script`)
 
 `bot_script` is an opt-in core tool backed by the active bot host. In Telegram it runs a JavaScript body inside a locked-down `node:vm` sandbox with a `bot` helper that exposes a curated slice of the Telegram Bot API. It does not include file manipulation helpers — enable `read_file`, `write_file`, `edit_file`, `copy_file`, or `list_dir` separately when the bot should work with files in its session workdir.
