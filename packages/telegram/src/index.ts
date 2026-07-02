@@ -631,7 +631,16 @@ class BotRunner {
     if (commandInput !== null) return commandInput;
 
     const mentionInput = stripBotMention(text, this.botUsername);
-    if (mentionInput !== null) return mentionInput;
+    // The message mentioned the bot. If there was accompanying text, use it.
+    // If the mention was the ONLY content (e.g. "@bot" by itself), stripBotMention
+    // returns "" — the user still addressed the bot, so don't drop the turn;
+    // fall through to the voice/media placeholder, or a generic greeting prompt.
+    if (mentionInput) return mentionInput;
+    if (mentionInput === "") {
+      if (message.voice) return "(The user sent a voice message. Transcribe this voice message.)";
+      if (message.audio) return "(The user sent an audio file. Transcribe this audio if possible.)";
+      return "(The user mentioned the bot with no other message. Greet them briefly and ask what they need.)";
+    }
 
     // Group without a mention: a bare voice that reached here was already gated
     // to replies-to-bot in handleUpdate. Give it the same placeholder.
