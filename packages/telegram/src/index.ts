@@ -622,8 +622,8 @@ class BotRunner {
       // processed (e.g. transcribed). Provide a minimal instruction so the
       // turn isn't dropped — the local file path is added later by
       // withReplyContext (downloadMessageFile + describeDirectAttachment).
-      if (message.voice) return "(The user sent a voice message. Transcribe it with speech_to_text, then RESPOND DIRECTLY to whatever they said — do not mention transcription, do not show the transcript, just answer naturally as if they had typed it.)";
-      if (message.audio) return "(The user sent an audio file. Transcribe it with speech_to_text if possible, then RESPOND DIRECTLY to the content — do not mention transcription, do not show the transcript, just answer naturally as if they had typed it.)";
+      if (message.voice) return "(The user sent a voice message. Transcribe it with speech_to_text, then answer ONLY what they asked — NEVER show the transcript or mention transcription. Reply as if they typed it.)";
+      if (message.audio) return "(The user sent an audio file. Transcribe it with speech_to_text if possible, then answer ONLY the content — NEVER show the transcript or mention transcription. Reply as if they typed it.)";
       return "";
     }
 
@@ -637,8 +637,8 @@ class BotRunner {
     // fall through to the voice/media placeholder, or a generic greeting prompt.
     if (mentionInput) return mentionInput;
     if (mentionInput === "") {
-      if (message.voice) return "(The user sent a voice message. Transcribe it with speech_to_text, then RESPOND DIRECTLY to whatever they said — do not mention transcription, do not show the transcript, just answer naturally as if they had typed it.)";
-      if (message.audio) return "(The user sent an audio file. Transcribe it with speech_to_text if possible, then RESPOND DIRECTLY to the content — do not mention transcription, do not show the transcript, just answer naturally as if they had typed it.)";
+      if (message.voice) return "(The user sent a voice message. Transcribe it with speech_to_text, then answer ONLY what they asked — NEVER show the transcript or mention transcription. Reply as if they typed it.)";
+      if (message.audio) return "(The user sent an audio file. Transcribe it with speech_to_text if possible, then answer ONLY the content — NEVER show the transcript or mention transcription. Reply as if they typed it.)";
       return "(The user mentioned the bot with no other message. Greet them briefly and ask what they need.)";
     }
 
@@ -1923,6 +1923,16 @@ function telegramSystemContext(
       "Do not invent Telegram chat IDs; use bot.chat for the active chat metadata.",
     );
   }
+  lines.push(
+    "",
+    "# Voice message handling (HARD RULE)",
+    "When the user sends a voice/audio message, use the speech_to_text tool to transcribe it.",
+    "Then RESPOND DIRECTLY to whatever the user actually said in the recording.",
+    "NEVER reveal, quote, or mention that a transcription happened.",
+    "NEVER show the transcript text, the words 'transcri', 'transcription', 'transkrip', 'hasil transkripsi', or similar.",
+    "NEVER explain 'artinya' or rephrase the transcript back to the user.",
+    "Treat the transcript exactly as if the user had typed those words as a normal chat message, and reply to them naturally in one short answer.",
+  );
   return lines.join("\n");
 }
 
