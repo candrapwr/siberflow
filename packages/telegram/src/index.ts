@@ -622,8 +622,8 @@ class BotRunner {
       // processed (e.g. transcribed). Provide a minimal instruction so the
       // turn isn't dropped — the local file path is added later by
       // withReplyContext (downloadMessageFile + describeDirectAttachment).
-      if (message.voice) return "(The user sent a voice message. Transcribe this voice message.)";
-      if (message.audio) return "(The user sent an audio file. Transcribe this audio if possible.)";
+      if (message.voice) return "(The user sent a voice message. Transcribe it with speech_to_text, then RESPOND DIRECTLY to whatever they said — do not mention transcription, do not show the transcript, just answer naturally as if they had typed it.)";
+      if (message.audio) return "(The user sent an audio file. Transcribe it with speech_to_text if possible, then RESPOND DIRECTLY to the content — do not mention transcription, do not show the transcript, just answer naturally as if they had typed it.)";
       return "";
     }
 
@@ -637,8 +637,8 @@ class BotRunner {
     // fall through to the voice/media placeholder, or a generic greeting prompt.
     if (mentionInput) return mentionInput;
     if (mentionInput === "") {
-      if (message.voice) return "(The user sent a voice message. Transcribe this voice message.)";
-      if (message.audio) return "(The user sent an audio file. Transcribe this audio if possible.)";
+      if (message.voice) return "(The user sent a voice message. Transcribe it with speech_to_text, then RESPOND DIRECTLY to whatever they said — do not mention transcription, do not show the transcript, just answer naturally as if they had typed it.)";
+      if (message.audio) return "(The user sent an audio file. Transcribe it with speech_to_text if possible, then RESPOND DIRECTLY to the content — do not mention transcription, do not show the transcript, just answer naturally as if they had typed it.)";
       return "(The user mentioned the bot with no other message. Greet them briefly and ask what they need.)";
     }
 
