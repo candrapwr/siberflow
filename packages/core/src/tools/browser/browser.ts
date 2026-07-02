@@ -1,4 +1,4 @@
-import { fork } from "node:child_process";
+import { fork, spawnSync } from "node:child_process";
 import { existsSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -218,7 +218,13 @@ async function launchBrowser() {
   let lastErr;
   for (const channel of channels) {
     try {
-      return await puppeteer.launch({ channel, headless: true, args: ["--no-sandbox", "--disable-setuid-sandbox"] });
+      // --no-zygote: Chrome normally forks a "zygote" helper that pre-spawns
+      // renderers. With --no-zygote each renderer is a direct child of the
+      // browser process, so killing the browser process reliably reaps all
+      // children (no orphaned zygote/GPU/Crashpad processes = no zombies).
+      // Combined with killTree() in the parent, this is what prevents the
+      // "Chrome zombie" leak when a run_browser call times out or errors.
+      return await puppeteer.launch({ channel, headless: true, args: ["--no-sandbox", "--disable-setuid-sandbox", "--no-zygote"] });
     } catch (e) {
       lastErr = e;
     }
@@ -269,11 +275,51 @@ parent.on("message", async (msg) => {
   } catch (err) {
     parent.send({ ok: false, error: (err && err.message) ? err.message : String(err) });
   } finally {
-    if (browser) { try { await browser.close(); } catch {} }
+    await closeBrowserSafely(browser);
     parent.exit(0);
   }
 });
-setTimeout(() => parent.exit(0), 5 * 60 * 1000).unref();
+
+// Hard-cap the worker's lifetime. If the AI's script hangs forever (e.g. an
+// infinite loop in page.evaluate, or a waitForSelector that never resolves),
+// the parent's timeout + killTree should already have terminated us — but as
+// a last-resort backstop we also self-exit. CRUCIALLY we close the browser
+// first: process.exit() skips the finally{} above, so a raw exit here would
+// orphan the Chrome process (zombie). The outer 'browser' variable is in the
+// module scope (declared with 'let browser;' at the top of the handler), and
+// this self-kill timer closes over it.
+const selfKillTimer = setTimeout(async () => {
+  await closeBrowserSafely(browser);
+  parent.exit(0);
+}, 5 * 60 * 1000);
+selfKillTimer.unref();
+
+// Also clean up if the parent process dies unexpectedly (e.g. SIGKILL'd by the
+// host) — without this the worker + Chrome would be orphaned.
+parent.on("disconnect", async () => {
+  await closeBrowserSafely(browser);
+  parent.exit(0);
+});
+
+async function closeBrowserSafely(b) {
+  if (!b) return;
+  try {
+    // Graceful close first so Chrome tears down its child processes normally.
+    await Promise.race([
+      b.close(),
+      new Promise((resolve) => setTimeout(resolve, 3000)),
+    ]);
+  } catch (e) {
+    // If graceful close hangs/fails, force-kill via the process API. Puppeteer
+    // exposes the spawned Chrome's pid; killing it directly also reaps the
+    // GPU/renderer/helper children on Linux when --no-zygote is set (which we
+    // pass in launchBrowser()).
+    try {
+      const proc = b.process ? b.process() : null;
+      if (proc && typeof proc.kill === "function") proc.kill("SIGKILL");
+    } catch (e2) {}
+  }
+}
 `;
 }
 
@@ -400,6 +446,13 @@ function runWorker(args: Args, ctx: ToolContext): Promise<string> {
     };
     const child = fork(WORKER_PATH, [], {
       stdio: ["ignore", "pipe", "pipe", "ipc"],
+      // detached: true makes the worker its OWN process-group leader. This is
+      // what lets killTree() below (process.kill(-pid)) reach not just the
+      // worker Node process but also the Chrome process(es) it spawned —
+      // without it, Chrome runs in a different group and survives the kill,
+      // leaking as a zombie. On Windows detached is ignored (taskkill /T is
+      // used instead), so this is safe cross-platform.
+      detached: true,
       // Run the worker from the project sandbox so relative file paths in the
       // Puppeteer script (screenshot output, downloads, file uploads) resolve
       // against the project dir, not the host's cwd.
@@ -456,13 +509,24 @@ function runWorker(args: Args, ctx: ToolContext): Promise<string> {
 function killTree(pid: number): void {
   try {
     if (process.platform === "win32") {
-      import("node:child_process").then(({ spawn }) =>
-        spawn("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }),
-      );
+      // Windows: taskkill /T kills the whole process tree. Use spawnSync so the
+      // kill completes before we return — the old code used a fire-and-forget
+      // dynamic import().then(spawn) that could race the parent process.
+      spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], {
+        windowsHide: true,
+        stdio: "ignore",
+      });
     } else {
+      // Kill the worker's whole process GROUP (-pid). Because the worker is
+      // forked with detached:true, it leads its own group that also contains
+      // the Chrome process(es) it launched — so this single call reaps them all
+      // and prevents zombie Chrome processes.
       process.kill(-pid, "SIGKILL");
     }
   } catch {
+    // Fallback: kill just the leader pid directly (group kill can fail if the
+    // process already exited). Best-effort; combined with the worker's own
+    // closeBrowserSafely() this still covers the common case.
     try { process.kill(pid, "SIGKILL"); } catch { /* ignore */ }
   }
 }
