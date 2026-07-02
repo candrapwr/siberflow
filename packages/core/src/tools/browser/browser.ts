@@ -243,10 +243,15 @@ parent.on("message", async (msg) => {
     // automation (pages, AJAX, WebSockets, in-page blobs/data). Everything
     // else (file://, chrome://, about:, devtools:, view-source:, ...) is
     // rejected because it exposes the host filesystem or browser internals.
+    // NOTE: regexes here use new RegExp() with string patterns (not /.../ literals)
+    // because this code is embedded in a template literal whose backslash/regex
+    // escaping is fragile — string-form RegExp avoids that whole class of bugs.
+    const allowedScheme = new RegExp("^(https?|wss?)://", "i");
+    const allowedInline = new RegExp("^(data|blob):", "i");
     await page.setRequestInterception(true);
     page.on("request", (req) => {
       const u = req.url();
-      if (/^(https?|wss?):\/\//i.test(u) || /^(data|blob):/i.test(u)) {
+      if (allowedScheme.test(u) || allowedInline.test(u)) {
         req.continue();
       } else {
         req.abort("accessdenied");
