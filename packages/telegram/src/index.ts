@@ -471,8 +471,24 @@ class BotRunner {
     if (!message) return;
     if (message.chat.type === "channel") return;
     const messageText = message.text ?? message.caption ?? "";
-    if (!messageText) return;
+    // Voice/audio sent WITHOUT a caption: there is no text/mention to route on,
+    // but the user clearly wants the bot to process the recording (e.g.
+    // transcribe it). Allow it through in private chats and in groups when it
+    // is a reply to the bot's own message; otherwise (bare voice in a group)
+    // skip it, since privacy mode means the bot can't be sure it was addressed.
+    const hasVoice = !!(message.voice || message.audio);
+    if (!messageText && !hasVoice) return;
+    const isReplyToBot = !!message.reply_to_message?.from?.is_bot;
     if (
+      !messageText &&
+      hasVoice &&
+      message.chat.type !== "private" &&
+      !isReplyToBot
+    ) {
+      return;
+    }
+    if (
+      messageText &&
       message.chat.type !== "private" &&
       !isAddressedToBot(messageText, this.botUsername)
     ) {
@@ -599,7 +615,17 @@ class BotRunner {
 
   private normalizeIncomingInput(message: TelegramMessage): string {
     const text = message.text ?? message.caption ?? "";
-    if (message.chat.type === "private") return normalizeInput(text);
+    if (message.chat.type === "private") {
+      const norm = normalizeInput(text);
+      if (norm) return norm;
+      // No text but a voice/audio was sent: the user wants the recording
+      // processed (e.g. transcribed). Provide a minimal instruction so the
+      // turn isn't dropped — the local file path is added later by
+      // withReplyContext (downloadMessageFile + describeDirectAttachment).
+      if (message.voice) return "(The user sent a voice message. Transcribe this voice message.)";
+      if (message.audio) return "(The user sent an audio file. Transcribe this audio if possible.)";
+      return "";
+    }
 
     const commandInput = stripCommand(text);
     if (commandInput !== null) return commandInput;
@@ -607,6 +633,10 @@ class BotRunner {
     const mentionInput = stripBotMention(text, this.botUsername);
     if (mentionInput !== null) return mentionInput;
 
+    // Group without a mention: a bare voice that reached here was already gated
+    // to replies-to-bot in handleUpdate. Give it the same placeholder.
+    if (!text && message.voice) return "(The user sent a voice message. Transcribe this voice message.)";
+    if (!text && message.audio) return "(The user sent an audio file. Transcribe this audio if possible.)";
     return "";
   }
 
@@ -1946,6 +1976,11 @@ function toolStatusText(name: string): string {
     // Web search
     case "web_search":
       return "🔎 Mencari di web...";
+    // Speech
+    case "text_to_speech":
+      return "🔊 Sedang berbicara...";
+    case "speech_to_text":
+      return "🎙️ Sedang mendengar...";
     // Bot
     case "bot_script":
       return "📨 Menjalankan aksi Telegram...";
