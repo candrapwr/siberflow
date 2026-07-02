@@ -21,6 +21,7 @@ const TOGGLE_TOOLS = [
   { name: "pdf_script", label: "pdf_script", group: "Document" },
   { name: "run_browser", label: "run_browser", group: "Browser" },
   { name: "analyze_image", label: "analyze_image", group: "Image" },
+  { name: "web_search", label: "web_search", group: "Search" },
 ] as const;
 
 const CUSTOM_PROVIDER_DEFAULT = {
@@ -33,6 +34,7 @@ interface SettingsModalProps {
   values: SettingsValues;
   hasApiKey: boolean;
   hasMultimodalApiKey: boolean;
+  hasExaApiKey: boolean;
   mustConfigure: boolean;
   onClose: () => void;
 }
@@ -41,6 +43,7 @@ export const SettingsModal = memo(function SettingsModal({
   values,
   hasApiKey,
   hasMultimodalApiKey,
+  hasExaApiKey,
   mustConfigure,
   onClose,
 }: SettingsModalProps) {
@@ -54,6 +57,7 @@ export const SettingsModal = memo(function SettingsModal({
   });
   const [apiKey, setApiKey] = useState("");
   const [multimodalApiKey, setMultimodalApiKey] = useState("");
+  const [exaApiKey, setExaApiKey] = useState("");
   const [error, setError] = useState("");
   const set = <K extends keyof SettingsValues>(key: K, val: SettingsValues[K]) =>
     setForm((f) => ({ ...f, [key]: val }));
@@ -97,6 +101,7 @@ export const SettingsModal = memo(function SettingsModal({
       },
       apiKey.length > 0 ? apiKey : null,
       multimodalApiKey.length > 0 ? multimodalApiKey : null,
+      exaApiKey.length > 0 ? exaApiKey : null,
     );
     onClose();
   };
@@ -251,6 +256,23 @@ export const SettingsModal = memo(function SettingsModal({
         </div>
 
         <div className="form-section">
+          <div className="form-section-title">Web search (Exa)</div>
+          <div className="form-row">
+            <label>API key</label>
+            <input
+              type="password"
+              value={exaApiKey}
+              onChange={(e) => setExaApiKey(e.target.value)}
+              placeholder={hasExaApiKey ? "(stored — leave blank to keep)" : "paste your key"}
+              autoComplete="off"
+            />
+            <div className="form-help">
+              Used only by web_search. The web_search toggle in Tools is disabled until this key is set.
+            </div>
+          </div>
+        </div>
+
+        <div className="form-section">
           <div className="form-section-title">Context optimization</div>
           <div className="form-row inline">
             <label>Context optimization (drop/summary/recent)</label>
@@ -274,17 +296,29 @@ export const SettingsModal = memo(function SettingsModal({
             Tools <span className="form-section-hint">(disabled tools aren't sent to the AI)</span>
           </div>
           <div className="tools-grid">
-            {TOGGLE_TOOLS.map((t) => (
-              <label key={t.name} className="tool-toggle">
-                <input
-                  type="checkbox"
-                  checked={form.enabledTools.includes(t.name)}
-                  onChange={() => toggleTool(t.name)}
-                />
-                <span className="tool-toggle-name">{t.label}</span>
-                <span className="tool-toggle-group">{t.group}</span>
-              </label>
-            ))}
+            {TOGGLE_TOOLS.map((t) => {
+              // Tools that depend on a separately-stored API key are disabled
+              // (and forced off) until that key exists, so the model never gets
+              // a tool it can't actually call. Currently: web_search needs Exa.
+              const needsExaKey = t.name === "web_search";
+              const exaLocked = needsExaKey && !hasExaApiKey;
+              const disabled = exaLocked;
+              const checked = exaLocked ? false : form.enabledTools.includes(t.name);
+              return (
+                <label key={t.name} className={`tool-toggle${disabled ? " tool-toggle-disabled" : ""}`}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={disabled}
+                    onChange={() => !disabled && toggleTool(t.name)}
+                  />
+                  <span className="tool-toggle-name">{t.label}</span>
+                  <span className="tool-toggle-group">
+                    {exaLocked ? `${t.group} — set API key first` : t.group}
+                  </span>
+                </label>
+              );
+            })}
           </div>
           <div className="form-help">
             Default: file operations only. Enable exec/db/ssh/excel as needed.

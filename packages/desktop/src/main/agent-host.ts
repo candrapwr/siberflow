@@ -37,7 +37,7 @@ import type {
   SettingsValues,
   UsageInfo,
 } from "@shared/protocol";
-import { getApiKey, setApiKey as storeApiKey, deleteApiKey, MULTIMODAL_SECRET_KEY } from "./secrets.js";
+import { getApiKey, setApiKey as storeApiKey, deleteApiKey, MULTIMODAL_SECRET_KEY, EXA_SECRET_KEY } from "./secrets.js";
 import { loadSettings, saveSettings as persistSettings } from "./settings.js";
 
 /** Omit system + tool messages, keeping only user/assistant content for display. */
@@ -144,6 +144,7 @@ export class AgentHost {
     this.apiKey = getApiKey(this.settings.provider);
     this.applyDebug();
     this.applyMultimodalEnv();
+    this.applyExaEnv();
     if (!this.apiKey) {
       this.readyForChat = false;
       this.emit({
@@ -152,6 +153,7 @@ export class AgentHost {
         values: this.settings,
         hasApiKey: false,
         hasMultimodalApiKey: !!getApiKey(MULTIMODAL_SECRET_KEY),
+        hasExaApiKey: !!getApiKey(EXA_SECRET_KEY),
       });
       return;
     }
@@ -172,11 +174,12 @@ export class AgentHost {
 
   // -------- settings --------
 
-  getSettings(): { values: SettingsValues; hasApiKey: boolean; hasMultimodalApiKey: boolean } {
+  getSettings(): { values: SettingsValues; hasApiKey: boolean; hasMultimodalApiKey: boolean; hasExaApiKey: boolean } {
     return {
       values: { ...this.settings },
       hasApiKey: !!this.apiKey,
       hasMultimodalApiKey: !!getApiKey(MULTIMODAL_SECRET_KEY),
+      hasExaApiKey: !!getApiKey(EXA_SECRET_KEY),
     };
   }
 
@@ -189,10 +192,11 @@ export class AgentHost {
       values: this.settings,
       hasApiKey: !!this.apiKey,
       hasMultimodalApiKey: !!getApiKey(MULTIMODAL_SECRET_KEY),
+      hasExaApiKey: !!getApiKey(EXA_SECRET_KEY),
     });
   }
 
-  saveSettings(values: SettingsValues, apiKey: string | null, multimodalApiKey: string | null): void {
+  saveSettings(values: SettingsValues, apiKey: string | null, multimodalApiKey: string | null, exaApiKey: string | null): void {
     values = normalizeSettings(values);
     if (values.provider === "custom" && (!values.customProvider.baseUrl || !values.customProvider.defaultModel)) {
       this.emit({ type: "error", message: "Custom provider needs a base URL and default model." });
@@ -202,6 +206,7 @@ export class AgentHost {
     this.settings = values;
     this.applyDebug();
     this.applyMultimodalEnv(multimodalApiKey);
+    this.applyExaEnv(exaApiKey);
 
     // API key handling: null means "leave unchanged", empty means "delete".
     if (apiKey !== null) {
@@ -227,6 +232,7 @@ export class AgentHost {
         values,
         hasApiKey: false,
         hasMultimodalApiKey: !!getApiKey(MULTIMODAL_SECRET_KEY),
+        hasExaApiKey: !!getApiKey(EXA_SECRET_KEY),
       });
       this.emit({ type: "error", message: `API key for ${values.provider} required.` });
       return;
@@ -275,6 +281,22 @@ export class AgentHost {
     const key = getApiKey(MULTIMODAL_SECRET_KEY);
     if (key) process.env.SIBERFLOW_MULTIMODAL_API_KEY = key;
     else delete process.env.SIBERFLOW_MULTIMODAL_API_KEY;
+  }
+
+  /**
+   * Web search (Exa) API key handling. The web_search tool reads
+   * SIBERFLOW_EXA_API_KEY from process.env at execute time; we keep it in sync
+   * with the encrypted key store. The UI disables the web_search toggle until a
+   * key is stored, so the model never sees the tool without a usable credential.
+   */
+  private applyExaEnv(apiKeyInput: string | null = null): void {
+    if (apiKeyInput !== null) {
+      if (apiKeyInput.length > 0) storeApiKey(EXA_SECRET_KEY, apiKeyInput);
+      else deleteApiKey(EXA_SECRET_KEY);
+    }
+    const key = getApiKey(EXA_SECRET_KEY);
+    if (key) process.env.SIBERFLOW_EXA_API_KEY = key;
+    else delete process.env.SIBERFLOW_EXA_API_KEY;
   }
 
   private rebuildAgent(): void {

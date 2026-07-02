@@ -108,8 +108,8 @@ export function registerIpc(): void {
 
   ipcMain.handle(
     "siberflow:saveSettings",
-    async (_e, values: SettingsValues, apiKey: string | null, multimodalApiKey: string | null) => {
-      host!.saveSettings(values, apiKey, multimodalApiKey);
+    async (_e, values: SettingsValues, apiKey: string | null, multimodalApiKey: string | null, exaApiKey: string | null) => {
+      host!.saveSettings(values, apiKey, multimodalApiKey, exaApiKey);
     },
   );
 

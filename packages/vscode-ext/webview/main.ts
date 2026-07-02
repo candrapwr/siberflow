@@ -303,6 +303,7 @@ const TOGGLE_TOOLS = [
   { name: "pdf_script", label: "pdf_script", group: "Document" },
   { name: "run_browser", label: "run_browser", group: "Browser" },
   { name: "analyze_image", label: "analyze_image", group: "Image" },
+  { name: "web_search", label: "web_search", group: "Search" },
 ];
 
 const CUSTOM_PROVIDER_DEFAULT = {
@@ -315,6 +316,7 @@ function showSettingsModal(
   values: SettingsValues,
   hasApiKey: boolean,
   hasMultimodalApiKey: boolean,
+  hasExaApiKey: boolean,
   mustConfigure: boolean,
 ): void {
   // Remove existing modal if any
@@ -393,6 +395,14 @@ function showSettingsModal(
         <label>API key</label>
         <input type="password" id="cfg-mm-apikey" placeholder="${hasMultimodalApiKey ? "(stored — leave blank to keep)" : "paste your key"}" autocomplete="off">
         <div class="form-help">Used only by analyze_image. Enable analyze_image in Tools.</div>
+      </div>
+    </div>
+    <div class="form-section">
+      <div class="form-section-title">Web search (Exa)</div>
+      <div class="form-row">
+        <label>API key</label>
+        <input type="password" id="cfg-exa-apikey" placeholder="${hasExaApiKey ? "(stored — leave blank to keep)" : "paste your key"}" autocomplete="off">
+        <div class="form-help">Used only by web_search. The web_search toggle in Tools is disabled until this key is set.</div>
       </div>
     </div>
     <div class="form-section">
@@ -493,12 +503,21 @@ function showSettingsModal(
     cb.type = "checkbox";
     cb.dataset.tool = t.name;
     cb.checked = enabledSet.has(t.name);
+    // Tools that depend on a separately-stored API key are disabled (and
+    // unchecked) until that key exists, so the model never gets a tool it
+    // can't actually call. Currently: web_search needs the Exa key.
+    const needsExaKey = t.name === "web_search";
+    if (needsExaKey && !hasExaApiKey) {
+      cb.disabled = true;
+      cb.checked = false;
+      lbl.classList.add("tool-toggle-disabled");
+    }
     const name = document.createElement("span");
     name.className = "tool-toggle-name";
     name.textContent = t.label;
     const grp = document.createElement("span");
     grp.className = "tool-toggle-group";
-    grp.textContent = t.group;
+    grp.textContent = needsExaKey && !hasExaApiKey ? `${t.group} — set API key first` : t.group;
     lbl.appendChild(cb);
     lbl.appendChild(name);
     lbl.appendChild(grp);
@@ -547,10 +566,13 @@ function showSettingsModal(
       modal.querySelectorAll<HTMLInputElement>("#cfg-tools input[type='checkbox']:checked"),
     ).map((cb) => cb.dataset.tool!);
 
+    const exaApiKeyRaw = (modal.querySelector("#cfg-exa-apikey") as HTMLInputElement).value;
+
     // null = leave existing key unchanged. "" = explicit clear. Non-empty = update.
     const apiKey: string | null = apiKeyRaw.length === 0 ? null : apiKeyRaw;
     const multimodalApiKey: string | null =
       multimodalApiKeyRaw.length === 0 ? null : multimodalApiKeyRaw;
+    const exaApiKey: string | null = exaApiKeyRaw.length === 0 ? null : exaApiKeyRaw;
 
     vscode.postMessage({
       kind: "save_settings",
@@ -570,6 +592,7 @@ function showSettingsModal(
       },
       apiKey,
       multimodalApiKey,
+      exaApiKey,
     });
     backdrop.remove();
   });
@@ -1386,7 +1409,7 @@ window.addEventListener("message", (ev) => {
       }
       // Keep the composer upload toggle in sync with the latest tool set.
       state.enabledTools = msg.values.enabledTools;
-      showSettingsModal(msg.values, msg.hasApiKey, msg.hasMultimodalApiKey, msg.mustConfigure);
+      showSettingsModal(msg.values, msg.hasApiKey, msg.hasMultimodalApiKey, msg.hasExaApiKey, msg.mustConfigure);
       break;
     case "history":
       if (messagesEl) messagesEl.innerHTML = "";
