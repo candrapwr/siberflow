@@ -3,6 +3,26 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
+
+/**
+ * Resolve a base URL for createRequire that works in both ESM and CJS contexts.
+ * In ESM (CLI/desktop main) `import.meta.url` is available. In a CJS bundle
+ * (VSCode extension), `import.meta.url` is empty/undefined and esbuild warns
+ * about it — fall back to the CJS filename via a require-of-__filename shim so
+ * createRequire still resolves pdfjs-dist relative to this module.
+ */
+function requireBaseUrl(): string {
+  try {
+    if (typeof import.meta !== "undefined" && (import.meta as { url?: string }).url) {
+      return (import.meta as { url: string }).url;
+    }
+  } catch {
+    // import.meta may be syntactically invalid in some CJS contexts.
+  }
+  // CJS fallback: __filename is defined in CommonJS bundles.
+  const filename = (globalThis as { __filename?: string }).__filename;
+  return pathToFileURL(filename ?? process.cwd() + "/__placeholder__.js").href;
+}
 // `pdf-lib` ships as CommonJS with a CJS entry — default export works.
 import { PDFDocument, StandardFonts, rgb, degrees, PageSizes } from "pdf-lib";
 import type { PDFFont } from "pdf-lib";
@@ -401,7 +421,7 @@ function numOr(v: unknown, fallback: number): number {
 async function extractPdfText(data: Buffer): Promise<string> {
   // Resolve the legacy build path. pdfjs-dist's main build is browser-only;
   // the legacy build works in Node without a DOM.
-  const req = createRequire(import.meta.url);
+  const req = createRequire(requireBaseUrl());
   const pdfjsPath = req.resolve("pdfjs-dist/legacy/build/pdf.mjs");
   const pdfjsDir = dirname(pdfjsPath);
   const pdfjs = req(pdfjsPath);

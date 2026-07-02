@@ -1,5 +1,7 @@
 import { build, context } from "esbuild";
-import { writeFileSync } from "node:fs";
+import { writeFileSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const watch = process.argv.includes("--watch");
 
@@ -9,13 +11,15 @@ const watch = process.argv.includes("--watch");
 // binary and we want a self-contained VSIX, we stub the module to a function
 // returning undefined — ssh2's own try/catch accepts that and runs its
 // pure-JS crypto path. Create the stub on disk so esbuild can resolve it.
+//
+// The stub lives under ./dist/, which may NOT exist yet on a fresh checkout
+// (e.g. a clean server with no prior build). mkdirSync(recursive) ensures the
+// directory exists BEFORE we write the stub — otherwise writeFileSync throws
+// ENOENT, the catch swallows it, no stub file is created, and esbuild fails
+// with "Cannot read file .cpu-features-stub.js" during bundling.
 const CPU_STUB_PATH = new URL("./dist/.cpu-features-stub.js", import.meta.url);
-try {
-  writeFileSync(CPU_STUB_PATH, "module.exports = () => undefined;\n");
-} catch {
-  // dist/ may not exist yet on a fresh checkout; esbuild creates it during
-  // build, and the stub is only needed at bundle time below.
-}
+mkdirSync(dirname(fileURLToPath(CPU_STUB_PATH)), { recursive: true });
+writeFileSync(CPU_STUB_PATH, "module.exports = () => undefined;\n");
 const cpuFeaturesStub = {
   name: "cpu-features-stub",
   setup(b) {
@@ -32,11 +36,8 @@ const cpuFeaturesStub = {
 // empty module so esbuild can bundle ssh2 without a .node loader, and ssh2's
 // own try/catch handles the missing binding at runtime.
 const SSHCRYPTO_STUB_PATH = new URL("./dist/.sshcrypto-stub.js", import.meta.url);
-try {
-  writeFileSync(SSHCRYPTO_STUB_PATH, "module.exports = {};\n");
-} catch {
-  // dist/ may not exist yet; esbuild creates it during build.
-}
+mkdirSync(dirname(fileURLToPath(SSHCRYPTO_STUB_PATH)), { recursive: true });
+writeFileSync(SSHCRYPTO_STUB_PATH, "module.exports = {};\n");
 const sshcryptoStub = {
   name: "sshcrypto-stub",
   setup(b) {
