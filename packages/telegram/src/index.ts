@@ -42,6 +42,7 @@ interface TelegramUser {
   id: number;
   is_bot?: boolean;
   first_name: string;
+  last_name?: string;
   username?: string;
 }
 
@@ -148,13 +149,13 @@ interface RuntimeSession {
   session: Session;
   pendingUsage?: UsageStats;
   /**
-   * Map of Telegram user id → username (lowercase, without @) for users who
-   * have chatted in this group session. Used to populate the system prompt
-   * with the known member roster so the model can address/mention people by
-   * name. In private chats this is effectively just the one user. Deduped by
-   * user id — a re-seen id just refreshes its username.
+   * Map of Telegram user id → member record (username + display name) for
+   * users who have chatted in this group session. Used to populate the system
+   * prompt with the known member roster so the model can address/mention
+   * people by name. In private chats this is effectively just the one user.
+   * Deduped by user id — a re-seen id just refreshes its record.
    */
-  knownMembers: Map<number, string>;
+  knownMembers: Map<number, { username?: string; name?: string }>;
 }
 
 interface BotScriptState {
@@ -452,11 +453,20 @@ class BotRunner {
     chatType: string,
   ): boolean {
     if (!user || chatType === "private") return false;
-    const username = user.username?.toLowerCase().trim();
+    const username = user.username?.toLowerCase().trim() || undefined;
+    const name = [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || undefined;
+    const record = { ...(username ? { username } : {}), ...(name ? { name } : {}) };
+
+    if (!runtime.knownMembers.has(user.id)) {
+      runtime.knownMembers.set(user.id, record);
+      return true;
+    }
     const existing = runtime.knownMembers.get(user.id);
-    if (existing === username) return false; // unchanged
-    runtime.knownMembers.set(user.id, username ?? "");
-    return true; // roster changed
+    if (existing?.username === record.username && existing?.name === record.name) {
+      return false; // unchanged
+    }
+    runtime.knownMembers.set(user.id, record);
+    return true;
   }
 
   async run(): Promise<void> {
@@ -519,6 +529,13 @@ class BotRunner {
           cached.agent.loadHistory(
             withSystemPrompt(cached.session.messages, this.buildSystemPromptFor(message, cached)),
           );
+          // Persist roster IMMEDIATELY to disk — don't wait for the turn to
+          // finish. A member seen must be recorded even if the turn later
+          // errors or the bot restarts mid-turn.
+          const obj: Record<string, { username?: string; name?: string }> = {};
+          for (const [uid, rec] of cached.knownMembers) obj[String(uid)] = rec;
+          cached.session.knownMembers = obj;
+          void saveSession(cached.session).catch(() => { /* best-effort */ });
         }
       } else {
         // Session not yet loaded — load it just to record the member, then
@@ -576,8 +593,21 @@ class BotRunner {
         );
 
       const runtime = await this.getRuntime(message);
-      const input = await this.withReplyContext(message, baseInput, runtime.session.projectDir);
+      let input = await this.withReplyContext(message, baseInput, runtime.session.projectDir);
       if (!input) return;
+
+      // Prepend sender metadata so the AI always knows WHO is talking in a
+      // group chat. Without this, every message looks anonymous (just text) and
+      // the AI can't address people or understand conversational context like
+      // "I asked that earlier". In private chats the sender is obvious, so we
+      // skip the prefix there to keep the prompt clean.
+      if (message.chat.type !== "private" && message.from && !message.from.is_bot) {
+        const senderParts: string[] = [`id:${message.from.id}`];
+        if (message.from.username) senderParts.push(`@${message.from.username}`);
+        const fullName = [message.from.first_name, message.from.last_name].filter(Boolean).join(" ");
+        if (fullName) senderParts.push(fullName);
+        input = `[Sender: ${senderParts.join(" ")}]\n${input}`;
+      }
 
       // Serial execution per session: never run two turns in parallel on the
       // same Agent/session. Messages sent while a turn is in-flight are queued
@@ -808,14 +838,23 @@ class BotRunner {
     const id = sessionIdFor(message);
     const cached = this.sessions.get(id);
     if (cached) {
-      // Record the current sender into the roster. If the roster changed, we
-      // must re-inject the system prompt so the model sees the new member list.
+      // Record the current sender into the roster (deduped by id).
       const changed = this.rememberMember(cached, message.from, message.chat.type);
       if (changed) {
-        cached.agent.loadHistory(
-          withSystemPrompt(cached.session.messages, this.buildSystemPromptFor(message, cached)),
-        );
+        // Roster changed — persist immediately so a crash/restart doesn't lose it.
+        const obj: Record<string, { username?: string; name?: string }> = {};
+        for (const [uid, rec] of cached.knownMembers) obj[String(uid)] = rec;
+        cached.session.knownMembers = obj;
+        void saveSession(cached.session).catch(() => { /* best-effort */ });
       }
+      // ALWAYS rebuild the system prompt for the current message, even if the
+      // roster didn't change. The prompt contains "Current user" (who is
+      // talking right now) which differs every message in a group chat, plus
+      // the roster and chat metadata that must reflect the latest state.
+      const freshPrompt = this.buildSystemPromptFor(message, cached);
+      cached.agent.loadHistory(
+        withSystemPrompt(cached.session.messages, freshPrompt),
+      );
       return cached;
     }
 
@@ -856,11 +895,14 @@ class BotRunner {
     const runtime: RuntimeSession = {
       agent: undefined as unknown as Agent,
       session,
-      // Rehydrate the persisted roster (Record<idStr, username>) back into a
-      // Map<number, string> for in-memory use. Old sessions without the field
-      // start empty and fill as members chat.
+      // Rehydrate the persisted roster back into a Map. Old sessions without
+      // the field (or with the old string-only format) start empty and fill
+      // as members chat.
       knownMembers: new Map(
-        Object.entries(session.knownMembers ?? {}).map(([k, v]) => [Number(k), v]),
+        Object.entries(session.knownMembers ?? {}).map(([k, v]) => [
+          Number(k),
+          typeof v === "string" ? { username: v } : v,
+        ]),
       ),
     };
     this.rememberMember(runtime, message.from, message.chat.type);
@@ -1181,8 +1223,8 @@ class BotRunner {
     // Persist the known-member roster so it survives bot restarts alongside
     // the chat history. Map → plain object (id-as-string keys for JSON).
     if (runtime.knownMembers.size > 0) {
-      const obj: Record<string, string> = {};
-      for (const [uid, uname] of runtime.knownMembers) obj[String(uid)] = uname;
+      const obj: Record<string, { username?: string; name?: string }> = {};
+      for (const [uid, rec] of runtime.knownMembers) obj[String(uid)] = rec;
       runtime.session.knownMembers = obj;
     } else {
       delete runtime.session.knownMembers;
@@ -1978,7 +2020,7 @@ function telegramSystemContext(
   message: TelegramMessage,
   workdir: string,
   adminShell = false,
-  knownMembers?: Map<number, string>,
+  knownMembers?: Map<number, { username?: string; name?: string }>,
 ): string {
   const chat = message.chat;
   const lines = [
@@ -2004,7 +2046,12 @@ function telegramSystemContext(
   // people by name/id (e.g. for cross-chat bot_script sends). Deduped by id.
   if (knownMembers && knownMembers.size > 0 && chat.type !== "private") {
     const roster = [...knownMembers.entries()]
-      .map(([uid, uname]) => (uname ? `${uid} (@${uname})` : `${uid}`))
+      .map(([uid, rec]) => {
+        const parts: string[] = [String(uid)];
+        if (rec.username) parts.push(`@${rec.username}`);
+        if (rec.name) parts.push(rec.name);
+        return parts.join(" ");
+      })
       .join(", ");
     lines.push(`Known members (${knownMembers.size}): ${roster}`);
   }
@@ -2039,6 +2086,14 @@ function telegramSystemContext(
     "NEVER show the transcript text, the words 'transcri', 'transcription', 'transkrip', 'hasil transkripsi', or similar.",
     "NEVER explain 'artinya' or rephrase the transcript back to the user.",
     "Treat the transcript exactly as if the user had typed those words as a normal chat message, and reply to them naturally in one short answer.",
+  );
+  lines.push(
+    "",
+    "# Response delivery (HARD RULE)",
+    "Your FINAL text answer is automatically sent to the user as a chat message. You do NOT need any tool to send a normal reply.",
+    "NEVER use bot_script just to send a text reply — that tool is ONLY for sending media (photos/documents/videos) or performing Telegram-specific actions (polls, locations).",
+    "NEVER use bot_script.sendMessage() to reply to the user — your normal text output already IS the reply.",
+    "When the user says 'hi', 'halo', 'hai', asks a question, or makes a request, just write your answer as text. Do NOT call any tool for conversational responses.",
   );
   return lines.join("\n");
 }
