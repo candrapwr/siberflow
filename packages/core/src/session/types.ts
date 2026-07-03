@@ -25,11 +25,12 @@ export interface Session {
   tasks?: Task[];
   /**
    * Known chat members for group/supergroup Telegram sessions. Maps Telegram
-   * user id → username (lowercase, without @). Built incrementally as members
-   * send messages; persisted so it survives bot restarts alongside the chat
-   * history. Absent/empty in private chats and sessions that predate the feature.
+   * user id (as string) → a compact member record (username, display name).
+   * Built incrementally as members send messages; persisted so it survives bot
+   * restarts alongside the chat history. Absent/empty in private chats and
+   * sessions that predate the feature.
    */
-  knownMembers?: Record<string, string>;
+  knownMembers?: Record<string, { username?: string; name?: string }>;
 }
 
 export interface SessionSummary {
