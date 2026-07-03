@@ -1,22 +1,23 @@
-import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, extname } from "node:path";
 import { randomBytes } from "node:crypto";
 import type { Tool, ToolContext } from "../base.js";
 import { resolveWithin } from "../file/path-utils.js";
+import { runPython, formatPythonResult } from "../python-runner.js";
 
 /**
  * Speech tools (text_to_speech + speech_to_text) — backed by Python libraries:
  *   - text_to_speech uses `edge-tts` (Microsoft Edge neural voices, no API key)
  *   - speech_to_text uses `speech_recognition` (Google Web Speech, no API key)
  *
- * Both tools shell out to `python3` via a generated temp script. They are
- * filesystem-group tools: text_to_speech writes its .mp3 into the workdir, and
- * speech_to_text reads an audio file from the workdir (so the sandbox applies).
- * Because they invoke Python, the host must have python3 + the libraries
- * installed. If anything is missing, the FULL python stderr is returned to the
- * model as the tool result so it can diagnose and explain the failure.
+ * Both tools shell out to `python3` via a generated temp script (the shared
+ * `runPython` runner). They are filesystem-group tools: text_to_speech writes
+ * its .mp3 into the workdir, and speech_to_text reads an audio file from the
+ * workdir (so the sandbox applies). Because they invoke Python, the host must
+ * have python3 + the libraries installed. If anything is missing, the FULL
+ * python stderr is returned to the model as the tool result so it can diagnose
+ * and explain the failure.
  *
  * Requirements on the host:
  *   - python3 on PATH
@@ -26,7 +27,6 @@ import { resolveWithin } from "../file/path-utils.js";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const MAX_TIMEOUT_MS = 120_000;
-const MAX_OUTPUT = 50_000;
 /** Default voice for text_to_speech (Indonesian male neural voice). */
 const DEFAULT_VOICE = "id-ID-ArdiNeural";
 /** Default recognition language for speech_to_text. */
@@ -42,81 +42,6 @@ interface TtsArgs {
 interface SttArgs {
   path: string;
   language: string;
-}
-
-/**
- * Run a python script by writing it to a temp file and invoking `python3 -u`.
- * Captures stdout + stderr. Returns { stdout, stderr, code }. Never throws —
- * callers format failures into the tool-result string (project convention:
- * tools return strings, they don't throw, so the agent turn survives).
- */
-async function runPython(
-  script: string,
-  cwd: string,
-  timeoutMs: number,
-): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }> {
-  const workDir = await mkdtemp(join(tmpdir(), "siberflow-speech-"));
-  const scriptPath = join(workDir, "speech.py");
-  await writeFile(scriptPath, script, "utf8");
-
-  return await new Promise((resolve) => {
-    const child = spawn("python3", ["-u", scriptPath], {
-      cwd,
-      env: process.env,
-      windowsHide: true,
-    });
-
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
-    let forceKillTimer: NodeJS.Timeout | null = null;
-
-    const timer = setTimeout(() => {
-      timedOut = true;
-      try {
-        child.kill("SIGTERM");
-      } catch { /* ignore */ }
-      forceKillTimer = setTimeout(() => {
-        try {
-          child.kill("SIGKILL");
-        } catch { /* ignore */ }
-      }, 5_000);
-    }, timeoutMs);
-
-    child.stdout.on("data", (chunk: Buffer) => {
-      if (stdout.length < MAX_OUTPUT) stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      if (stderr.length < MAX_OUTPUT) stderr += chunk.toString("utf8");
-    });
-
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (forceKillTimer) clearTimeout(forceKillTimer);
-      // Best-effort temp cleanup. Don't block resolution on it.
-      void rm(workDir, { recursive: true, force: true });
-      resolve({ stdout, stderr, code, timedOut });
-    });
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      if (forceKillTimer) clearTimeout(forceKillTimer);
-      void rm(workDir, { recursive: true, force: true });
-      // spawn failure (e.g. python3 not found) surfaces here.
-      resolve({ stdout, stderr: stderr + err.message, code: null, timedOut: false });
-    });
-  });
-}
-
-/** Format a python run outcome into a tool-result string. */
-function formatPythonResult(
-  r: { stdout: string; stderr: string; code: number | null; timedOut: boolean },
-): string {
-  const parts: string[] = [];
-  if (r.timedOut) parts.push(`(killed after timeout)`);
-  parts.push(`exit code: ${r.code ?? "null"}`);
-  if (r.stdout.trim()) parts.push(`--- stdout ---\n${r.stdout.trim()}`);
-  if (r.stderr.trim()) parts.push(`--- stderr ---\n${r.stderr.trim()}`);
-  return parts.join("\n");
 }
 
 export const textToSpeechTool: Tool = {

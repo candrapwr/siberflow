@@ -235,7 +235,7 @@ cd packages/desktop && npm run rebuild
 - **Database query tool** — `db_query` mendukung `mysql`, `postgresql`, dan `sqlite`; query bebas, optional `params`, SQLite path tetap dibatasi ke project dir
 - **Excel spreadsheet tool** — `excel_script`: satu tool serbaguna untuk membaca, memodifikasi, dan membuat `.xlsx` multi-sheet via akses penuh API `exceljs` di sandbox `node:vm`. Mendukung cells, **rumus/formula**, **gambar/image** (`addImage`/`getImages`), chart, merge cells, conditional formatting, autofilter, styling, dll. AI tulis function JS `(wb, ExcelJS) => { ... return <data> }`; host yang load/write file, sandbox hanya manipulasi workbook. File Excel dari upload UI disimpan di **OS tmp dir** (bukan project) — workspace tetap bersih, tidak ikut ke git
 - **Word document tool** — `docx_script`: satu tool untuk membuat dan membaca `.docx` via library `docx` (create) + `mammoth` (read) di sandbox `node:vm`. Create mode: AI bangun dokumen deklaratif (heading, paragraf, tabel, image, bullet, styling) via `(doc, docx) => { ... }`; host serialize lewat `Packer.toBuffer`. Read mode: host convert `.docx` existing ke HTML via mammoth, teruskan ke script `(html) => { ... return data }` untuk ekstrak struktur/konten. Sandbox sync-only, host handle semua async I/O.
-- **PDF document tool** — `pdf_script`: satu tool untuk membuat dan membaca `.pdf` via library `pdf-lib` (create) + `pdfjs-dist` (read) di sandbox `node:vm`. Create mode: AI bangun PDF deklaratif (halaman, text, shapes, warna, garis) via `(pdf, P, font) => { ... }`; host pre-embed Helvetica font + serialize lewat `pdf.save()`. Read mode: host ekstrak text semua halaman via pdfjs-dist, teruskan string (dipisah `\f` per halaman) ke script `(text) => { ... return data }`. Catatan: PDF hasil scan (image, no text layer) tidak bisa di-OCR.
+- **PDF document tool** — `pdf_script`: satu tool untuk membuat dan membaca `.pdf` via library `pdf-lib` (create) + `pdfjs-dist` (read) di sandbox `node:vm`. Create mode: AI bangun PDF deklaratif (halaman, text, shapes, warna, garis) via `(pdf, P, font) => { ... }`; host pre-embed Helvetica font + serialize lewat `pdf.save()`. Read mode: host ekstrak text semua halaman via pdfjs-dist, teruskan string (dipisah `\f` per halaman) ke script `(text) => { ... return data }`. **OCR mode** (`ocr:true`): untuk PDF gambar/scan, host render halaman → PNG (`pdfjs`+`@napi-rs/canvas`) lalu OCR via Tesseract lokal (`pytesseract`); text hasil OCR diteruskan ke script sama seperti read mode. Butuh tesseract di host.
 - **Browser tool** — `run_browser` scrape/interaksi halaman web via headless Chrome/Edge (Puppeteer). Mendukung AJAX/SPA (render JS), klik/form/login, screenshot, intercept network, multi-tab. Script Puppeteer dijalankan di child process worker terisolasi dengan timeout kill. **Pakai Chrome/Edge yang sudah terinstall** — tidak ada download Chromium. Default OFF (opt-in)
 - **Per-tool toggle** — aktif/nonaktifkan tool individual via settings/env (`SIBERFLOW_TOOLS`). Default hanya 5 file ops aktif; `exec`/`db_query`/`ssh`/`excel`/`docx`/`pdf`/`run_browser` opt-in untuk prompt ringan + blast-radius security kecil
 - **Request delay (anti rate-limit)** — jeda sebelum setiap request ke AI (default 1500ms, bisa 0) untuk mencegah provider block saat loop tool-call cepat. Set via env (`SIBERFLOW_REQUEST_DELAY_MS`) atau settings UI
@@ -343,6 +343,37 @@ Satu tool untuk dua operasi: **create** PDF baru dan **read** PDF existing. Patt
 
 - **Text extraction** — semua text layer dari setiap halaman, di-join dengan `\f` (form feed) sebagai separator.
 - **Limitasi**: PDF hasil scan (image of text, no embedded text layer) return **empty** — pdfjs-dist tidak OCR, hanya baca text layer digital. PDF yang di-generate programatik (Word export, pdf-lib, dll) terekstrak baik.
+
+### Mode OCR (untuk PDF gambar/scan)
+
+Pass `ocr: true` untuk kenali text dari PDF yang berupa scan/foto. Host render tiap halaman jadi PNG resolusi tinggi (`pdfjs-dist` + `@napi-rs/canvas`, scale 2.0 ≈ 200 DPI) lalu OCR tiap PNG via Tesseract lokal (`pytesseract`). Text hasil OCR diteruskan ke script sama persis seperti read mode (`(text) => {...}`, dipisah `\f` per halaman). `ocrLanguage` pilih bahasa Tesseract (default `ind` Indonesia; `eng` English; `eng+ind` keduanya).
+
+Prefer `readOnly: true` untuk PDF yang di-generate programatik — lebih cepat & akurat. OCR mode cuma worth it kalau PDF gak punya text layer asli.
+
+OCR 100% lokal, **tanpa API key**, berbeda dari `analyze_image` yang kirim gambar ke model multimodal remote.
+
+#### Prasyarat host OCR
+
+```bash
+# Python 3 + binding
+pip install pytesseract Pillow
+
+# Binary tesseract
+sudo apt install tesseract-ocr          # Debian/Ubuntu
+# brew install tesseract                # macOS
+# choco install tesseract               # Windows
+```
+
+Kalau `pip install` gagal dengan `externally-managed-environment` (PEP 668, di macOS Homebrew Python + Linux modern), pakai `--break-system-packages` atau venv — detail lengkap & per-OS di [README.md → PDF OCR host prerequisites](README.md#note-on-externally-managed-environment-pep-668).
+
+Override opsional:
+
+```bash
+SIBERFLOW_PDF_OCR_LANGUAGE=ind          # default (Indonesia); 'eng' English, 'eng+ind' keduanya
+SIBERFLOW_PDF_OCR_TIMEOUT_MS=120000     # cap wall-clock per call OCR
+```
+
+Implementasi: `tools/pdf/pdf-script.ts` cabang `ocr:true`, helper `tools/ocr.ts` (`ocrImagesToText`, internal — bukan tool terpisah, supaya gak ambigu sama `analyze_image`), helper `tools/python-runner.ts` (shared `runPython`). Prasyarat host = dependency user (sama seperti voice tools butuh `python3`+`ffmpeg`), gak di-bundle. Catatan packaging VSIX/Desktop ada di `packages/core/src/tools/pdf/TODO-packaging.md`.
 
 ### Keamanan sandbox
 
