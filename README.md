@@ -301,7 +301,7 @@ cd packages/desktop && npm run rebuild
 - **Database query tool** - `db_query` supports MySQL, PostgreSQL, and SQLite
 - **Excel spreadsheet tool** - `excel_script` can read, modify, and create `.xlsx` files through `exceljs`
 - **Word document tool** - `docx_script` can create and read `.docx` files through `docx` and `mammoth`
-- **PDF document tool** - `pdf_script` can create PDFs with `pdf-lib` and read digital text layers with `pdfjs-dist`
+- **PDF document tool** - `pdf_script` can create PDFs with `pdf-lib`, read digital text layers with `pdfjs-dist`, and OCR scanned/image PDFs with Tesseract via `ocr: true`
 - **Browser tool** - `run_browser` automates installed Chrome/Edge through Puppeteer; no Chromium download
 - **Image analysis tool** - `analyze_image` sends an image plus prompt to a configured OpenAI-compatible multimodal model
 - **Per-tool toggle** - enable only the tools you need through settings or `SIBERFLOW_TOOLS`
@@ -339,7 +339,64 @@ It supports headings, paragraphs, text styling, bullets/numbering, tables, secti
 
 `pdf_script` uses `pdf-lib` for creation and `pdfjs-dist` for reading. Create mode receives `(pdf, P, font)` with a pre-embedded Helvetica font. Read mode extracts digital text layers from pages and joins pages with `\f`.
 
-Scanned/image-only PDFs do not return text because OCR is not included.
+Scanned/image-only PDFs have no text layer, so read mode returns empty. For those, use **OCR mode** (see below) instead.
+
+#### OCR mode (for scanned/image PDFs)
+
+Pass `ocr: true` to recognize text from a PDF that is a scan or photo of a document. The host renders each page to a high-resolution PNG (`pdfjs-dist` + `@napi-rs/canvas`) and OCRs each PNG with the locally installed Tesseract (`pytesseract`). The recognized text is handed to your script exactly like read mode (`(text) => {...}` with `\f` between pages). Use `ocrLanguage` to select the Tesseract language (default `ind` for Indonesian; `eng` for English; `eng+ind` for both).
+
+```jsonc
+// Example: extract text from a scanned PDF
+{ "path": "scanned-invoice.pdf", "ocr": true, "ocrLanguage": "ind",
+  "script": "(text) => { const pages = text.split('\\f'); return { pageCount: pages.length, pages }; }" }
+```
+
+Prefer `readOnly: true` for digitally-generated PDFs — it is faster and perfectly accurate. OCR mode is only worthwhile when the PDF has no real text layer.
+
+OCR runs entirely locally; **no API key is required**. This is distinct from `analyze_image`, which sends the image to a remote multimodal model.
+
+##### Host prerequisites (required for OCR mode)
+
+The host must have Python 3, the Python bindings, and the Tesseract binary installed. If anything is missing when the model calls `pdf_script` with `ocr: true`, the full Python error is returned so the model can explain the failure to the user.
+
+```bash
+# Python 3 + the bindings
+pip install pytesseract Pillow
+
+# Tesseract binary
+sudo apt install tesseract-ocr          # Debian/Ubuntu
+# brew install tesseract                # macOS (also gets languages via brew install tesseract-lang)
+# choco install tesseract               # Windows
+```
+
+Optional env overrides:
+
+```bash
+SIBERFLOW_PDF_OCR_LANGUAGE=ind          # default (Indonesian); 'eng' for English, 'eng+ind' for both
+SIBERFLOW_PDF_OCR_TIMEOUT_MS=120000     # per-call wall-clock cap
+```
+
+###### Note on `externally-managed-environment` (PEP 668)
+
+On macOS (Homebrew Python) and recent Linux distros (Debian/Ubuntu 23.04+, Fedora 38+), `pip install` into the system Python is blocked by PEP 668 and fails with `error: externally-managed-environment`. You have two options:
+
+```bash
+# Option A — install into the system Python anyway (quickest, least isolated)
+pip install --break-system-packages pytesseract Pillow
+
+# Option B — use a virtualenv (cleaner; Siberflow reads it from PATH)
+python3 -m venv ~/.venvs/siberflow
+source ~/.venvs/siberflow/bin/activate        # Windows: ~\.venvs\siberflow\Scripts\activate
+pip install pytesseract Pillow
+# Now run siberflow from this shell so its python3 is the venv's.
+```
+
+To verify everything is reachable:
+
+```bash
+python3 -c "import pytesseract, PIL; print('OK')"
+tesseract --version
+```
 
 ### Uploads
 
@@ -413,6 +470,8 @@ sudo apt install ffmpeg          # Debian/Ubuntu
 # brew install ffmpeg            # macOS
 # choco install ffmpeg           # Windows
 ```
+
+If `pip install` fails with `externally-managed-environment` (PEP 668, on macOS Homebrew Python and recent Linux), use `--break-system-packages` or a virtualenv — see the same note under [PDF OCR host prerequisites](#note-on-externally-managed-environment-pep-668).
 
 They are opt-in (off by default) and are not added to the Desktop/VS Code settings UI — enable them through env:
 

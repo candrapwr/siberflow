@@ -1,8 +1,11 @@
 import vm from "node:vm";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute } from "node:path";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, join } from "node:path";
+import { tmpdir } from "node:os";
+import { randomBytes } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
+import { ocrImagesToText } from "../ocr.js";
 
 /**
  * Resolve a base URL for createRequire that works in both ESM and CJS contexts.
@@ -38,6 +41,17 @@ interface Args {
   script: string;
   /** Read-only mode: extract text via pdfjs-dist, don't write. */
   readOnly?: boolean;
+  /**
+   * OCR mode for scanned/image PDFs: render each page to a PNG via pdfjs +
+   * @napi-rs/canvas, then OCR each PNG via the host's Tesseract (pytesseract).
+   * The recognized text is passed to the script exactly like read mode
+   * (`(text) => {...}` with `\f` between pages). Slower than readOnly, and
+   * requires tesseract on the host; prefer readOnly for PDFs with a real text
+   * layer.
+   */
+  ocr?: boolean;
+  /** Tesseract language for OCR mode, e.g. "eng", "ind", or "eng+ind". */
+  ocrLanguage?: string;
 }
 
 /** Max wall-clock time for a script, in ms. Prevents runaway loops. */
@@ -63,6 +77,16 @@ export const pdfScriptTool: Tool = {
     "Signature: `(text) => { ... return data }`. The `text` is a string with pages separated by " +
     "`\\f` (form feed) — split on it to get per-page text. Extract whatever you need and RETURN " +
     "it; the return value is serialized to JSON and sent back to you as the tool result.\n\n" +
+    "• OCR an existing PDF (for scanned/image PDFs): pass `path` + `ocr: true`. The host renders " +
+    "each page to a PNG (via pdfjs-dist + @napi-rs/canvas) and OCRs each PNG with the host's " +
+    "Tesseract, then passes the recognized text to your script — same signature and `\\f` " +
+    "separator as read mode. Optional `ocrLanguage` selects the Tesseract language (default " +
+    "`ind` for Indonesian; use `eng` for English, `eng+ind` for both). Use this ONLY when the PDF has no real " +
+    "text layer (e.g. a scan or photo of a document) — for digitally-generated PDFs, `readOnly: " +
+    "true` is faster and perfectly accurate. Host prerequisites: `pip install pytesseract " +
+    "Pillow` plus the tesseract binary (`apt install tesseract-ocr` | `brew install tesseract` | " +
+    "`choco install tesseract`). If anything is missing, the full Python error is returned so you " +
+    "can explain the failure to the user. No API key needed — OCR runs entirely locally.\n\n" +
     "CREATING — common patterns:\n" +
     "• Page + text: `const page = pdf.addPage([595, 842]); const font = await pdf.embedFont(P.StandardFonts.Helvetica); page.drawText('Title', { x: 50, y: 800, size: 24, font, color: P.rgb(0,0,0) })` " +
     "(A4 = [595, 842] in points; use `P.PageSizes.A4`)\n" +
@@ -132,12 +156,71 @@ export const pdfScriptTool: Tool = {
           "If true: read mode. The PDF at `path` is loaded and its text extracted via pdfjs-dist, " +
           "passed to the script; nothing is written to disk. Default false (create mode).",
       },
+      ocr: {
+        type: "boolean",
+        description:
+          "If true: OCR mode for scanned/image PDFs. Each page is rendered to a PNG and OCR'd " +
+          "with the host's Tesseract; the recognized text is passed to the script (same " +
+          "`(text) => {...}` signature and `\\f` page separator as readOnly). Requires tesseract " +
+          "on the host. Use only when the PDF has no real text layer — readOnly is faster and " +
+          "exact for digitally-generated PDFs. Default false.",
+      },
+      ocrLanguage: {
+        type: "string",
+        description:
+          "Tesseract language code for OCR mode. Default `ind` (Indonesian). Use `eng` for " +
+          "English, or `eng+ind` for both. Ignored unless `ocr` is true.",
+      },
     },
     required: ["script"],
     additionalProperties: false,
   },
   async execute(args, ctx) {
     const parsed = parseArgs(args);
+
+    // ----- OCR MODE --------------------------------------------------------
+    // For scanned/image PDFs with no text layer. Render each page to a PNG
+    // (pdfjs-dist + @napi-rs/canvas), then OCR each PNG with the host's
+    // Tesseract via the shared ocrImagesToText helper. The recognized text is
+    // fed to the script exactly like read mode (`(text) => {...}`, `\f` between
+    // pages). If tesseract/pytesseract is missing on the host, the Python
+    // stderr is returned as the tool result so the model can explain it.
+    if (parsed.ocr === true) {
+      if (!parsed.path) {
+        throw new Error("`path` is required in OCR mode (the PDF to read).");
+      }
+      const loadPath = await resolveSourcePath(ctx, parsed.path);
+      const buffer = await readFile(loadPath);
+
+      // Render pages -> PNG temp files, then OCR them.
+      const pngPaths = await renderPdfToImages(buffer);
+      let text: string;
+      let ocrNote: string;
+      try {
+        const result = await ocrImagesToText(pngPaths, {
+          ...(parsed.ocrLanguage ? { language: parsed.ocrLanguage } : {}),
+          cwd: ctx.projectDir,
+        });
+        if (result.failed) {
+          // Surface the raw Python outcome (missing-lib message etc.).
+          return formatOcrFailure(loadPath, result.raw, pngPaths.length);
+        }
+        text = result.pages.join("\f");
+        ocrNote = `OCR'd via tesseract, ${result.pages.length} page(s)`;
+      } finally {
+        // Best-effort cleanup of the rendered PNGs regardless of outcome.
+        await cleanupTempPaths(pngPaths);
+      }
+
+      const returnValue = runReadScript(text, parsed.script);
+      return summarize({
+        loadedFrom: loadPath,
+        wroteTo: undefined,
+        readOnly: true,
+        returnValue,
+        note: ocrNote,
+      });
+    }
 
     // ----- READ MODE -------------------------------------------------------
     // Host loads the PDF and extracts text via pdfjs-dist (async, can't run in
@@ -233,6 +316,18 @@ function parseArgs(args: unknown): Args {
       throw new Error("`readOnly` must be a boolean when provided");
     }
     out.readOnly = input.readOnly;
+  }
+  if (input.ocr !== undefined) {
+    if (typeof input.ocr !== "boolean") {
+      throw new Error("`ocr` must be a boolean when provided");
+    }
+    out.ocr = input.ocr;
+  }
+  if (input.ocrLanguage !== undefined) {
+    if (typeof input.ocrLanguage !== "string" || input.ocrLanguage.trim() === "") {
+      throw new Error("`ocrLanguage` must be a non-empty string when provided");
+    }
+    out.ocrLanguage = input.ocrLanguage.trim();
   }
   return out;
 }
@@ -461,6 +556,118 @@ async function extractPdfText(data: Buffer): Promise<string> {
   return pages.join("\f");
 }
 
+/**
+ * Render every page of a PDF to a PNG file in the OS tmpdir, returning the
+ * absolute paths in page order. Used by OCR mode: tesseract reads the PNGs.
+ *
+ * This mirrors `extractPdfText`'s pdfjs-dist loading/resolution, but instead
+ * of `page.getTextContent()` it calls `page.render()` against an
+ * `@napi-rs/canvas` 2D context (pdfjs-dist's Node canvas backend, already in
+ * the dependency tree as an optional dep). The render scale is set high
+ * (≈200 DPI) because OCR accuracy on small/thin glyphs improves substantially
+ * with higher resolution input.
+ *
+ * @napi-rs/canvas ships platform-specific prebuilt binaries. If the binary for
+ * the current platform is not installed, resolution fails — we throw a clear
+ * error rather than a cryptic module-not-found, so the model can tell the user
+ * the host needs the canvas binary for PDF image rendering.
+ */
+async function renderPdfToImages(
+  data: Buffer,
+  opts: { scale?: number } = {},
+): Promise<string[]> {
+  const scale = opts.scale ?? 2.0;
+
+  // Resolve @napi-rs/canvas the same way we resolve pdfjs-dist.
+  const req = createRequire(requireBaseUrl());
+  let canvasMod: typeof import("@napi-rs/canvas");
+  try {
+    // `@napi-rs/canvas` is an optional dependency of pdfjs-dist; it may be
+    // absent on platforms whose prebuilt binary isn't installed.
+    canvasMod = req("@napi-rs/canvas");
+  } catch {
+    throw new Error(
+      "Could not load @napi-rs/canvas, which pdf_script needs to render PDF pages to images for OCR. " +
+        "This package is an optional dependency of pdfjs-dist and ships platform-specific binaries; " +
+        "the binary for the current platform may not be installed. " +
+        "Install it with:  npm install @napi-rs/canvas",
+    );
+  }
+
+  // Resolve pdfjs-dist's legacy build (Node-compatible, no DOM needed).
+  const pdfjsPath = req.resolve("pdfjs-dist/legacy/build/pdf.mjs");
+  const pdfjsDir = dirname(pdfjsPath);
+  const pdfjs = req(pdfjsPath);
+  pdfjs.GlobalWorkerOptions.workerSrc = pathToFileURL(pdfjsDir + "/pdf.worker.mjs").href;
+
+  const loadingTask = pdfjs.getDocument({
+    data: new Uint8Array(data),
+    isEvalSupported: false,
+  });
+  const doc = await loadingTask.promise;
+  const paths: string[] = [];
+  try {
+    for (let i = 1; i <= doc.numPages; i++) {
+      const page = await doc.getPage(i);
+      const viewport = page.getViewport({ scale });
+      const width = Math.ceil(viewport.width);
+      const height = Math.ceil(viewport.height);
+      const canvas = canvasMod.createCanvas(width, height);
+      const context = canvas.getContext("2d");
+      // pdfjs renders into the canvas context; await its completion before
+      // serializing the buffer.
+      await page.render({ canvasContext: context, viewport }).promise;
+      const png = canvas.toBuffer("image/png");
+      const outPath = join(
+        tmpdir(),
+        `siberflow-pdf-page-${randomBytes(6).toString("hex")}-${i}.png`,
+      );
+      await writeFile(outPath, png);
+      paths.push(outPath);
+    }
+  } finally {
+    try {
+      await doc.destroy();
+    } catch {
+      // ignore cleanup errors
+    }
+  }
+  return paths;
+}
+
+/** Best-effort removal of the temp PNGs produced by renderPdfToImages. */
+async function cleanupTempPaths(paths: string[]): Promise<void> {
+  await Promise.all(
+    paths.map((p) =>
+      rm(p, { force: true }).catch(() => {
+        /* best-effort */
+      }),
+    ),
+  );
+}
+
+/**
+ * Format an OCR-mode Python failure (typically a missing tesseract/pytesseract
+ * on the host) into a tool-result string. Mirrors the speech tools' convention
+ * of returning the full Python outcome so the model can diagnose and relay it.
+ */
+function formatOcrFailure(
+  loadPath: string,
+  raw: { stdout: string; stderr: string; code: number | null; timedOut: boolean },
+  pageCount: number,
+): string {
+  const lines: string[] = [];
+  lines.push(`Read ${loadPath} (OCR mode — FAILED)`);
+  lines.push(
+    `OCR of ${pageCount} page(s) failed — tesseract or its Python bindings are likely missing on the host.`,
+  );
+  lines.push(`exit code: ${raw.code ?? "null"}`);
+  if (raw.timedOut) lines.push("(killed after timeout)");
+  if (raw.stdout.trim()) lines.push(`--- stdout ---\n${raw.stdout.trim()}`);
+  if (raw.stderr.trim()) lines.push(`--- stderr ---\n${raw.stderr.trim()}`);
+  return lines.join("\n");
+}
+
 /** Minimal safe globals shared by both read and create sandboxes. */
 function baseSandbox(): Record<string, unknown> {
   return {
@@ -655,8 +862,10 @@ function summarize(opts: {
   droppedChars?: string[];
   /** Pages where content (text/rect right edge) overflowed the page width. */
   overflow?: { pageNum: number; edge: number; pageWidth: number; overBy: number }[];
+  /** Optional provenance note (e.g. OCR language/page count). */
+  note?: string;
 }): string {
-  const { loadedFrom, wroteTo, readOnly, returnValue, droppedChars, overflow } = opts;
+  const { loadedFrom, wroteTo, readOnly, returnValue, droppedChars, overflow, note } = opts;
   const lines: string[] = [];
 
   if (loadedFrom) {
@@ -666,6 +875,9 @@ function summarize(opts: {
     lines.push(`Wrote ${wroteTo} (.pdf)`);
   } else if (readOnly) {
     lines.push(`(read-only — PDF not written)`);
+  }
+  if (note) {
+    lines.push(`(${note})`);
   }
 
   // Warn about characters that were lost (emoji/CJK/etc. the standard font
