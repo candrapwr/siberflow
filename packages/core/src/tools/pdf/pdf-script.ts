@@ -67,11 +67,13 @@ export const pdfScriptTool: Tool = {
     "PDF (read mode). This is the single tool for PDF work.\n\n" +
     "MODES:\n" +
     "• Create a new PDF: pass `saveAs` (or `path`) + a script that builds the document via the " +
-    "`pdf-lib` API. Signature: `(pdf, P) => { ... }` where `pdf` is a fresh empty `PDFDocument` " +
-    "and `P` is the `pdf-lib` module (giving you `PDFDocument`, `StandardFonts`, `rgb`, `degrees`, " +
-    "`PageSizes`, etc.). Add pages via `pdf.addPage([width, height])`, then draw text, shapes, " +
-    "embed images, etc. The host serializes `pdf` to a PDF buffer via `pdf.save()` and writes it " +
-    "to `path`/`saveAs` after the script runs — you never touch the filesystem.\n" +
+    "`pdf-lib` API. Signature: `(pdf, P, font, Layout) => { ... }` where `pdf` is a fresh empty " +
+    "`PDFDocument`, `P` is the `pdf-lib` module (giving you `PDFDocument`, `StandardFonts`, `rgb`, " +
+    "`degrees`, `PageSizes`, etc.), `font` is a pre-embedded Helvetica (so drawText works without " +
+    "async embedFont), and `Layout` is a text-layout helper with `Layout.textBlock(page, {...})` " +
+    "for word-wrapped, aligned, flowing text blocks (see CREATING below). Add pages via " +
+    "`pdf.addPage([width, height])`, then draw text/shapes. The host serializes `pdf` via " +
+    "`pdf.save()` and writes it to `path`/`saveAs` after the script runs — you never touch the fs.\n" +
     "• Read an existing PDF: pass `path` + `readOnly: true`. The host loads the PDF via pdfjs-dist " +
     "(Mozilla PDF.js) and extracts text from EVERY page, then passes that text to your script. " +
     "Signature: `(text) => { ... return data }`. The `text` is a string with pages separated by " +
@@ -88,30 +90,52 @@ export const pdfScriptTool: Tool = {
     "`choco install tesseract`). If anything is missing, the full Python error is returned so you " +
     "can explain the failure to the user. No API key needed — OCR runs entirely locally.\n\n" +
     "CREATING — common patterns:\n" +
-    "• Page + text: `const page = pdf.addPage([595, 842]); const font = await pdf.embedFont(P.StandardFonts.Helvetica); page.drawText('Title', { x: 50, y: 800, size: 24, font, color: P.rgb(0,0,0) })` " +
+    "• COORDINATE SYSTEM (CRITICAL — pdf-lib uses BOTTOM-LEFT origin): x grows RIGHT, y grows UP. " +
+    "The TOP edge of an A4 page is y≈842, the BOTTOM edge is y=0. To place a title at the top, " +
+    "use y≈800. To place a footer near the bottom, use y≈40. Decrement y as you move DOWN the " +
+    "page. Many mistakes come from assuming y grows downward (the HTML/canvas convention) — it " +
+    "does NOT in pdf-lib. The `y` in drawText is the text BASELINE (bottom of capital letters, " +
+    "roughly), not the top of the glyph.\n" +
+    "• Page + text: `const page = pdf.addPage([595, 842]); page.drawText('Title', { x: 50, y: 800, size: 24, font, color: P.rgb(0,0,0) })` " +
     "(A4 = [595, 842] in points; use `P.PageSizes.A4`)\n" +
     "• Note: `embedFont` is async — you CANNOT call it inside the sandbox (the sandbox is " +
-    "synchronous). So you must build pages WITHOUT custom fonts, OR ask the host to embed a " +
-    "standard font for you. The host pre-embeds Helvetica and passes it as `font` (3rd arg): " +
+    "synchronous). The host pre-embeds Helvetica and passes it as `font` (3rd arg). Do NOT call " +
+    "`pdf.embedFont(...)` yourself; use the `font` argument: " +
     "`(pdf, P, font) => { const page = pdf.addPage(P.PageSizes.A4); page.drawText('Hi', { x:50, y:800, size:24, font }); }`\n" +
-    "• Shapes: `page.drawRectangle({ x, y, width, height, color: P.rgb(1,0,0) })`, `page.drawLine({ start:{x,y}, end:{x,y}, thickness:2 })`\n" +
-    "• Image: `const img = await pdf.embedPng(bytes)` — but embed is async, so images must be " +
-    "pre-embedded. If you need images, read the bytes OUTSIDE this tool (via read_file) and " +
-    "note that async embed cannot run in the sandbox. For now, create text/shape-only PDFs.\n" +
-    "• TEXT ALIGNMENT / WIDTH (IMPORTANT): to right/center align text, do NOT guess width with " +
-    "`text.length * size * 0.5` — that is unreliable AND produces NaN if any operand is undefined. " +
-    "Use the EXACT api: `font.widthOfTextAtSize(text, size)` returns the real rendered width in " +
-    "points. Example right-align: `const w = font.widthOfTextAtSize(text, size); page.drawText(text, { x: rightEdge - w - 4, y, size, font });`\n" +
-    "• AVOID NaN: every draw option (x, y, width, height, size, color.red/.green/.blue) must be a " +
-    "finite number. If a row/cell is missing, guard with `(row[c] ?? '')` and a default size — " +
-    "do NOT let `undefined` flow into arithmetic. A NaN throws a hard error.\n" +
-    "• All coordinate math must use real numbers: validate inputs, default missing array cells, " +
-    "and never multiply by `undefined`.\n" +
-    "• LAYOUT (avoid content cut off on the right): before finalizing, verify that the sum of all " +
-    "column/element widths PLUS the left margin fits within the page width. The tool will WARN you " +
-    "if any drawn text/shape extends past the right page edge. For wide tables use A4 Landscape " +
-    "(`pdf.addPage([842, 595])`) and allocate each column a width >= its widest value (check with " +
-    "`font.widthOfTextAtSize(text, size)`). A4 portrait = 595pt wide; A4 landscape = 842pt wide.\n\n" +
+    "• TEXT WRAPPING (built into pdf-lib): `page.drawText(longText, { x, y, size, font, maxWidth: 400, lineHeight: size * 1.2 })` " +
+    "automatically word-wraps `longText` into multiple lines that fit `maxWidth` points wide. " +
+    "`lineHeight` controls the gap between wrapped lines (default = `size`; use `size * 1.2` for " +
+    "comfortable reading). This is the simplest way to draw a paragraph without manual measuring.\n" +
+    "• FLOWING TEXT BLOCKS (RECOMMENDED — Layout.textBlock): for body text, headings, and any " +
+    "block that should sit below the previous one, use the `Layout` helper (4th arg). " +
+    "`Layout.textBlock(page, { x, y, width, text, size, align, lineHeight })` wraps text to " +
+    "`width`, supports `align: 'left'|'center'|'right'`, and returns `{ nextY, lineCount }`. " +
+    "Chain blocks by feeding nextY into the next call: " +
+    "`const r = Layout.textBlock(page, { x:50, y:800, width:495, text:'...', size:12 }); Layout.textBlock(page, { x:50, y: r.nextY - 12, width:495, text:'next...', size:12 });`. " +
+    "This removes the #1 source of overlapping text (forgetting to advance Y correctly).\n" +
+    "• FLOW CURSOR (alternative): `page.moveTo(x, y)` sets a default position; subsequent " +
+    "`page.drawText(text, { size, font })` calls (without x/y) draw at the cursor. " +
+    "`page.moveDown(20)` shifts the cursor down by 20pt. Use this for a simple top-to-bottom flow.\n" +
+    "• TEXT ALIGNMENT (single line): to right/center align one line, measure with " +
+    "`font.widthOfTextAtSize(text, size)` (exact rendered width in points) and offset x. " +
+    "Right-align: `const w = font.widthOfTextAtSize(text, size); page.drawText(text, { x: rightEdge - w, y, size, font });`. " +
+    "Do NOT estimate width as `text.length * size * 0.5` — it is unreliable and produces NaN if " +
+    "any operand is undefined.\n" +
+    "• SHAPES: `page.drawRectangle({ x, y, width, height, color })` (y is the bottom edge), " +
+    "`page.drawLine({ start:{x,y}, end:{x,y}, thickness:2 })`.\n" +
+    "• IMAGES: `embedPng`/`embedJpg` are async, so they cannot run in the sync sandbox. Create " +
+    "text/shape-only PDFs here; if you must embed an image, read its bytes via read_file in a " +
+    "prior step and note that async embed is unavailable.\n" +
+    "• AVOID NaN: every draw option (x, y, width, height, size) must be a finite number. If a " +
+    "data cell is missing, guard with `(row[c] ?? '')` and a default size. A NaN throws a hard error.\n" +
+    "• LAYOUT VALIDATION: the tool WARNS you (in the result) about three layout mistakes after " +
+    "the script runs: (1) content past the RIGHT page edge (cut off on the right), (2) content " +
+    "below y=0 (cut off at the BOTTOM — start a new page when Y gets near ~50), and (3) two text " +
+    "blocks that OVERLAP (colliding). For wide tables use A4 Landscape " +
+    "(`pdf.addPage([842, 595])`). A4 portrait = 595pt wide; A4 landscape = 842pt wide.\n\n" +
+    "PAGINATION: pdf-lib does NOT auto-paginate. When `Layout.textBlock`'s nextY drops below ~50, " +
+    "you MUST add a new page yourself (`pdf.addPage(P.PageSizes.A4)`) and reset Y to ~800, or " +
+    "content will be cut off at the bottom of the page.\n\n" +
     "READING — the text you receive is pdfjs-dist's extraction. Note: scanned PDFs (images of " +
     "text, no embedded text layer) will return EMPTY text — pdfjs-dist cannot OCR. Only PDFs with " +
     "a real text layer (generated digitally) extract properly.\n\n" +
@@ -141,13 +165,15 @@ export const pdfScriptTool: Tool = {
         type: "string",
         description:
           "A synchronous JavaScript function expression.\n" +
-          "Create mode: `(pdf, P, font) => { ... }` — `pdf` is a fresh PDFDocument, `P` is the " +
-          "pdf-lib module, `font` is a pre-embedded Helvetica font (so you can call drawText " +
-          "without async embedFont).\n" +
+          "Create mode: `(pdf, P, font, Layout) => { ... }` — `pdf` is a fresh PDFDocument, `P` is " +
+          "the pdf-lib module, `font` is a pre-embedded Helvetica, `Layout` is a text-layout " +
+          "helper (`Layout.textBlock(page, {x,y,width,text,size,align,lineHeight}) -> {nextY, " +
+          "lineCount}`). Prefer Layout.textBlock for body text to avoid stacking/overlap.\n" +
           "Read mode: `(text) => { ... return data }` — `text` is the full text with `\\f` " +
           "between pages.\n" +
           "Examples —\n" +
-          "Create: \"(pdf, P, font) => { const page = pdf.addPage(P.PageSizes.A4); page.drawText('Report Title', { x: 50, y: 800, size: 28, font, color: P.rgb(0,0,0) }); page.drawRectangle({ x: 50, y: 770, width: 200, height: 3, color: P.rgb(0.8,0,0) }); }\"\n" +
+          "Create (with Layout.textBlock): \"(pdf, P, font, Layout) => { const page = pdf.addPage(P.PageSizes.A4); let y = 800; page.drawText('Report', { x:50, y, size:28, font }); y -= 50; y = Layout.textBlock(page, { x:50, y, width:495, text:'Long body text that wraps to fit the page width automatically...', size:12, lineHeight:16 }).nextY; }\"\n" +
+          "Create (raw drawText): \"(pdf, P, font) => { const page = pdf.addPage(P.PageSizes.A4); page.drawText('Title', { x: 50, y: 800, size: 28, font }); }\"\n" +
           "Read: \"(text) => { const pages = text.split('\\\\f'); return { pageCount: pages.length, firstPage: pages[0].slice(0, 500), wordCount: text.split(/\\\\s+/).length }; }\"",
       },
       readOnly: {
@@ -281,7 +307,9 @@ export const pdfScriptTool: Tool = {
       readOnly: false,
       returnValue,
       droppedChars: [...droppedChars],
-      overflow: overflow.getOverflow(),
+      rightOverflow: overflow.getRightOverflow(),
+      bottomOverflow: overflow.getBottomOverflow(),
+      overlaps: overflow.getOverlaps(),
     });
   },
 };
@@ -421,16 +449,37 @@ function wrapPdf(pdf: PDFDocument): {
   return { pdf, overflow };
 }
 
-/** Tracks text/shapes drawn outside the page bounds, for layout warnings. */
+/**
+ * Tracks text/shapes drawn on pages for layout diagnostics. It records three
+ * kinds of issues to warn the model about after the script runs:
+ *   1. RIGHT overflow  — content's right edge (x + width) past the page width.
+ *   2. BOTTOM overflow — content's bottom edge (y) below the page (y < 0),
+ *      i.e. content drawn off the bottom of the page (cut off). Remember
+ *      pdf-lib uses bottom-left origin, so y=0 is the BOTTOM of the page.
+ *   3. OVERLAP         — two TEXT bounding boxes on the same page intersect
+ *      significantly (heuristic, >50% area of the smaller box). Catches the
+ *      common AI mistake of two text blocks colliding (e.g. a title drawn on
+ *      top of the body because the y decrement was wrong/too small).
+ *
+ * The overlap check is heuristic — it is NOT pixel-accurate and intentionally
+ * only compares text-vs-text (decorative shapes that overlap text on purpose,
+ * like a highlight rectangle behind a heading, are not flagged). Its goal is
+ * to catch gross collisions, not validate fine layout.
+ */
 class OverflowTracker {
   /** Max right edge (x + width) seen on any page, keyed by page number. */
   private readonly rightEdges = new Map<number, { edge: number; pageWidth: number }>();
+  /** Min bottom edge (y) seen on any page, keyed by page number. */
+  private readonly bottomEdges = new Map<number, { edge: number; pageHeight: number }>();
+  /** Axis-aligned bounding boxes of TEXT blocks, per page, for overlap checks. */
+  private readonly textBoxes = new Map<number, BBox[]>();
   private pageCount = 0;
 
   recordPage(): number {
     return ++this.pageCount;
   }
 
+  /** Record a right-edge for right-overflow detection (kept for backward use). */
   noteDraw(pageNum: number, pageWidth: number, rightEdge: number): void {
     const prev = this.rightEdges.get(pageNum);
     if (!prev || rightEdge > prev.edge) {
@@ -438,8 +487,40 @@ class OverflowTracker {
     }
   }
 
+  /**
+   * Record the full geometry of one drawn element. `pageWidth`/`pageHeight`
+   * feed right/bottom overflow detection; `bbox` (when kind==='text') feeds
+   * overlap detection. Coordinates are in pdf-lib's bottom-left origin space.
+   */
+  noteElement(
+    pageNum: number,
+    pageWidth: number,
+    pageHeight: number,
+    rightEdge: number,
+    bottomEdge: number,
+    bbox?: BBox,
+    kind?: DrawKind,
+  ): void {
+    // Right edge.
+    const prevR = this.rightEdges.get(pageNum);
+    if (!prevR || rightEdge > prevR.edge) {
+      this.rightEdges.set(pageNum, { edge: rightEdge, pageWidth });
+    }
+    // Bottom edge (min y). Content drawn at y < 0 is off the bottom of the page.
+    const prevB = this.bottomEdges.get(pageNum);
+    if (!prevB || bottomEdge < prevB.edge) {
+      this.bottomEdges.set(pageNum, { edge: bottomEdge, pageHeight });
+    }
+    // Text bbox for overlap detection.
+    if (kind === "text" && bbox) {
+      const list = this.textBoxes.get(pageNum) ?? [];
+      list.push(bbox);
+      this.textBoxes.set(pageNum, list);
+    }
+  }
+
   /** Returns overflow details for any page where content exceeded the width. */
-  getOverflow(): { pageNum: number; edge: number; pageWidth: number; overBy: number }[] {
+  getRightOverflow(): { pageNum: number; edge: number; pageWidth: number; overBy: number }[] {
     const out: { pageNum: number; edge: number; pageWidth: number; overBy: number }[] = [];
     for (const [pageNum, { edge, pageWidth }] of this.rightEdges) {
       // Allow a small tolerance (1pt) for floating point.
@@ -449,6 +530,63 @@ class OverflowTracker {
     }
     return out.sort((a, b) => a.pageNum - b.pageNum);
   }
+
+  /** Returns overflow details for any page where content dropped below y=0. */
+  getBottomOverflow(): { pageNum: number; edge: number; pageHeight: number; overBy: number }[] {
+    const out: { pageNum: number; edge: number; pageHeight: number; overBy: number }[] = [];
+    for (const [pageNum, { edge, pageHeight }] of this.bottomEdges) {
+      if (edge < -1) {
+        out.push({ pageNum, edge, pageHeight, overBy: Math.round(-edge) });
+      }
+    }
+    return out.sort((a, b) => a.pageNum - b.pageNum);
+  }
+
+  /**
+   * Returns overlap pairs: two text boxes on the same page whose intersection
+   * area exceeds 50% of the SMALLER box's area. This is the heuristic threshold
+   * to avoid flagging text that merely sits adjacent (subtitles, captions).
+   */
+  getOverlaps(): { pageNum: number; a: BBox; b: BBox; overlapPct: number }[] {
+    const out: { pageNum: number; a: BBox; b: BBox; overlapPct: number }[] = [];
+    for (const [pageNum, boxes] of this.textBoxes) {
+      for (let i = 0; i < boxes.length; i++) {
+        for (let j = i + 1; j < boxes.length; j++) {
+          const hit = overlapRatio(boxes[i]!, boxes[j]!);
+          if (hit !== null && hit >= 0.5) {
+            out.push({ pageNum, a: boxes[i]!, b: boxes[j]!, overlapPct: Math.round(hit * 100) });
+          }
+        }
+      }
+    }
+    return out.sort((a, b) => a.pageNum - b.pageNum);
+  }
+}
+
+type DrawKind = "text" | "rect" | "image" | "line" | "ellipse";
+
+/** Axis-aligned bounding box in pdf-lib bottom-left-origin space. */
+interface BBox {
+  x: number;
+  y: number; // bottom edge (lowest y of the element)
+  w: number;
+  h: number;
+}
+
+/**
+ * How much two boxes overlap, as a fraction of the SMALLER box's area (0..1).
+ * Returns null if they don't intersect at all.
+ */
+function overlapRatio(a: BBox, b: BBox): number | null {
+  const ix = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
+  const iy = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+  if (ix === 0 || iy === 0) return null;
+  const inter = ix * iy;
+  const areaA = a.w * a.h;
+  const areaB = b.w * b.h;
+  const smaller = Math.min(areaA, areaB);
+  if (smaller <= 0) return null;
+  return inter / smaller;
 }
 
 /** Names of PDFPage methods that take option objects (host-realm normalized). */
@@ -463,47 +601,233 @@ const DRAW_METHOD_NAMES = [
  * the sandbox; internal pdf-lib calls bypass these wrappers (they operate on
  * the original, host-realm objects).
  *
- * For drawText and drawRectangle, also record the right edge (x + content
- * width) so the host can detect content spilling past the page width and warn
- * the model — this catches the common "table cut off on the right" mistake
- * where the AI's column widths don't add up to fit the page.
+ * For each draw call, record the element's geometry (right edge, bottom edge,
+ * and for text also a bounding box) so OverflowTracker can detect three
+ * classes of layout mistake after the script runs:
+ *   - right overflow  (content past the right page edge)
+ *   - bottom overflow (content below y=0, off the bottom of the page)
+ *   - text overlap    (two text boxes colliding)
+ *
+ * pdf-lib uses BOTTOM-LEFT origin: x grows right, y grows UP. So the bottom
+ * edge of a text glyph box is roughly (y - size*0.8) and the top is (y +
+ * ascent). For rectangles, the y option IS the bottom edge already.
  */
 function wrapPageDrawMethods(page: import("pdf-lib").PDFPage, overflow: OverflowTracker): void {
   const pageAny = page as unknown as Record<string, Function>;
   const pageNum = overflow.recordPage();
   const pageWidth = page.getWidth();
+  const pageHeight = page.getHeight();
 
   for (const name of DRAW_METHOD_NAMES) {
     const original = pageAny[name];
     if (typeof original !== "function") continue;
     pageAny[name] = function (...args: unknown[]): unknown {
       const normalized = args.map((a) => (a === undefined ? a : toHostValue(a)));
-      // Track the rightmost edge for overflow detection.
-      const opts = (normalized[0] ?? normalized[1]) as Record<string, unknown> | undefined;
-      if (opts && typeof opts === "object") {
-        const x = numOr(opts.x, 0);
-        if (name === "drawText") {
-          const text = String(opts.text ?? "");
-          const size = numOr(opts.size, 12);
-          // Approx width via font.widthOfTextAtSize if a font is provided;
-          // otherwise estimate (cannot measure without font). We use the
-          // page's drawText font (the pre-embedded Helvetica) — opts.font.
-          const font = opts.font as { widthOfTextAtSize?: (t: string, s: number) => number } | undefined;
-          const w = font?.widthOfTextAtSize ? font.widthOfTextAtSize(text, size) : text.length * size * 0.5;
-          overflow.noteDraw(pageNum, pageWidth, x + w);
-        } else if (name === "drawRectangle" || name === "drawImage" || name === "drawSquare") {
-          const w = numOr(opts.width, 0);
-          overflow.noteDraw(pageNum, pageWidth, x + w);
-        }
-      }
+      recordDraw(name, normalized, pageNum, pageWidth, pageHeight, overflow);
       return original.apply(page, normalized);
     };
   }
 }
 
+/**
+ * Inspect a wrapped draw call's normalized options and feed the element's
+ * geometry into the OverflowTracker. Text elements get a bounding box (for
+ * overlap detection); all elements contribute their right/bottom edges (for
+ * overflow detection).
+ */
+function recordDraw(
+  name: string,
+  normalized: unknown[],
+  pageNum: number,
+  pageWidth: number,
+  pageHeight: number,
+  overflow: OverflowTracker,
+): void {
+  // drawText signature is (text, options); the other draw methods take a
+  // single options object as the first arg. Pick the right one: if the first
+  // arg is an object, it's the options; otherwise the options are the second.
+  const firstIsObj = normalized[0] !== null && typeof normalized[0] === "object";
+  const opts = (firstIsObj
+    ? normalized[0]
+    : normalized[1]) as Record<string, unknown> | undefined;
+  if (!opts || typeof opts !== "object") return;
+  const x = numOr(opts.x, 0);
+  const y = numOr(opts.y, 0);
+
+  if (name === "drawText") {
+    // drawText's first positional arg IS the text string; options are 2nd.
+    // (The opts variable above is the options object.)
+    const text = firstIsObj ? String(opts.text ?? "") : String(normalized[0] ?? "");
+    const size = numOr(opts.size, 12);
+    const lineHeight = numOr(opts.lineHeight, size);
+    // Width: prefer the exact font measurement; fall back to a rough estimate
+    // only when no font was passed (the AI should always pass the pre-embedded
+    // `font`, but defend against the missing case).
+    const font = opts.font as { widthOfTextAtSize?: (t: string, s: number) => number } | undefined;
+    const measure = (t: string) =>
+      font?.widthOfTextAtSize ? font.widthOfTextAtSize(t, size) : t.length * size * 0.5;
+
+    // pdf-lib's drawText with maxWidth wraps into multiple lines. Estimate the
+    // wrapped geometry so a wrapped text block is tracked as one tall box
+    // rather than just the first line. If maxWidth is absent, it's a single
+    // line (split on explicit \n only).
+    const maxWidth = opts.maxWidth === undefined ? undefined : numOr(opts.maxWidth, 0);
+    const lines = maxWidth && maxWidth > 0
+      ? wrapLines(text, maxWidth, measure)
+      : text.split("\n");
+
+    let rightEdge = x;
+    let bottomEdge = y;
+    let topEdge = y + size;
+    for (let i = 0; i < lines.length; i++) {
+      const lineW = measure(lines[i]!);
+      const lineRight = x + lineW;
+      // Each line's baseline descends by lineHeight from the first. Line 0 is
+      // at y; line i at y - i*lineHeight. The glyph box bottom ~ baseline - 0.2*size.
+      const lineBottom = y - i * lineHeight - size * 0.2;
+      const lineTop = lineBottom + size * 1.2;
+      if (lineRight > rightEdge) rightEdge = lineRight;
+      if (lineBottom < bottomEdge) bottomEdge = lineBottom;
+      if (lineTop > topEdge) topEdge = lineTop;
+    }
+    const boxW = rightEdge - x;
+    const boxH = topEdge - bottomEdge;
+    overflow.noteElement(pageNum, pageWidth, pageHeight, rightEdge, bottomEdge, {
+      x, y: bottomEdge, w: boxW, h: boxH,
+    }, "text");
+  } else if (name === "drawRectangle" || name === "drawImage" || name === "drawSquare") {
+    const w = numOr(opts.width, 0);
+    const h = name === "drawSquare" ? w : numOr(opts.height, 0);
+    // drawRectangle y IS the bottom edge. drawImage y is the bottom-left too.
+    overflow.noteElement(pageNum, pageWidth, pageHeight, x + w, y, undefined, "rect");
+  } else if (name === "drawLine") {
+    const start = opts.start as { x?: number; y?: number } | undefined;
+    const end = opts.end as { x?: number; y?: number } | undefined;
+    const xs = [numOr(start?.x, 0), numOr(end?.x, 0)];
+    const ys = [numOr(start?.y, 0), numOr(end?.y, 0)];
+    overflow.noteElement(
+      pageNum, pageWidth, pageHeight,
+      Math.max(...xs), Math.min(...ys), undefined, "line",
+    );
+  } else if (name === "drawEllipse" || name === "drawCircle") {
+    const w = numOr(opts.width, numOr(opts.xScale, 0) * 2);
+    const h = name === "drawCircle" ? w : numOr(opts.height, numOr(opts.yScale, 0) * 2);
+    // Ellipse y is the CENTER; bbox bottom = center - h/2.
+    overflow.noteElement(pageNum, pageWidth, pageHeight, x + w / 2, y - h / 2, undefined, "ellipse");
+  }
+}
+
+/**
+ * Word-wrap a string into lines that fit `maxWidth`, measuring each candidate
+ * line with `measure`. Mirrors pdf-lib's breakTextIntoLines closely enough for
+ * geometry tracking (this does NOT have to match pdf-lib exactly — it only
+ * drives overflow/overlap heuristics; the actual rendering is done by pdf-lib).
+ * Honors explicit `\n` as hard breaks.
+ */
+function wrapLines(
+  text: string,
+  maxWidth: number,
+  measure: (t: string) => number,
+): string[] {
+  const out: string[] = [];
+  for (const hardLine of text.split("\n")) {
+    const words = hardLine.split(" ");
+    let current = "";
+    for (const word of words) {
+      const candidate = current === "" ? word : current + " " + word;
+      if (measure(candidate) <= maxWidth || current === "") {
+        current = candidate;
+      } else {
+        out.push(current);
+        current = word;
+      }
+    }
+    out.push(current);
+  }
+  return out;
+}
+
 /** Coerce to a finite number, falling back to `fallback`. */
 function numOr(v: unknown, fallback: number): number {
   return typeof v === "number" && Number.isFinite(v) ? v : fallback;
+}
+
+/**
+ * Build the `Layout` helper object injected into the create sandbox as the 4th
+ * argument (`(pdf, P, font, Layout) => {...}`). It is a THIN layer over the
+ * pdf-lib API that fills the gaps the engine leaves open: word-wrapping with
+ * reliable alignment, and a flowing Y cursor (so the model doesn't have to
+ * track Y coordinates by hand for every line, which is the #1 source of
+ * stacked/overlapping text).
+ *
+ * `textBlock` is the recommended way to draw any block of body text. It:
+ *   - word-wraps to `width` using `font.widthOfTextAtSize` (exact measurement),
+ *   - supports `align: 'left' | 'center' | 'right'` per-line,
+ *   - advances the Y cursor by one lineHeight per line,
+ *   - returns `{ nextY, lineCount }` so the caller can place the NEXT block
+ *     directly below it: `const r = Layout.textBlock(...); Layout.textBlock(page, { y: r.nextY - 8, ... })`.
+ *
+ * This object is plain JS and runs in the sandbox realm. All pdf-lib calls go
+ * through the wrapped `page` (whose draw methods already rebuild cross-realm
+ * args into the host realm), so it is safe — it never touches pdf-lib internals.
+ */
+function buildLayoutHelper(font: unknown): LayoutHelper {
+  // The font's widthOfTextAtSize — used for wrapping + alignment. The patched
+  // font passed to the sandbox always has this method.
+  const measure = (text: string, size: number) =>
+    (font as { widthOfTextAtSize?: (t: string, s: number) => number }).widthOfTextAtSize?.(text, size) ?? 0;
+
+  return {
+    textBlock(page, opts) {
+      const text = String(opts.text ?? "");
+      const size = numOr(opts.size, 12);
+      const lineHeight = numOr(opts.lineHeight, size * 1.2);
+      const width = numOr(opts.width, 0);
+      const x = numOr(opts.x, 0);
+      let y = numOr(opts.y, 0);
+      const align = (opts.align === "center" || opts.align === "right") ? opts.align : "left";
+      const color = opts.color;
+
+      if (width <= 0) {
+        // No wrapping requested — draw as a single line (still record nextY).
+        page.drawText(text, { x, y, size, font, ...(color ? { color } : {}) });
+        return { nextY: y - lineHeight, lineCount: 1 };
+      }
+
+      const lines = wrapLines(text, width, (t) => measure(t, size));
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i]!;
+        const lineW = measure(line, size);
+        let lx = x;
+        if (align === "center") lx = x + (width - lineW) / 2;
+        else if (align === "right") lx = x + width - lineW;
+        page.drawText(line, { x: lx, y, size, font, ...(color ? { color } : {}) });
+        y -= lineHeight;
+      }
+      return { nextY: y, lineCount: lines.length };
+    },
+  };
+}
+
+/** Shape of the Layout helper injected into the sandbox. */
+interface LayoutHelper {
+  /**
+   * Draw a word-wrapped block of text. Returns the Y position of the next line
+   * below the block (already decremented) so the caller can flow content.
+   */
+  textBlock(
+    page: { drawText: (text: string, opts: Record<string, unknown>) => unknown },
+    opts: {
+      x: number;
+      y: number;
+      width: number;
+      text: string;
+      size?: number;
+      lineHeight?: number;
+      align?: "left" | "center" | "right";
+      color?: unknown;
+    },
+  ): { nextY: number; lineCount: number };
 }
 
 /**
@@ -762,14 +1086,18 @@ function patchFontEncoding(font: PDFFont): {
  * script can call drawText without async embedFont.
  */
 function runCreateScript(pdf: PDFDocument, font: unknown, script: string): unknown {
+  const Layout = buildLayoutHelper(font);
   const sandbox: Record<string, unknown> = {
     ...baseSandbox(),
     pdf,
     P: { PDFDocument, StandardFonts, rgb, degrees, PageSizes },
     font,
+    Layout,
     __result: undefined,
   };
-  return runInSandbox(sandbox, script, ["pdf", "P", "font"]);
+  // `Layout` is the 4th positional arg. Scripts written for the old 3-arg
+  // signature still work — they just ignore the extra argument.
+  return runInSandbox(sandbox, script, ["pdf", "P", "font", "Layout"]);
 }
 
 /**
@@ -861,11 +1189,18 @@ function summarize(opts: {
   /** Chars the WinAnsi standard font couldn't encode (replaced with '?'). */
   droppedChars?: string[];
   /** Pages where content (text/rect right edge) overflowed the page width. */
-  overflow?: { pageNum: number; edge: number; pageWidth: number; overBy: number }[];
+  rightOverflow?: { pageNum: number; edge: number; pageWidth: number; overBy: number }[];
+  /** Pages where content dropped below y=0 (off the bottom of the page). */
+  bottomOverflow?: { pageNum: number; edge: number; pageHeight: number; overBy: number }[];
+  /** Pages where two text blocks overlap significantly. */
+  overlaps?: { pageNum: number; a: BBox; b: BBox; overlapPct: number }[];
   /** Optional provenance note (e.g. OCR language/page count). */
   note?: string;
 }): string {
-  const { loadedFrom, wroteTo, readOnly, returnValue, droppedChars, overflow, note } = opts;
+  const { loadedFrom, wroteTo, readOnly, returnValue, droppedChars, note } = opts;
+  const rightOverflow = opts.rightOverflow ?? [];
+  const bottomOverflow = opts.bottomOverflow ?? [];
+  const overlaps = opts.overlaps ?? [];
   const lines: string[] = [];
 
   if (loadedFrom) {
@@ -897,8 +1232,8 @@ function summarize(opts: {
   // the "content cut off on the right" problem: the AI's column/element widths
   // sum to more than (pageWidth - leftMargin). Surface exactly how far over, and
   // which page, so the model can shrink widths / reduce font size / use landscape.
-  if (overflow && overflow.length > 0) {
-    const parts = overflow.map(
+  if (rightOverflow.length > 0) {
+    const parts = rightOverflow.map(
       (o) => `page ${o.pageNum} (content reached x=${Math.round(o.edge)}pt, page is ${o.pageWidth}pt wide — over by ${o.overBy}pt)`,
     );
     lines.push(
@@ -907,6 +1242,42 @@ function summarize(opts: {
         `fits within (pageWidth - leftMargin - rightMargin), lower the font size, or use a wider page ` +
         `(e.g. pdf.addPage(P.PageSizes.A4) rotated, or [842, 595] for A4 landscape). Verify with ` +
         `font.widthOfTextAtSize(text, size) that each column's widest value fits its allocated width.`,
+    );
+  }
+
+  // Warn about BOTTOM overflow — content drawn below y=0 (off the bottom of the
+  // page). This is the "content cut off at the bottom" / "too much content for
+  // one page" problem. Remember pdf-lib origin is bottom-left, so y=0 is the
+  // BOTTOM; content at negative y is off-page. The fix is to start a new page
+  // when the cursor Y gets near 0.
+  if (bottomOverflow.length > 0) {
+    const parts = bottomOverflow.map(
+      (o) => `page ${o.pageNum} (content reached y=${Math.round(o.edge)}pt, which is ${o.overBy}pt below the page bottom — off page)`,
+    );
+    lines.push(
+      `WARNING: layout overflow — content extends below the page bottom: ${parts.join("; ")}. ` +
+        `The lowest content is cut off (pdf-lib origin is BOTTOM-LEFT, so y=0 is the bottom edge). ` +
+        `FIX: when the Y cursor drops near ~50pt, start a new page with pdf.addPage(P.PageSizes.A4) ` +
+        `and reset Y to ~800. Use Layout.textBlock's returned nextY to know when to break.`,
+    );
+  }
+
+  // Warn about overlapping text blocks — two text boxes on the same page whose
+  // intersection exceeds 50% of the smaller box's area. This catches the most
+  // common AI mistake: forgetting to decrement Y (or decrementing by too
+  // little) so two text blocks end up drawn on top of each other.
+  if (overlaps.length > 0) {
+    const parts = overlaps.map((o) => {
+      const a = `(${Math.round(o.a.x)},${Math.round(o.a.y)}) ${Math.round(o.a.w)}x${Math.round(o.a.h)}`;
+      const b = `(${Math.round(o.b.x)},${Math.round(o.b.y)}) ${Math.round(o.b.w)}x${Math.round(o.b.h)}`;
+      return `page ${o.pageNum}: box ${a} overlaps box ${b} by ${o.overlapPct}%`;
+    });
+    lines.push(
+      `WARNING: text overlap — two text blocks collide: ${parts.join("; ")}. ` +
+        `FIX: check Y coordinates — pdf-lib Y grows UP from the bottom, so each block must start at ` +
+        `(previousBlock.nextY - gap), NOT at the same Y. Prefer Layout.textBlock, which returns nextY ` +
+        `so you can place the next block directly below: ` +
+        `const r = Layout.textBlock(page, {...}); Layout.textBlock(page, { y: r.nextY - 8, ... });`,
     );
   }
 
