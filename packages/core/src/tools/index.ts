@@ -13,6 +13,7 @@ import { imageTools } from "./image/index.js";
 import { botTools } from "./bot/index.js";
 import { webTools } from "./web/index.js";
 import { speechTools } from "./speech/index.js";
+import { musicTools } from "./music/index.js";
 
 export * from "./base.js";
 export { ToolRegistry } from "./registry.js";
@@ -30,6 +31,7 @@ export { imageTools } from "./image/index.js";
 export { botTools } from "./bot/index.js";
 export { webTools } from "./web/index.js";
 export { speechTools } from "./speech/index.js";
+export { musicTools } from "./music/index.js";
 
 export interface RegistryOptions {
   /**
@@ -78,9 +80,9 @@ export function createDefaultRegistry(opts: RegistryOptions = {}): ToolRegistry 
   const enabled = opts.enabledTools ?? DEFAULT_ENABLED_TOOLS;
   const hasFs = opts.filesystem !== false;
 
-  // file / exec / excel / docx / pdf tools require the project sandbox (workdir).
+  // Local file/output tools require the project sandbox (workdir).
   // Register only those the user enabled AND only when a workdir exists.
-  const fsCandidates = [...fileTools, ...cliTools, ...excelTools, ...docxTools, ...pdfTools, ...imageTools];
+  const fsCandidates = [...fileTools, ...cliTools, ...excelTools, ...docxTools, ...pdfTools, ...imageTools, ...musicTools];
   for (const tool of fsCandidates) {
     if (hasFs && enabled.has(tool.name)) registry.register(tool);
   }

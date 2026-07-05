@@ -381,7 +381,7 @@ Sama seperti `excel_script`/`docx_script`: sandbox `node:vm` locked-down, sync-o
 
 ## Per-tool toggle (enabledTools)
 
-Aktif/nonaktifkan tool individual supaya tool yang gak dipakai gak membebani prompt (~200-300 token per disabled tool) + blast-radius security lebih ketat. Default: **hanya 5 file ops** aktif (`read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`). `exec`/`db_query`/`ssh_exec`/`sftp`/`excel_script`/`docx_script`/`run_browser` default OFF — opt-in. Pengecualian: `task_update` dan `ask_user` selalu on (core UX, tidak muncul di toggle).
+Aktif/nonaktifkan tool individual supaya tool yang gak dipakai gak membebani prompt (~200-300 token per disabled tool) + blast-radius security lebih ketat. Default: **hanya 5 file ops** aktif (`read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`). `exec`/`db_query`/`ssh_exec`/`sftp`/`excel_script`/`docx_script`/`pdf_script`/`run_browser`/`analyze_image`/`music_generate` default OFF — opt-in. Pengecualian: `task_update` dan `ask_user` selalu on (core UX, tidak muncul di toggle).
 
 `task_update` selalu nyala kalau `tasks` enabled (bypass enabledTools — itu master switch task checklist feature, bukan per-tool toggle).
 
@@ -390,6 +390,28 @@ Aktif/nonaktifkan tool individual supaya tool yang gak dipakai gak membebani pro
 | **CLI** | env `SIBERFLOW_TOOLS=read_file,write_file,edit_file,copy_file,list_dir,run_browser` (comma-separated) |
 | **VSCode** | setting `siberflow.enabledTools` (array) + grid checkbox di settings UI |
 | **Desktop** | Settings modal → section "Tools" (grid 12+ checkbox, group by kategori) |
+
+## Music generation tool (`music_generate`)
+
+`music_generate` membuat musik dari prompt + lirik memakai DeepInfra ACE-Step, lalu menyimpan audio ke workdir aktif.
+
+Konfigurasi:
+
+```bash
+SIBERFLOW_MUSIC_API_KEY=...
+# opsional; default:
+SIBERFLOW_MUSIC_BASE_URL=https://api.deepinfra.com
+SIBERFLOW_MUSIC_MODEL=ACE-Step/acestep-v15-xl-sft
+```
+
+Enable seperti tool opt-in lain:
+
+```bash
+SIBERFLOW_TOOLS=read_file,write_file,edit_file,copy_file,list_dir,music_generate
+SIBERFLOW_TELEGRAM_TOOLS=run_browser,bot_script,music_generate
+```
+
+Input utama: `prompt`, `lyrics`, dan `duration`. Durasi dibatasi 30-180 detik; lirik pendek sebaiknya 30 detik.
 
 ## Developer docs
 

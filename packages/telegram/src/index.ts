@@ -2162,6 +2162,9 @@ function toolStatusText(name: string): string {
       return "🔊 Sedang berbicara...";
     case "speech_to_text":
       return "🎙️ Sedang mendengar...";
+    // Music
+    case "music_generate":
+      return "🎵 Membuat musik...";
     // Bot
     case "bot_script":
       return "📨 Menjalankan aksi Telegram...";
