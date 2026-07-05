@@ -481,6 +481,28 @@ SIBERFLOW_TELEGRAM_TOOLS=run_browser,web_search,text_to_speech,speech_to_text
 # SIBERFLOW_TOOLS=...,text_to_speech,speech_to_text
 ```
 
+## Music Generation Tool (`music_generate`)
+
+`music_generate` creates a music track from a prompt and lyrics using DeepInfra ACE-Step, then saves the audio file inside the active workdir.
+
+Configuration:
+
+```bash
+SIBERFLOW_MUSIC_API_KEY=...
+# optional; defaults shown:
+SIBERFLOW_MUSIC_BASE_URL=https://api.deepinfra.com
+SIBERFLOW_MUSIC_MODEL=ACE-Step/acestep-v15-xl-sft
+```
+
+Enable it like any other opt-in tool:
+
+```bash
+SIBERFLOW_TOOLS=read_file,write_file,edit_file,copy_file,list_dir,music_generate
+SIBERFLOW_TELEGRAM_TOOLS=run_browser,bot_script,music_generate
+```
+
+The tool accepts `prompt`, `lyrics`, and `duration`. Duration is intentionally capped to 30-180 seconds; short lyrics should use 30 seconds.
+
 ## Bot Script Tool (`bot_script`)
 
 `bot_script` is an opt-in core tool backed by the active bot host. In Telegram it runs a JavaScript body inside a locked-down `node:vm` sandbox with a `bot` helper that exposes a curated slice of the Telegram Bot API. It does not include file manipulation helpers — enable `read_file`, `write_file`, `edit_file`, `copy_file`, or `list_dir` separately when the bot should work with files in its session workdir.
@@ -530,7 +552,7 @@ Default enabled tools are only:
 read_file,write_file,edit_file,copy_file,list_dir
 ```
 
-Other tools such as `exec`, `db_query`, `ssh_exec`, `sftp`, `excel_script`, `docx_script`, `pdf_script`, `run_browser`, `analyze_image`, and `bot_script` are opt-in. `task_update` and `ask_user` are core UX tools and are always available.
+Other tools such as `exec`, `db_query`, `ssh_exec`, `sftp`, `excel_script`, `docx_script`, `pdf_script`, `run_browser`, `analyze_image`, `music_generate`, and `bot_script` are opt-in. `task_update` and `ask_user` are core UX tools and are always available.
 
 | Interface | How to configure |
 |---|---|

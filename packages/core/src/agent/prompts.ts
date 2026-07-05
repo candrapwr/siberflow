@@ -60,6 +60,9 @@ function buildToolClause(enabledToolNames: string[]): string {
   if (has("analyze_image")) {
     parts.push("image analysis (analyze_image for describing images, OCR, screenshots, charts/tables, and visual reasoning using the configured multimodal OpenAI-compatible provider)");
   }
+  if (has("music_generate")) {
+    parts.push("music generation (music_generate for creating a 30-180 second audio track from a prompt and lyrics, saved inside the project directory; match duration to lyric length and keep short lyrics at 30 seconds)");
+  }
   if (has("bot_script")) {
     parts.push("bot automation (bot_script for host-provided bot actions such as sending messages/photos/documents to the active bot chat; file manipulation is not included, use file tools when enabled)");
   }
@@ -77,7 +80,7 @@ function buildToolClause(enabledToolNames: string[]): string {
 
   // Sandbox-scope note — only mention what's relevant to the active set.
   const hasLocalFs = any("read_file", "write_file", "edit_file", "copy_file", "list_dir", "exec") ||
-    has("excel_script") || has("docx_script") || has("pdf_script");
+    has("excel_script") || has("docx_script") || has("pdf_script") || has("music_generate");
   const hasRemoteSsh = any("ssh_exec", "sftp");
   const scopeParts: string[] = [];
   if (hasLocalFs) scopeParts.push("all local file operations are sandboxed to the project directory");
