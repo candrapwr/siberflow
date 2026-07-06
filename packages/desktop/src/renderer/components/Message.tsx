@@ -41,13 +41,135 @@ import "prismjs/components/prism-elixir.js";
 import "prismjs/components/prism-haskell.js";
 import "prismjs/components/prism-graphql.js";
 import "prismjs/components/prism-markdown.js";
-import type { AssistantTurn } from "../hooks/useChat.js";
+import type { AssistantTurn, ContentBlock, ToolCall } from "../hooks/useChat.js";
 import {
   RefreshIcon,
   EditIcon,
   ToolIcon,
   ChevronDownIcon,
 } from "./icons.js";
+
+// ─── Tool-call grouping (parallel batches) ──────────────────────────────────
+
+/**
+ * A render-ready view of an assistant turn's content blocks where runs of 2+
+ * consecutive tool calls are folded into a single `tool-group` node (rendered
+ * as one collapsible card). Single tool calls stay as `tool`. Text passes
+ * through unchanged. Hidden tools (`__hidden__`) are excluded upstream.
+ */
+type RenderableBlock =
+  | { kind: "text"; id: number; text: string }
+  | { kind: "tool"; id: number; tool: ToolCall }
+  | { kind: "tool-group"; key: string; tools: { id: number; tool: ToolCall }[] };
+
+/**
+ * Group consecutive `kind:"tool"` blocks (length ≥ 2) into `tool-group` nodes.
+ * Single tool blocks pass through as `tool`. Pure function over the input list.
+ */
+function groupBlocks(blocks: readonly ContentBlock[]): RenderableBlock[] {
+  const out: RenderableBlock[] = [];
+  let i = 0;
+  while (i < blocks.length) {
+    const blk = blocks[i]!;
+    if (blk.kind !== "tool") {
+      out.push(blk);
+      i++;
+      continue;
+    }
+    // Collect a maximal run of consecutive tool blocks.
+    const run: { id: number; tool: ToolCall }[] = [];
+    while (i < blocks.length && blocks[i]!.kind === "tool") {
+      const t = blocks[i] as Extract<ContentBlock, { kind: "tool" }>;
+      run.push({ id: t.id, tool: t.tool });
+      i++;
+    }
+    if (run.length >= 2) {
+      out.push({ kind: "tool-group", key: `g-${run[0]!.id}`, tools: run });
+    } else {
+      out.push({ kind: "tool", id: run[0]!.id, tool: run[0]!.tool });
+    }
+  }
+  return out;
+}
+
+/**
+ * Summarize a list of tool names for the group card header. Shows up to 3
+ * unique names then "+N" for the rest. E.g. [read, read, exec, write] →
+ * "read_file, exec, write_file".
+ */
+function summarizeToolNames(names: readonly string[]): string {
+  const seen: string[] = [];
+  for (const n of names) {
+    if (!seen.includes(n)) seen.push(n);
+    if (seen.length >= 3) break;
+  }
+  const rest = names.length - seen.length;
+  return rest > 0 ? `${seen.join(", ")} +${rest}` : seen.join(", ");
+}
+
+interface ToolGroupCardProps {
+  tools: { id: number; tool: ToolCall }[];
+  compact: boolean;
+}
+
+/**
+ * A collapsible card summarizing a batch of parallel tool calls. Default
+ * collapsed (one-line summary); click the head to expand and see individual
+ * ToolBlocks nested inside. Status is computed from children: "running" while
+ * any child has no result, "done" once all complete, with an N/total counter.
+ */
+function ToolGroupCard({ tools, compact }: ToolGroupCardProps) {
+  const [open, setOpen] = useState(false);
+  const running = tools.some((t) => t.tool.result === null);
+  const doneCount = tools.filter((t) => t.tool.result !== null).length;
+  const total = tools.length;
+  const names = tools.map((t) => t.tool.name);
+
+  return (
+    <div className={`tool-group ${running ? "running" : ""}`}>
+      <div
+        className="tool-group-head"
+        onClick={() => !compact && setOpen((v) => !v)}
+      >
+        {!compact && (
+          <ChevronDownIcon size={10} className={open ? "" : "rotated"} />
+        )}
+        <ToolIcon size={11} />
+        <span className="tool-group-count">{total} tool calls</span>
+        <span className="tool-group-names">{summarizeToolNames(names)}</span>
+        <span className="tool-group-status">
+          {running ? (
+            <>
+              <span className="tool-group-progress">
+                {doneCount}/{total}
+              </span>
+              <span className="thinking-dots">
+                <span />
+                <span />
+                <span />
+              </span>
+            </>
+          ) : (
+            <span className="tool-done">done</span>
+          )}
+        </span>
+      </div>
+      {!compact && open && (
+        <div className="tool-group-body">
+          {tools.map((t) => (
+            <ToolBlock
+              key={t.id}
+              name={t.tool.name}
+              args={t.tool.args}
+              result={t.tool.result}
+              compact={false}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ─── Code Block (syntax highlighted) ────────────────────────────────────────
 
@@ -190,6 +312,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   const visibleBlocks = turn.blocks.filter(
     (b) => !(b.kind === "tool" && b.tool.name === "__hidden__"),
   );
+  const renderable = groupBlocks(visibleBlocks);
   const isEmpty = visibleBlocks.length === 0;
 
   return (
@@ -199,7 +322,7 @@ export const AssistantMessage = memo(function AssistantMessage({
         Siberflow
       </div>
       <div className="body">
-        {visibleBlocks.map((blk) => {
+        {renderable.map((blk) => {
           if (blk.kind === "text") {
             return (
               <div className="seg" key={blk.id}>
@@ -207,6 +330,15 @@ export const AssistantMessage = memo(function AssistantMessage({
                   {blk.text}
                 </ReactMarkdown>
               </div>
+            );
+          }
+          if (blk.kind === "tool-group") {
+            return (
+              <ToolGroupCard
+                key={blk.key}
+                tools={blk.tools}
+                compact={hideTools}
+              />
             );
           }
           return (

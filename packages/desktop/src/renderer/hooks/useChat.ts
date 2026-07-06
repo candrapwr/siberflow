@@ -8,6 +8,7 @@ import type {
   BannerInfo,
   CurrentSessionInfo,
   MainEvent,
+  SettingsValues,
   UsageInfo,
 } from "@shared/protocol";
 
@@ -45,7 +46,7 @@ interface ChatState {
   ready: boolean;
   requireSettings: boolean;
   mustConfigure: boolean;
-  settingsValues: { provider: string } | null;
+  settingsValues: Partial<SettingsValues> | null;
   hasApiKey: boolean;
   hasMultimodalApiKey: boolean;
   hasExaApiKey: boolean;
@@ -233,6 +234,7 @@ function reducer(state: ChatState, action: Action): ChatState {
         ...state,
         ready: true,
         requireSettings: false,
+        settingsValues: e.values,
         banner: e.banner,
         session: e.session,
         hideTools: e.hideTools,
@@ -240,6 +242,7 @@ function reducer(state: ChatState, action: Action): ChatState {
         enabledTools: e.enabledTools,
         messages: [],
         tasks: [],
+        // usage is filled by the follow-up "usage" event (postReady emits it).
         usage: null,
         showActions: false,
       };
@@ -256,7 +259,7 @@ function reducer(state: ChatState, action: Action): ChatState {
       };
 
     case "settings-saved":
-      return { ...state, requireSettings: false };
+      return { ...state, requireSettings: false, settingsValues: e.values };
 
     case "session-changed":
       // When the active session becomes null (e.g. deleted), clear the chat

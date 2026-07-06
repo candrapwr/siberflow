@@ -22,7 +22,7 @@ siberflow/
     │       ├── agent/
     │       │   ├── types.ts       # Message, ToolCall, StreamEvent, FinishReason
     │       │   ├── agent.ts       # class Agent — streaming loop
-    │       │   ├── optimize.ts    # optimizeContext() — Layer 1 context compaction
+    │       │   ├── optimize.ts    # optimizeContext() — context compaction (Layer 1 + Layer 2 compact)
     │       │   ├── prompts.ts     # buildSystemPrompt() — interface-aware system prompt
     │       │   └── tasks.ts       # Task, TaskStore, renderTaskList
     │       ├── providers/
@@ -506,18 +506,29 @@ Penting:
 
 Ini mengatasi respons panjang yang terpotong di tengah kalimat. Untuk masalah context-window overflow (beda dari output-length), lihat catatan di akhir bagian Context optimization.
 
-### Context optimization (Layer 1)
+### Context optimization
 
-[optimize.ts](packages/core/src/agent/optimize.ts) → `optimizeContext(messages, config)` membuang jejak tool dari turn sebelumnya supaya context tetap ramping. Returns array baru; input tidak di-mutasi.
+[optimize.ts](packages/core/src/agent/optimize.ts) → `optimizeContext(messages, config, summary?)` membuang atau merangkum jejak tool dari turn sebelumnya supaya context tetap ramping. Returns array baru; input tidak di-mutasi (kecuali field `summary` yang di-rol forward oleh Layer 2).
 
-**Tiga mode** (`OptimizeMode`), via `SIBERFLOW_CONTEXT_OPTIMIZE_MODE`:
+**Empat mode** (`OptimizeMode`), via `SIBERFLOW_CONTEXT_OPTIMIZE_MODE`:
 
-- **`recent`** (default) — sisakan signature `[SUMMARY]` pada turn-turn lama, TAPI pertahankan **1 turn terakhir sebelum current turn tetap utuh** (tool calls + results verbatim). Hanya turn yang lebih tua dari itu dikompres. Tujuannya: konteks tool terakhir tidak hilang dulu — penting untuk workflow trial-and-error seperti `run_browser` (AI iterasi script sampai dapat yang pas, lalu pakai di turn berikutnya).
+**Layer 1 — deterministik, tanpa LLM call:**
+
+- **`recent`** — sisakan signature `[SUMMARY]` pada turn-turn lama, TAPI pertahankan **1 turn terakhir sebelum current turn tetap utuh** (tool calls + results verbatim). Hanya turn yang lebih tua dari itu dikompres. Tujuannya: konteks tool terakhir tidak hilang dulu — penting untuk workflow trial-and-error seperti `run_browser` (AI iterasi script sampai dapat yang pas, lalu pakai di turn berikutnya).
   - Logika: cari index **second-to-last user message** (user terakhir = current turn yang sedang jalan). Semua pesan sebelumnya dikompres via mode `summary`; dari index itu sampai akhir dibiarkan utuh. Kalau user message < 2 (turn 1 atau 2) → tidak ada yang eligible → tidak ada kompresi.
 - **`summary`** — sisakan tag `[SUMMARY]` breadcrumb pada **setiap** turn lama, berisi *signature* tool per call (nama + identifier ringkas seperti `exec("df -h")` / `write_file("src/foo.ts")`). Payload berat (file content, edit patch, task list) dan tool result tetap dibuang. Model tahu APA yang disentuh tanpa leak nilai stale.
 - **`drop`** — buang tool activity total tanpa breadcrumb (paling hemat token). Model harus re-run tool kalau butuh detail.
 
-Semua mode membuang hal yang sama dari setiap turn yang dikompres:
+**Layer 2 — LLM-based (default):**
+
+- **`compact`** (default) — generate **narasi ringkas** dari turn-turn lama via 1 LLM call tambahan, lalu simpan sebagai field `Session.summary`. Berbeda dari Layer 1 yang cuma signature breadcrumb: narasi ini mempertahankan fakta kunci (keputusan, hasil tool penting, file yang diubah, blocker) dalam bentuk prosa — jauh lebih kaya konteks.
+  - **Threshold-triggered**: hanya fire saat `lastPromptTokens / contextWindow >= compactThreshold` (default 80%). Adaptif — turn berat isi budget cepat & compact lebih cepat; chat ringan mungkin tidak pernah compact. Tiap `send()` cek dulu threshold; kalau under → skip (hemat API call).
+  - **Incremental rolling**: summary lama di-fed kembali ke LLM supaya roll forward, bukan restart dari awal. Token-efficient & mencegah info drift.
+  - **KEEP_RECENT** (default 2): N turn terakhir tetap verbatim di request, sisanya di-fold ke summary. Counting **per-turn** (1 turn berat = 1 unit, bukan N message), dengan `snapToTurnBoundary()` supaya tail gak mulai mid-tool-call-chain (orphan tool → HTTP 400).
+  - **Persistensi**: `<id>.json` tetap simpan **full history** (append-only, source of truth). Summary disimpan di field terpisah `Session.summary` (optional, no version bump). Reload session → summary ter-restore → compact lanjut rolling dari `upToIndex`.
+  - **Resilient**: kalau LLM summary call gagal (network/error), agent swallow error + lanjut pakai summary lama. Turn user gak gagal.
+
+Semua mode Layer 1 membuang hal yang sama dari setiap turn yang dikompres:
 - Setiap `tool` result message
 - Setiap assistant message yang punya `tool_calls` (pesan intermediate "let me check X" + tool call)
 
@@ -530,14 +541,22 @@ Penting — **scope per user turn**:
 - Snapshot di-lock untuk seluruh tool loop dalam turn itu. Tool result yang muncul di iterasi-iterasi berikutnya (current turn) ditambahkan sebagai `extras` dan selalu utuh.
 - Request per iterasi = `optimizedBase + extras`.
 - **`recent` mode**: current turn + 1 turn terakhir selalu utuh; turn lebih tua dikompres.
+- **`compact` mode**: sebelum `optimizeContext()` jalan, `generateSummaryIncremental()` dipanggil dulu (kalau threshold terlewati) untuk roll summary forward. Lalu `optimizeContext` apply summary sebagai pseudo-user message: `[system, [Conversation summary], ...recent turns verbatim]`.
 
-Alasannya: AI butuh tool result dari iterasi sebelumnya untuk merangkai task — kalau di-truncate mid-loop, AI bisa "lupa" hasil yang baru saja dia minta. Sebaliknya, tool result dari turn sebelumnya (task yang sudah selesai) jarang dibutuhkan detailnya — assistant text sudah summarize.
+Alasannya: AI butuh tool result dari iterasi sebelumnya untuk merangkai task — kalau di-truncate mid-loop, AI bisa "lupa" hasil yang baru saja dia minta. Sebaliknya, tool result dari turn sebelumnya (task yang sudah selesai) jarang dibutuhkan detailnya — assistant text atau summary sudah merangkum.
 
 Properti lain:
-- **Tidak mengubah `Agent.messages`** — hanya snapshot in-flight untuk request. Session JSON tetap menyimpan history lengkap. Matikan optimasi → history lengkap tersedia kembali.
-- Deterministik (Layer 1), tanpa LLM call. Bisa diperluas ke Layer 2 (LLM summary on threshold) di masa depan tanpa mengubah API.
-- Agent emit `onContextOptimized(stats)` saat ada collapse. `stats = { collapsedCount, bytesSaved }`. REPL akumulasi ke `ctx.optStats`, tampil di `/usage`.
-- Config: `{ enabled: boolean; mode?: OptimizeMode }`. Default `{ enabled: true, mode: "recent" }`.
+- **Tidak mengubah `Agent.messages`** (Layer 1) — hanya snapshot in-flight untuk request. Session JSON tetap menyimpan history lengkap. Matikan optimasi → history lengkap tersedia kembali. Layer 2 hanya mengubah field `summary` (terpisah dari `messages`).
+- Layer 1 deterministik tanpa LLM call; Layer 2 (`compact`) 1 LLM call tambahan saat threshold terlewati.
+- Agent emit `onContextOptimized(stats)` saat ada collapse (Layer 1). `stats = { collapsedCount, bytesSaved }`. REPL akumulasi ke `ctx.optStats`, tampil di `/usage`. Compact mode juga emit `onContextCompacted({ turnsSummarized, summaryChars })` setelah summary di-roll.
+- Config: `ContextOptimizeConfig = { enabled, mode?, contextWindow?, compactThreshold?, compactKeepRecent? }`. Default `{ enabled: true, mode: "compact" }`. Field `contextWindow`/`compactThreshold`/`compactKeepRecent` hanya di-surface ke agent saat mode = "compact".
+
+**Compact mode tuning** (Desktop & VSCode settings UI; CLI/Telegram via env):
+- `SIBERFLOW_CONTEXT_WINDOW` (default 200000) — budget token untuk threshold trigger. Set lebih tinggi (1000000) untuk provider context window besar (DeepSeek-V4, Qwen-Plus).
+- `SIBERFLOW_COMPACT_THRESHOLD` (default 0.8) — rasio pemicu. 0.8 = compact saat context 80% penuh.
+- `SIBERFLOW_COMPACT_KEEP_RECENT` (default 2) — jumlah turn terakhir yang tetap verbatim saat compact fire.
+
+**Context usage bar** (Desktop + VSCode): saat mode = "compact", progress bar muncul di atas composer. Bar fill = `lastPromptTokens / contextWindow`, dengan threshold marker (dashed vertical line) di posisi `compactThreshold`. Warna adaptif: hijau (<50%) → kuning (50-80%) → merah (≥80%). Update tiap turn selesai. Hidden di mode lain.
 
 **Monitoring file**: saat `SIBERFLOW_CONTEXT_OPTIMIZE=true` (default), tiap turn yang sukses juga menulis sibling file `~/.siberflow/sessions/<id>.optimized.json` di samping main session JSON. Bentuknya sama persis dengan `Session`, tapi `messages` di-replace dengan hasil `optimizeContext()` + metadata `_view: "optimized"` dan `_generatedAt`. Berguna untuk:
 
@@ -547,9 +566,18 @@ Properti lain:
 
 File `.optimized.json` di-ignore oleh `listSessions()` (cek extension `.optimized.json`) dan di-cascade hapus saat `deleteSession()` / `clearSessions()`. Tidak ada fungsi load untuknya — ini hanya untuk dibaca manual.
 
-Untuk multi-turn percakapan dengan banyak tool history, `prompt_tokens` turun karena tool call & result dari turn-turn lama dibuang saat user mulai turn baru. Storage tetap utuh — matikan optimasi → history lengkap tersedia kembali.
+Untuk multi-turn percakapan dengan banyak tool history, `prompt_tokens` turun karena tool call & result dari turn-turn lama dibuang (Layer 1) atau di-ringkas jadi narasi (Layer 2) saat user mulai turn baru. Storage tetap utuh — matikan optimasi → history lengkap tersedia kembali.
 
-Bisa diperluas ke Layer 2 (LLM summary on threshold) di masa depan tanpa mengubah API ini.
+### Parallel tool grouping (Desktop + VSCode)
+
+Saat satu assistant message trigger **2+ tool calls paralel** (batch), mereka di-grup jadi **1 collapsible card** — bukan N card terpisah ke bawah. Default collapsed (1 baris ringkasan "N tool calls: name1, name2 • status"). Klik untuk expand lihat detail per-tool.
+
+- Threshold: hanya group kalau **2+ tool** call berbarengan (run consecutive `kind:"tool"` blocks length ≥2). Single tool call tetap render sebagai ToolBlock biasa.
+- Status group (computed dari children): `running` selama ada child dengan `result === null`, `done` saat semua selesai, dengan counter `2/3`.
+- Mechanism: agent emit `onToolBatchStart(count)` sebelum loop tool execution (saat `assistant.toolCalls.length >= 2`) + `onToolBatchEnd()` setelah loop (balanced, juga di early-return path `forceFinalAnswer`).
+- Desktop: `groupBlocks()` helper di [Message.tsx](packages/desktop/src/renderer/components/Message.tsx) deteksi run consecutive tool blocks → `ToolGroupCard` component.
+- VSCode: protocol extension `tool_batch_start`/`tool_batch_end` → `startToolBatch`/`endToolBatch` di webview nest `.tool` ke dalam `.tool-group` container.
+- Hidden tools (`task_update` → `__hidden__`) tetap di-skip dari grouping.
 
 ### Task checklist (opt-in)
 
@@ -610,8 +638,11 @@ Semua via env. CLI loader (`packages/cli/src/env.ts`) walk-up dari cwd cari `.en
 | `SIBERFLOW_MODEL` | provider default | Override model string |
 | `SIBERFLOW_BASE_URL` | provider default | Override endpoint |
 | `SIBERFLOW_PROJECT_DIR` | `INIT_CWD` → `cwd()` | Sandbox root. Absolute / relative / `~/...`. Divalidasi exists. |
-| `SIBERFLOW_CONTEXT_OPTIMIZE` | `true` | Aktifkan Layer 1 — buang tool call & result dari turn sebelumnya (mode lihat di bawah) |
-| `SIBERFLOW_CONTEXT_OPTIMIZE_MODE` | `recent` | `recent` (default; signature breadcrumb, sisakan 1 turn terakhir utuh), `summary` (signature breadcrumb semua turn lama), atau `drop` (buang total tanpa breadcrumb) |
+| `SIBERFLOW_CONTEXT_OPTIMIZE` | `true` | Aktifkan context optimization — buang/ringkas tool call & result dari turn sebelumnya (mode lihat di bagian Context optimization) |
+| `SIBERFLOW_CONTEXT_OPTIMIZE_MODE` | `compact` | `compact` (default; LLM narrative summary, threshold-triggered), `recent` (signature breadcrumb, sisakan 1 turn terakhir utuh), `summary` (signature breadcrumb semua turn lama), atau `drop` (buang total tanpa breadcrumb) |
+| `SIBERFLOW_CONTEXT_WINDOW` | `200000` | (compact mode) Budget token context window buat threshold trigger. Set 1000000 untuk provider besar (DeepSeek-V4, Qwen-Plus, MiniMax) |
+| `SIBERFLOW_COMPACT_THRESHOLD` | `0.8` | (compact mode) Rasio pemicu. 0.8 = compact saat context 80% penuh. Range (0, 1] |
+| `SIBERFLOW_COMPACT_KEEP_RECENT` | `2` | (compact mode) Jumlah turn terakhir yang tetap verbatim (gak di-fold ke summary) saat compact fire |
 | `SIBERFLOW_TASKS` | `true` | Aktifkan task checklist (`task_update` tool + injeksi state tiap turn). `task_update` selalu ter-register walau ini `false` (default-on), switch ini kontrol injeksi checklist ke system prompt |
 | `SIBERFLOW_AUTO_CONTINUE` | `true` | Sambung otomatis respons yang kepotong limit output token (set `false` untuk matikan) |
 | `SIBERFLOW_DEBUG` | `false` | Tracing verbose ke stderr (HTTP status, raw finish_reason, usage, error, stream lifecycle) |

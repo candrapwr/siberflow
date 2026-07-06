@@ -6,7 +6,7 @@
 
 import { memo, useEffect, useRef, useState } from "react";
 import { ipc } from "../ipc.js";
-import type { DocKind, PickedFile } from "@shared/protocol";
+import type { DocKind, PickedFile, UsageInfo } from "@shared/protocol";
 import { FileDocIcon, FileExcelIcon, FilePdfIcon, PaperclipIcon, SendIcon, StopIcon, XIcon } from "./icons.js";
 
 interface ComposerProps {
@@ -27,6 +27,21 @@ interface ComposerProps {
    * disabled (with a tooltip hint) when none are, since uploaded files can't
    * be read. */
   docEnabled?: boolean;
+  /** Latest token usage for the active session (drives the context bar). */
+  usage?: UsageInfo | null;
+  /** Compact-mode context window budget, in tokens. */
+  contextWindow?: number;
+  /** Compact-mode threshold ratio (0..1) at which auto-compact fires. */
+  compactThreshold?: number;
+  /** Active context-optimize mode; the bar only renders when "compact". */
+  optimizeMode?: "drop" | "summary" | "recent" | "compact";
+}
+
+/** Compact a token count to a short human label, e.g. 45200 -> "45K", 1200000 -> "1.2M". */
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${Math.round(n / 1_000)}K`;
+  return String(n);
 }
 
 /** Pick the right chip icon for a document kind. */
@@ -36,7 +51,7 @@ function docIcon(kind: DocKind) {
   return FileExcelIcon;
 }
 
-export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, prefill, hasWorkdir = true, docEnabled = true }: ComposerProps) {
+export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, prefill, hasWorkdir = true, docEnabled = true, usage = null, contextWindow = 200000, compactThreshold = 0.8, optimizeMode = "compact" }: ComposerProps) {
   const [value, setValue] = useState("");
   const [attachments, setAttachments] = useState<PickedFile[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -196,6 +211,26 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
           </button>
         )}
       </div>
+      {optimizeMode === "compact" && (() => {
+        const used = usage?.last?.promptTokens ?? 0;
+        const pct = contextWindow > 0 ? Math.min(100, (used / contextWindow) * 100) : 0;
+        const threshPct = Math.min(100, compactThreshold * 100);
+        const tone = pct < 50 ? "ok" : pct < threshPct ? "warn" : "danger";
+        return (
+          <div className="context-bar" title={`Auto-compact triggers at ${threshPct}% (≈ ${fmtTokens(Math.round(contextWindow * compactThreshold))} tokens)`}>
+            <div className="context-bar-track">
+              <div className={`context-bar-fill ${tone}`} style={{ width: `${pct}%` }} />
+              {threshPct < 100 && (
+                <div className="context-bar-threshold" style={{ left: `${threshPct}%` }} />
+              )}
+            </div>
+            <span className="context-bar-text">
+              {fmtTokens(used)} / {fmtTokens(contextWindow)} · {Math.round(pct)}%
+              <span className="context-bar-thresh-label"> · auto-compact @ {Math.round(threshPct)}%</span>
+            </span>
+          </div>
+        );
+      })()}
       <div className="composer-hint">
         <kbd>Enter</kbd> send · <kbd>Shift+Enter</kbd> newline · <kbd>Cmd+K</kbd> focus
       </div>

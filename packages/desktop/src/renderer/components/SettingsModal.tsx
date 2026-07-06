@@ -284,13 +284,54 @@ export const SettingsModal = memo(function SettingsModal({
             <label>Context optimize mode</label>
             <select
               value={form.contextOptimizeMode}
-              onChange={(e) => set("contextOptimizeMode", e.target.value as "drop" | "summary" | "recent")}
+              onChange={(e) =>
+                set(
+                  "contextOptimizeMode",
+                  e.target.value as "drop" | "summary" | "recent" | "compact",
+                )
+              }
             >
               <option value="drop">drop</option>
               <option value="summary">summary</option>
               <option value="recent">recent</option>
+              <option value="compact">compact (AI summary)</option>
             </select>
           </div>
+          {form.contextOptimizeMode === "compact" && (
+            <>
+              <div className="form-row">
+                <label>Context window (max tokens)</label>
+                <input
+                  type="number"
+                  min={1000}
+                  step={1000}
+                  value={form.contextWindow}
+                  onChange={(e) => set("contextWindow", Number(e.target.value))}
+                />
+              </div>
+              <div className="form-row">
+                <label>Compact threshold (0.1–1)</label>
+                <input
+                  type="number"
+                  min={0.1}
+                  max={1}
+                  step={0.05}
+                  value={form.compactThreshold}
+                  onChange={(e) => set("compactThreshold", Number(e.target.value))}
+                />
+              </div>
+              <div className="form-row">
+                <label>Keep recent turns</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={20}
+                  value={form.compactKeepRecent}
+                  onChange={(e) => set("compactKeepRecent", Number(e.target.value))}
+                />
+              </div>
+            </>
+          )}
         </div>
 
         <div className="form-section">

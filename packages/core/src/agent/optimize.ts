@@ -1,10 +1,40 @@
 import type { Message } from "./types.js";
 
-export type OptimizeMode = "drop" | "summary" | "recent";
+export type OptimizeMode = "drop" | "summary" | "recent" | "compact";
+
+/**
+ * Persisted state of an LLM-generated context summary. Mirrors
+ * `SessionSummaryState` in the session layer but kept here too so core/agent
+ * doesn't have to import from session just for this shape.
+ */
+export interface SummaryState {
+  text: string;
+  upToIndex: number;
+  updatedAt: string;
+}
 
 export interface ContextOptimizeConfig {
   enabled: boolean;
   mode?: OptimizeMode;
+  /**
+   * Compact-mode: max prompt tokens (context window budget) of the active
+   * provider, used by the threshold trigger. When undefined the agent falls
+   * back to the SIBERFLOW_CONTEXT_WINDOW env var, then DEFAULT_CONTEXT_WINDOW.
+   * Only honored when mode === "compact".
+   */
+  contextWindow?: number;
+  /**
+   * Compact-mode: ratio (0..1) of (last prompt tokens / contextWindow) at
+   * which summarization fires. Default 0.8. Lower = compact sooner & more
+   * often; higher = compact later. Only honored when mode === "compact".
+   */
+  compactThreshold?: number;
+  /**
+   * Compact-mode: how many of the most recent COMPLETED turns stay verbatim
+   * (not folded into the summary) when compaction fires. Default 2.
+   * Only honored when mode === "compact".
+   */
+  compactKeepRecent?: number;
 }
 
 export interface OptimizationStats {
@@ -14,9 +44,35 @@ export interface OptimizationStats {
   bytesSaved: number;
 }
 
+/**
+ * Stats emitted when the "compact" mode generates/updates an LLM narrative
+ * summary. Surfaces to the host via `AgentEvents.onContextCompacted`.
+ */
+export interface CompactionStats {
+  /** Number of conversation turns folded into the summary this pass. */
+  turnsSummarized: number;
+  /** Length of the resulting summary text, in characters. */
+  summaryChars: number;
+}
+
+/**
+ * System prompt for the LLM summarization call used by "compact" mode. The
+ * model is asked to produce a dense, fact-preserving narrative of the supplied
+ * conversation turns, keeping user goals, key decisions, important tool
+ * results, and files touched, while dropping pleasantries and raw payloads
+ * already captured by shorter references.
+ */
+export const SUMMARY_SYSTEM_PROMPT = `You are a context summarizer for an AI coding agent. Summarize the following conversation turns into a dense, fact-preserving narrative. MUST keep:
+- User requests and goals
+- Key decisions and their rationale
+- Important tool results (file paths read, commands run + outcomes, errors)
+- Files created/modified/deleted
+- Unresolved questions or blockers
+Drop: pleasantries, redundant explanations, raw file contents already captured by path references. Output prose, max ~400 words. No preamble.`;
+
 export const DEFAULT_OPTIMIZE_CONFIG: ContextOptimizeConfig = {
   enabled: true,
-  mode: "recent",
+  mode: "compact",
 };
 
 /**
@@ -149,6 +205,7 @@ function shortVal(v: unknown): string {
 export function optimizeContext(
   messages: readonly Message[],
   config: ContextOptimizeConfig,
+  summary?: SummaryState | null,
 ): { messages: Message[]; stats: OptimizationStats } {
   const stats: OptimizationStats = { collapsedCount: 0, bytesSaved: 0 };
 
@@ -156,7 +213,66 @@ export function optimizeContext(
     return { messages: [...messages], stats };
   }
 
-  const mode: OptimizeMode = config.mode ?? "recent";
+  const mode: OptimizeMode = config.mode ?? "compact";
+
+  // Layer 2 — "compact": replace everything the LLM summary covers with the
+  // summary itself (as a pseudo-system message), then append the messages
+  // after `summary.upToIndex` verbatim. Unlike Layer 1 modes this requires an
+  // LLM call to PRODUCE the summary (done by the agent before calling us), but
+  // applying it here is still pure/deterministic: we just splice. Falls back
+  // to "recent" behavior when no summary exists yet (first turns of a session
+  // before the first compaction has run).
+  if (mode === "compact") {
+    if (!summary || summary.text.trim().length === 0 || summary.upToIndex < 0) {
+      // No summary yet — behave like "recent" so the request still gets some
+      // optimization instead of sending the raw full history.
+      const keepStart = findSecondLastUserIndex(messages);
+      if (keepStart === -1) {
+        return { messages: [...messages], stats };
+      }
+      const head = compressToolHistory(messages.slice(0, keepStart), "summary", stats);
+      const tail = messages.slice(keepStart);
+      return { messages: mergeAdjacent([...head, ...tail]), stats };
+    }
+    const upTo = Math.min(summary.upToIndex, messages.length - 1);
+    // Defensive: snap the boundary down so the verbatim tail can't start with
+    // an orphan `tool` message (no preceding assistant.tool_calls). The agent
+    // already snaps when it generates the summary, but a corrupted/edited
+    // session or a mismatched upToIndex could otherwise slip through here.
+    const safeUpTo = snapToTurnBoundary(messages, upTo, -1);
+    const tail = messages.slice(safeUpTo + 1);
+
+    // Build the optimized view. PRESERVE the original system prompt at index 0
+    // (agent instructions, persona, tool guidance) and inject the summary as a
+    // labeled pseudo-user message right after it — so the model sees both its
+    // original instructions AND the rolled-forward context summary. If there's
+    // no system prompt in the history, the summary stands alone as the prefix.
+    const hasSystem = messages[0]?.role === "system";
+    const summaryMsg: Message = {
+      role: "user",
+      content: `[Conversation summary so far]\n${summary.text}`,
+    };
+    const optimized: Message[] = hasSystem
+      ? [messages[0]!, summaryMsg, ...tail]
+      : [summaryMsg, ...tail];
+    // Approximate the bytes saved by replacing the summarized prefix with the
+    // (much shorter) summary text, for parity with the other modes' stats.
+    const head = messages.slice(0, safeUpTo + 1);
+    const headBytes = head.reduce(
+      (n, m) =>
+        n +
+        (m.role === "tool"
+          ? m.content.length
+          : (m.content?.length ?? 0) +
+            (m.role === "assistant"
+              ? (m.toolCalls?.reduce((a, tc) => a + tc.arguments.length, 0) ?? 0)
+              : 0)),
+      0,
+    );
+    stats.collapsedCount = head.length;
+    stats.bytesSaved = Math.max(0, headBytes - summary.text.length);
+    return { messages: optimized, stats };
+  }
 
   // "recent" keeps the most recent completed turn's tool activity intact and
   // compresses (with summary signatures) everything strictly before it. The
@@ -196,6 +312,81 @@ function findSecondLastUserIndex(messages: readonly Message[]): number {
     }
   }
   return -1;
+}
+
+/**
+ * Snap a candidate end-index (inclusive) for the compact summary down to a
+ * SAFE turn boundary — i.e. an index where slicing `messages[index+1:]` cannot
+ * start mid-tool-call-chain (which would leave an orphan `tool` result without
+ * a preceding `assistant.tool_calls`, rejected by strict providers as HTTP 400).
+ *
+ * A safe boundary is one of:
+ *   - just before a `user` message (a user message always starts a new turn), OR
+ *   - just before an `assistant` message whose `toolCalls` is empty/absent
+ *     (a content-only assistant also starts a fresh turn), OR
+ *   - just before an `assistant` that DOES carry tool_calls (the slice starts
+ *     with the assistant's call, so any following tool results are well-formed).
+ *
+ * Walk backward from `startIndex` until we land on such a boundary. Returns
+ * the safe index (inclusive), or `alreadySummarizedUpTo` if none exists before
+ * it (conservative: fold nothing new rather than risk an orphan tool message).
+ */
+export function snapToTurnBoundary(
+  messages: readonly Message[],
+  startIndex: number,
+  alreadySummarizedUpTo: number,
+): number {
+  for (let i = Math.min(startIndex, messages.length - 1); i > alreadySummarizedUpTo; i--) {
+    const next = messages[i + 1];
+    if (!next) return i; // end of array — always safe (nothing after)
+    if (next.role === "user") return i;
+    if (next.role === "assistant") return i; // assistant always starts fresh
+    // next.role === "tool" → splitting here would orphan it. Keep walking back.
+  }
+  return alreadySummarizedUpTo; // no safe boundary found — fold nothing new
+}
+
+/**
+ * Find the START index (inclusive) of the completed turn that is
+ * `keepTurns` turns back from `fromIndex`. A "turn" is the unit of
+ * conversation that begins at a `user` message and runs until the next
+ * `user` message (or end of array). This is the per-TURN analog of a simple
+ * index subtraction: instead of "keep N messages", it's "keep N completed
+ * turns verbatim", so a heavy turn with many tool results counts as ONE unit.
+ *
+ * Walks backward from `fromIndex`, counting `user` messages as turn
+ * boundaries. Returns the index of the `user` message that opens the
+ * (keepTurns+1)-th turn from the end, minus 1 (i.e. the message just before
+ * that turn starts — the safe summary end boundary). Returns
+ * `alreadySummarizedUpTo` if there aren't enough turns to keep.
+ *
+ * Example: keepTurns=2, history = [user, asst, tool, asst, user, asst, user]
+ *                                                       ^fromIndex (last user)
+ *   2 turns back → the user at idx 4 starts the turn to keep; we return
+ *   idx 3 (the assistant just before it) as the summary end boundary.
+ */
+export function findTurnBoundaryFromEnd(
+  messages: readonly Message[],
+  fromIndex: number,
+  keepTurns: number,
+  alreadySummarizedUpTo: number,
+): number {
+  if (keepTurns <= 0) {
+    // Keep zero turns: fold everything up to and including fromIndex.
+    return fromIndex;
+  }
+  let turnsSeen = 0;
+  for (let i = fromIndex; i > alreadySummarizedUpTo; i--) {
+    if (messages[i]!.role === "user") {
+      turnsSeen++;
+      if (turnsSeen === keepTurns + 1) {
+        // This user message opens the first turn we DON'T keep. The summary
+        // should cover everything strictly before it.
+        return i - 1;
+      }
+    }
+  }
+  return alreadySummarizedUpTo; // not enough turns — fold nothing new
 }
 
 /**
@@ -318,4 +509,52 @@ function mergeAdjacent(messages: readonly Message[]): Message[] {
     merged.push(m);
   }
   return merged;
+}
+
+/**
+ * Cap on per-message text length when serializing turns for the summarizer
+ * LLM. Tool results and file contents can be huge; truncating keeps the
+ * summarization prompt itself from bloating the very context we're trying to
+ * shrink.
+ */
+const SERIALIZE_MSG_CAP = 2000;
+
+/**
+ * Flatten a slice of the message history into a single text block suitable as
+ * user input to the summarization LLM. Each message renders as a labeled line
+ * (`[role]`, `[role name]` for tool results), with overly long payloads
+ * truncated to SERIALIZE_MSG_CAP chars. Used by `Agent.generateSummaryIncremental`
+ * to build the summarization prompt.
+ */
+export function serializeTurns(messages: readonly Message[]): string {
+  const out: string[] = [];
+  for (const m of messages) {
+    if (m.role === "system") {
+      // Skip system messages — they're agent scaffolding, not conversation.
+      continue;
+    }
+    if (m.role === "user") {
+      out.push(`[user]: ${cap(m.content)}`);
+      continue;
+    }
+    if (m.role === "assistant") {
+      const calls = m.toolCalls?.length
+        ? m.toolCalls.map((tc) => renderSignature(tc.name, tc.arguments)).join("; ")
+        : null;
+      const body = m.content && m.content.length > 0 ? cap(m.content) : "";
+      out.push(`[assistant]: ${[calls ? `(called ${calls})` : null, body].filter(Boolean).join(" ")}`);
+      continue;
+    }
+    if (m.role === "tool") {
+      out.push(`[tool ${m.name}]: ${cap(m.content)}`);
+      continue;
+    }
+    // Unreachable (system already skipped above), but keep exhaustive.
+    continue;
+  }
+  return out.join("\n");
+}
+
+function cap(s: string): string {
+  return s.length > SERIALIZE_MSG_CAP ? `${s.slice(0, SERIALIZE_MSG_CAP - 20)}\n…[truncated]` : s;
 }

@@ -307,7 +307,9 @@ cd packages/desktop && npm run rebuild
 - **Per-tool toggle** - enable only the tools you need through settings or `SIBERFLOW_TOOLS`
 - **Request delay** - `SIBERFLOW_REQUEST_DELAY_MS`, default `1500`, helps avoid provider rate limits
 - **Task checklist** - resumable multi-step task state
-- **Context optimization** - compacts old tool history with `recent`, `summary`, or `drop` modes
+- **Context optimization** - compacts old tool history. Layer 1 deterministic modes (`recent`, `summary`, `drop`) plus Layer 2 `compact` mode (default) that generates an LLM narrative summary of older turns, threshold-triggered and persisted per session
+- **Context usage bar** - live progress bar (Desktop + VS Code) showing how full the context window is and where auto-compact triggers
+- **Parallel tool grouping** - concurrent tool calls in one assistant turn render as a single collapsible card (Desktop + VS Code)
 - **Auto-continue** - automatically continues responses cut off by max token limits
 - **Silent task updates** - `task_update` runs without cluttering the transcript
 - **Document upload from chat** - Desktop and VS Code can upload `.xlsx`, `.docx`, and `.pdf` into a per-session temporary directory

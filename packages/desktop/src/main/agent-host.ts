@@ -255,7 +255,7 @@ export class AgentHost {
       this.startNewSession(null, null);
     }
     this.postReady();
-    this.emit({ type: "settings-saved" });
+    this.emit({ type: "settings-saved", values: this.settings });
     this.emit({ type: "info", message: "Settings saved." });
   }
 
@@ -315,6 +315,9 @@ export class AgentHost {
       if (this.current.tasks?.length) {
         this.agent.loadTasks(this.current.tasks);
       }
+      // Restore the LLM compact summary (if any) so "compact" mode keeps
+      // rolling it forward instead of restarting from scratch on resume.
+      this.agent.loadSummary(this.current.summary ?? null);
     }
   }
 
@@ -347,6 +350,11 @@ export class AgentHost {
       autoContinue: this.settings.autoContinue,
       maxIterations: this.settings.maxIterations,
       requestDelayMs: this.settings.requestDelayMs,
+      // Seed the compact-mode threshold trigger with the resumed session's
+      // last prompt size, so a large loaded session compacts on turn 1.
+      ...(this.current?.usage?.last?.promptTokens
+        ? { lastPromptTokens: this.current.usage.last.promptTokens }
+        : {}),
     });
   }
 
@@ -393,6 +401,8 @@ export class AgentHost {
     // Breadcrumb ([SUMMARY] tags) is emitted in both "summary" and "recent"
     // modes — they differ only in WHICH turns get compressed, not in the
     // breadcrumb format. So the SUMMARY_GUIDANCE prompt applies to both.
+    // "compact" mode is excluded: it produces its own LLM narrative summary,
+    // so the deterministic-breadcrumb guidance doesn't apply there.
     return (
       this.settings.contextOptimize &&
       (this.settings.contextOptimizeMode === "summary" ||
@@ -400,11 +410,26 @@ export class AgentHost {
     );
   }
 
-  private optimizeConfig(): { enabled: boolean; mode?: "drop" | "summary" | "recent" } {
+  private optimizeConfig(): {
+    enabled: boolean;
+    mode?: "drop" | "summary" | "recent" | "compact";
+    contextWindow?: number;
+    compactThreshold?: number;
+    compactKeepRecent?: number;
+  } {
     return {
       enabled: this.settings.contextOptimize,
-      ...(this.settings.contextOptimizeMode !== "recent"
+      ...(this.settings.contextOptimizeMode !== "compact"
         ? { mode: this.settings.contextOptimizeMode }
+        : {}),
+      // Surface compact-mode tuning only when that mode is active, so other
+      // modes aren't cluttered with irrelevant config.
+      ...(this.settings.contextOptimizeMode === "compact"
+        ? {
+            contextWindow: this.settings.contextWindow,
+            compactThreshold: this.settings.compactThreshold,
+            compactKeepRecent: this.settings.compactKeepRecent,
+          }
         : {}),
     };
   }
@@ -714,6 +739,9 @@ export class AgentHost {
       updatedAt: new Date().toISOString(),
       messages: [...this.agent.history()],
       tasks: [...this.agent.getTasks()],
+      ...(this.agent.summaryState()
+        ? { summary: this.agent.summaryState()! }
+        : {}),
     };
     await saveSession(session);
     this.current = session;
@@ -727,6 +755,7 @@ export class AgentHost {
     const { messages: optimized } = optimizeContext(
       this.current.messages,
       this.optimizeConfig(),
+      this.agent.summaryState(),
     );
     if (this.summaryModeActive()) {
       void saveOptimizedMiddleView(this.current, optimized);
@@ -779,6 +808,7 @@ export class AgentHost {
       hideTools: this.settings.hideTools,
       tasksEnabled: true,
       enabledTools: this.settings.enabledTools,
+      values: this.settings,
     });
     if (this.current && this.current.messages.length > 0) {
       this.emit({ type: "history", messages: filterHistory(this.current.messages) });

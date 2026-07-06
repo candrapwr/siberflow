@@ -10,6 +10,8 @@ export type ExtToView =
   | { kind: "tool_call_start"; index: number; name: string }
   | { kind: "tool_call_args"; index: number; delta: string }
   | { kind: "tool_result"; index: number; name: string; result: string }
+  | { kind: "tool_batch_start"; count: number }
+  | { kind: "tool_batch_end" }
   | { kind: "tasks"; tasks: Task[] }
   | { kind: "context_optimized"; bytesSaved: number }
   | { kind: "max_iterations"; limit: number }
@@ -73,7 +75,7 @@ export interface MultimodalProviderSettings {
   model: string;
 }
 
-export type OptimizeMode = "drop" | "summary" | "recent";
+export type OptimizeMode = "drop" | "summary" | "recent" | "compact";
 
 export interface SettingsValues {
   provider: ProviderName;
@@ -82,6 +84,12 @@ export interface SettingsValues {
   model: string;
   contextOptimize: boolean;
   contextOptimizeMode: OptimizeMode;
+  /** Compact-mode: max prompt tokens (context window budget). Default 200000. */
+  contextWindow: number;
+  /** Compact-mode: ratio (0..1) triggering summarization. Default 0.8. */
+  compactThreshold: number;
+  /** Compact-mode: recent completed turns kept verbatim. Default 2. */
+  compactKeepRecent: number;
   autoContinue: boolean;
   hideTools: boolean;
   debug: boolean;
