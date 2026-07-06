@@ -1,6 +1,6 @@
 {
   "name": "siberflow-chat",
-  "version": "0.5.28",
+  "version": "0.5.29",
   "displayName": "Siberflow",
   "description": "AI chat sidebar with multi-provider, tool calling, sandboxed file ops, and task checklists.",
   "publisher": "DatasiberLab",
@@ -197,7 +197,9 @@
             "write_file",
             "edit_file",
             "copy_file",
-            "list_dir"
+            "list_dir",
+            "delete_file",
+            "grep"
           ],
           "description": "Which tools are registered for the AI. Disabled tools aren't sent in the prompt. Default: file operations only."
         },

@@ -47,7 +47,7 @@ export interface RegistryOptions {
    * `enabledTools` (they need the project sandbox to function). Default true. */
   filesystem?: boolean;
   /**
-   * Which tool names to register. Defaults to the 5 file operations only
+   * Which tool names to register. Defaults to the file operations only
    * (`DEFAULT_ENABLED_TOOLS`). exec / db_query / ssh_exec / sftp /
    * excel_script default OFF — opt in via settings/env to keep the
    * prompt lean and the blast radius small. `task_update` ignores this filter
@@ -63,7 +63,7 @@ export interface RegistryOptions {
 }
 
 /**
- * Tools enabled by default: the five file operations. Everything else (exec,
+ * Tools enabled by default: file operations. Everything else (exec,
  * db_query, ssh, excel) is opt-in so the prompt stays small and dangerous
  * tools are off until the user explicitly turns them on.
  */
@@ -73,6 +73,8 @@ export const DEFAULT_ENABLED_TOOLS = new Set<string>([
   "edit_file",
   "copy_file",
   "list_dir",
+  "delete_file",
+  "grep",
 ]);
 
 export function createDefaultRegistry(opts: RegistryOptions = {}): ToolRegistry {

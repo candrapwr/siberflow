@@ -91,7 +91,7 @@ const initial: ChatState = {
   messages: [],
   tasks: [],
   taskPlan: null,
-  enabledTools: ["read_file", "write_file", "edit_file", "copy_file", "list_dir"],
+  enabledTools: ["read_file", "write_file", "edit_file", "copy_file", "list_dir", "delete_file", "grep"],
   askUserPrompt: null,
   busy: false,
   stopping: false,

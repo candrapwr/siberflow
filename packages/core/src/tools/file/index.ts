@@ -4,6 +4,8 @@ import { writeFileTool } from "./write.js";
 import { editFileTool } from "./edit.js";
 import { copyFileTool } from "./copy.js";
 import { listDirTool } from "./list.js";
+import { deleteFileTool } from "./delete.js";
+import { grepTool } from "./grep.js";
 
 export const fileTools: Tool[] = [
   readFileTool,
@@ -11,4 +13,6 @@ export const fileTools: Tool[] = [
   editFileTool,
   copyFileTool,
   listDirTool,
+  deleteFileTool,
+  grepTool,
 ];

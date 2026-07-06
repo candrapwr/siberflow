@@ -26,8 +26,8 @@ function buildToolClause(enabledToolNames: string[]): string {
 
   const parts: string[] = [];
 
-  if (any("read_file", "write_file", "edit_file", "copy_file", "list_dir")) {
-    const fileTools = ["read_file", "write_file", "edit_file", "copy_file", "list_dir"].filter(has);
+  if (any("read_file", "write_file", "edit_file", "copy_file", "list_dir", "delete_file", "grep")) {
+    const fileTools = ["read_file", "write_file", "edit_file", "copy_file", "list_dir", "delete_file", "grep"].filter(has);
     parts.push(`file management (${fileTools.join(", ")})`);
   }
   if (has("exec")) parts.push("shell execution (exec)");
@@ -79,7 +79,7 @@ function buildToolClause(enabledToolNames: string[]): string {
     : "You currently have no tools registered.";
 
   // Sandbox-scope note — only mention what's relevant to the active set.
-  const hasLocalFs = any("read_file", "write_file", "edit_file", "copy_file", "list_dir", "exec") ||
+  const hasLocalFs = any("read_file", "write_file", "edit_file", "copy_file", "list_dir", "delete_file", "grep", "exec") ||
     has("excel_script") || has("docx_script") || has("pdf_script") || has("music_generate");
   const hasRemoteSsh = any("ssh_exec", "sftp");
   const scopeParts: string[] = [];

@@ -1030,7 +1030,7 @@ function readSettings(): SettingsValues {
     maxIterations: cfg.get<number>("maxIterations", 50),
     requestDelayMs: cfg.get<number>("requestDelayMs", 1500),
     enabledTools: cfg.get<string[]>("enabledTools", [
-      "read_file", "write_file", "edit_file", "copy_file", "list_dir",
+      "read_file", "write_file", "edit_file", "copy_file", "list_dir", "delete_file", "grep",
     ]),
   };
 }

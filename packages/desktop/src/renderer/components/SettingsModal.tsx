@@ -12,6 +12,8 @@ const TOGGLE_TOOLS = [
   { name: "edit_file", label: "edit_file", group: "File" },
   { name: "copy_file", label: "copy_file", group: "File" },
   { name: "list_dir", label: "list_dir", group: "File" },
+  { name: "delete_file", label: "delete_file", group: "File" },
+  { name: "grep", label: "grep", group: "File" },
   { name: "exec", label: "exec", group: "Shell" },
   { name: "db_query", label: "db_query", group: "Database" },
   { name: "ssh_exec", label: "ssh_exec", group: "SSH" },
