@@ -297,7 +297,7 @@ cd packages/desktop && npm run rebuild
 ## Feature Summary
 
 - **Streaming responses** - tokens render in real time with markdown support
-- **File and shell tools** - `read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`, `exec`
+- **File and shell tools** - `read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`, `delete_file`, `grep`, `exec`
 - **Database query tool** - `db_query` supports MySQL, PostgreSQL, and SQLite
 - **Excel spreadsheet tool** - `excel_script` can read, modify, and create `.xlsx` files through `exceljs`
 - **Word document tool** - `docx_script` can create and read `.docx` files through `docx` and `mammoth`
@@ -497,7 +497,7 @@ SIBERFLOW_MUSIC_MODEL=ACE-Step/acestep-v15-xl-sft
 Enable it like any other opt-in tool:
 
 ```bash
-SIBERFLOW_TOOLS=read_file,write_file,edit_file,copy_file,list_dir,music_generate
+SIBERFLOW_TOOLS=read_file,write_file,edit_file,copy_file,list_dir,delete_file,grep,music_generate
 SIBERFLOW_TELEGRAM_TOOLS=run_browser,bot_script,music_generate
 ```
 
@@ -505,7 +505,7 @@ The tool accepts `prompt`, `lyrics`, and `duration`. Duration is intentionally c
 
 ## Bot Script Tool (`bot_script`)
 
-`bot_script` is an opt-in core tool backed by the active bot host. In Telegram it runs a JavaScript body inside a locked-down `node:vm` sandbox with a `bot` helper that exposes a curated slice of the Telegram Bot API. It does not include file manipulation helpers — enable `read_file`, `write_file`, `edit_file`, `copy_file`, or `list_dir` separately when the bot should work with files in its session workdir.
+`bot_script` is an opt-in core tool backed by the active bot host. In Telegram it runs a JavaScript body inside a locked-down `node:vm` sandbox with a `bot` helper that exposes a curated slice of the Telegram Bot API. It does not include file manipulation helpers — enable `read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`, `delete_file`, or `grep` separately when the bot should work with files in its session workdir.
 
 The script has 15 seconds to complete; shell/process access (`child_process`, `exec`, `spawn`, `require`, dynamic `import`, `process`, `eval`, `Function`) is blocked.
 
@@ -549,14 +549,14 @@ SIBERFLOW_TELEGRAM_TOOLS=run_browser,analyze_image,bot_script
 Default enabled tools are only:
 
 ```text
-read_file,write_file,edit_file,copy_file,list_dir
+read_file,write_file,edit_file,copy_file,list_dir,delete_file,grep
 ```
 
 Other tools such as `exec`, `db_query`, `ssh_exec`, `sftp`, `excel_script`, `docx_script`, `pdf_script`, `run_browser`, `analyze_image`, `music_generate`, and `bot_script` are opt-in. `task_update` and `ask_user` are core UX tools and are always available.
 
 | Interface | How to configure |
 |---|---|
-| **CLI** | `SIBERFLOW_TOOLS=read_file,write_file,edit_file,copy_file,list_dir,run_browser` |
+| **CLI** | `SIBERFLOW_TOOLS=read_file,write_file,edit_file,copy_file,list_dir,delete_file,grep,run_browser` |
 | **VS Code** | `siberflow.enabledTools` plus the settings UI checkbox grid |
 | **Desktop** | Settings modal -> Tools |
 

@@ -231,13 +231,13 @@ cd packages/desktop && npm run rebuild
 ## Fitur ringkas
 
 - **Streaming response** — token muncul real-time, support markdown
-- **File dan shell tools** — `read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`, `exec`
+- **File dan shell tools** — `read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`, `delete_file`, `grep`, `exec`
 - **Database query tool** — `db_query` mendukung `mysql`, `postgresql`, dan `sqlite`; query bebas, optional `params`, SQLite path tetap dibatasi ke project dir
 - **Excel spreadsheet tool** — `excel_script`: satu tool serbaguna untuk membaca, memodifikasi, dan membuat `.xlsx` multi-sheet via akses penuh API `exceljs` di sandbox `node:vm`. Mendukung cells, **rumus/formula**, **gambar/image** (`addImage`/`getImages`), chart, merge cells, conditional formatting, autofilter, styling, dll. AI tulis function JS `(wb, ExcelJS) => { ... return <data> }`; host yang load/write file, sandbox hanya manipulasi workbook. File Excel dari upload UI disimpan di **OS tmp dir** (bukan project) — workspace tetap bersih, tidak ikut ke git
 - **Word document tool** — `docx_script`: satu tool untuk membuat dan membaca `.docx` via library `docx` (create) + `mammoth` (read) di sandbox `node:vm`. Create mode: AI bangun dokumen deklaratif (heading, paragraf, tabel, image, bullet, styling) via `(doc, docx) => { ... }`; host serialize lewat `Packer.toBuffer`. Read mode: host convert `.docx` existing ke HTML via mammoth, teruskan ke script `(html) => { ... return data }` untuk ekstrak struktur/konten. Sandbox sync-only, host handle semua async I/O.
 - **PDF document tool** — `pdf_script`: satu tool untuk membuat dan membaca `.pdf` via library `pdf-lib` (create) + `pdfjs-dist` (read) di sandbox `node:vm`. Create mode: AI bangun PDF deklaratif (halaman, text, shapes, warna, garis) via `(pdf, P, font) => { ... }`; host pre-embed Helvetica font + serialize lewat `pdf.save()`. Read mode: host ekstrak text semua halaman via pdfjs-dist, teruskan string (dipisah `\f` per halaman) ke script `(text) => { ... return data }`. **OCR mode** (`ocr:true`): untuk PDF gambar/scan, host render halaman → PNG (`pdfjs`+`@napi-rs/canvas`) lalu OCR via Tesseract lokal (`pytesseract`); text hasil OCR diteruskan ke script sama seperti read mode. Butuh tesseract di host.
 - **Browser tool** — `run_browser` scrape/interaksi halaman web via headless Chrome/Edge (Puppeteer). Mendukung AJAX/SPA (render JS), klik/form/login, screenshot, intercept network, multi-tab. Script Puppeteer dijalankan di child process worker terisolasi dengan timeout kill. **Pakai Chrome/Edge yang sudah terinstall** — tidak ada download Chromium. Default OFF (opt-in)
-- **Per-tool toggle** — aktif/nonaktifkan tool individual via settings/env (`SIBERFLOW_TOOLS`). Default hanya 5 file ops aktif; `exec`/`db_query`/`ssh`/`excel`/`docx`/`pdf`/`run_browser` opt-in untuk prompt ringan + blast-radius security kecil
+- **Per-tool toggle** — aktif/nonaktifkan tool individual via settings/env (`SIBERFLOW_TOOLS`). Default hanya file ops aktif; `exec`/`db_query`/`ssh`/`excel`/`docx`/`pdf`/`run_browser` opt-in untuk prompt ringan + blast-radius security kecil
 - **Request delay (anti rate-limit)** — jeda sebelum setiap request ke AI (default 1500ms, bisa 0) untuk mencegah provider block saat loop tool-call cepat. Set via env (`SIBERFLOW_REQUEST_DELAY_MS`) atau settings UI
 - **Task checklist** — opt-in via env / settings; AI maintain checklist multi-step yang bisa di-resume setelah Ctrl+C atau session restart
 - **Context optimization** — buang tool history dari turn lama (default aktif); current task tetap utuh. Tiga mode via `SIBERFLOW_CONTEXT_OPTIMIZE_MODE`: `recent` (default; seperti summary, tapi sisakan 1 turn terakhir sebelum current turn tetap utuh — hanya turn yang lebih tua dikompres, jadi konteks tool terakhir tidak hilang dulu), `drop` (buang total), atau `summary` (sisakan tag `[SUMMARY]` berisi *signature* per tool — nama + identifier ringkas seperti `exec("df -h")` / `write_file("src/foo.ts")`; payload berat dan result tetap dibuang). Defense-in-depth: provider & serialization selalu menjamin assistant message punya content atau tool_calls (fix error 400 DeepSeek)
@@ -381,13 +381,13 @@ Sama seperti `excel_script`/`docx_script`: sandbox `node:vm` locked-down, sync-o
 
 ## Per-tool toggle (enabledTools)
 
-Aktif/nonaktifkan tool individual supaya tool yang gak dipakai gak membebani prompt (~200-300 token per disabled tool) + blast-radius security lebih ketat. Default: **hanya 5 file ops** aktif (`read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`). `exec`/`db_query`/`ssh_exec`/`sftp`/`excel_script`/`docx_script`/`pdf_script`/`run_browser`/`analyze_image`/`music_generate` default OFF — opt-in. Pengecualian: `task_update` dan `ask_user` selalu on (core UX, tidak muncul di toggle).
+Aktif/nonaktifkan tool individual supaya tool yang gak dipakai gak membebani prompt (~200-300 token per disabled tool) + blast-radius security lebih ketat. Default: **hanya file ops** aktif (`read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`, `delete_file`, `grep`). `exec`/`db_query`/`ssh_exec`/`sftp`/`excel_script`/`docx_script`/`pdf_script`/`run_browser`/`analyze_image`/`music_generate` default OFF — opt-in. Pengecualian: `task_update` dan `ask_user` selalu on (core UX, tidak muncul di toggle).
 
 `task_update` selalu nyala kalau `tasks` enabled (bypass enabledTools — itu master switch task checklist feature, bukan per-tool toggle).
 
 | Interface | Cara set |
 |---|---|
-| **CLI** | env `SIBERFLOW_TOOLS=read_file,write_file,edit_file,copy_file,list_dir,run_browser` (comma-separated) |
+| **CLI** | env `SIBERFLOW_TOOLS=read_file,write_file,edit_file,copy_file,list_dir,delete_file,grep,run_browser` (comma-separated) |
 | **VSCode** | setting `siberflow.enabledTools` (array) + grid checkbox di settings UI |
 | **Desktop** | Settings modal → section "Tools" (grid 12+ checkbox, group by kategori) |
 
@@ -407,7 +407,7 @@ SIBERFLOW_MUSIC_MODEL=ACE-Step/acestep-v15-xl-sft
 Enable seperti tool opt-in lain:
 
 ```bash
-SIBERFLOW_TOOLS=read_file,write_file,edit_file,copy_file,list_dir,music_generate
+SIBERFLOW_TOOLS=read_file,write_file,edit_file,copy_file,list_dir,delete_file,grep,music_generate
 SIBERFLOW_TELEGRAM_TOOLS=run_browser,bot_script,music_generate
 ```
 

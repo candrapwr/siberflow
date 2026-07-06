@@ -210,7 +210,7 @@ interface ToolContext {
 Tool return string yang akan dikirim balik ke LLM sebagai `tool` message content. Throw `Error` untuk kegagalan — `ToolRegistry.execute()` yang menangkap & convert ke "Error: ..." string.
 
 Default registry saat ini memuat delapan kategori tool:
-- file tools: `read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`
+- file tools: `read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`, `delete_file`, `grep`
 - cli tool: `exec`
 - database tool: `db_query` (MySQL / PostgreSQL / SQLite)
 - excel tool: `excel_script` (read/modify/create multi-sheet `.xlsx` via full exceljs API: cells, formulas, images, charts, styling — vm sandbox)
@@ -223,7 +223,7 @@ Default registry saat ini memuat delapan kategori tool:
 
 **Per-tool toggle (`enabledTools`)**: tool selain file ops default OFF — opt-in via settings/env supaya prompt ringan + blast-radius security kecil. File + cli + excel tools juga gated `filesystem: true` (butuh workdir). db / ssh / browser tools terdaftar tanpa workdir. `task_update` dan `ask_user` selalu ter-register (bypass `enabledTools`).
 
-Default enabled: `read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir` saja (`DEFAULT_ENABLED_TOOLS` di `tools/index.ts`). Enable lain via settings atau `SIBERFLOW_TOOLS` env (CLI).
+Default enabled: `read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`, `delete_file`, `grep` saja (`DEFAULT_ENABLED_TOOLS` di `tools/index.ts`). Enable lain via settings atau `SIBERFLOW_TOOLS` env (CLI).
 
 ### Database tool
 
@@ -442,7 +442,7 @@ Tool selain file ops default OFF untuk prompt ringan + blast-radius security kec
 - db + ssh + web tools: gated **hanya** `enabled.has(name)` — network tools, gak butuh workdir
 - `task_update`: bypass `enabledTools`, gated `tasks` (master switch task checklist)
 
-Default: `DEFAULT_ENABLED_TOOLS = { read_file, write_file, edit_file, copy_file, list_dir }`. Setting via:
+Default: `DEFAULT_ENABLED_TOOLS = { read_file, write_file, edit_file, copy_file, list_dir, delete_file, grep }`. Setting via:
 - CLI: `SIBERFLOW_TOOLS=name1,name2` env (lihat `.env.example`)
 - VSCode: setting `siberflow.enabledTools` (array) + grid checkbox di settings UI (`TOGGLE_TOOLS` const)
 - Desktop: settings modal → section "Tools" (grid checkbox, sama pattern `TOGGLE_TOOLS`)

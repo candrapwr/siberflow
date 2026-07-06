@@ -2130,6 +2130,10 @@ function toolStatusText(name: string): string {
       return "📋 Menyalin file...";
     case "list_dir":
       return "📂 Melihat isi folder...";
+    case "delete_file":
+      return "🗑️ Menghapus file...";
+    case "grep":
+      return "🔎 Mencari teks...";
     // Shell
     case "exec":
       return "⚙️ Menjalankan perintah shell...";
