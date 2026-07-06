@@ -339,6 +339,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       cfg.update("model", values.model, target),
       cfg.update("contextOptimize", values.contextOptimize, target),
       cfg.update("contextOptimizeMode", values.contextOptimizeMode, target),
+      cfg.update("contextWindow", values.contextWindow, target),
+      cfg.update("compactThreshold", values.compactThreshold, target),
+      cfg.update("compactKeepRecent", values.compactKeepRecent, target),
       cfg.update("autoContinue", values.autoContinue, target),
       cfg.update("hideTools", values.hideTools, target),
       cfg.update("debug", values.debug, target),
@@ -463,6 +466,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (this.current.tasks?.length) {
         this.agent.loadTasks(this.current.tasks);
       }
+      this.agent.loadSummary(this.current.summary ?? null);
     }
   }
 
@@ -493,6 +497,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       autoContinue: this.settings.autoContinue,
       maxIterations: this.settings.maxIterations,
       requestDelayMs: this.settings.requestDelayMs,
+      // Seed the compact-mode threshold trigger with the resumed session's
+      // last prompt size, so a large loaded session compacts on turn 1.
+      ...(this.current?.usage?.last?.promptTokens
+        ? { lastPromptTokens: this.current.usage.last.promptTokens }
+        : {}),
     });
   }
 
@@ -535,6 +544,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // Breadcrumb ([SUMMARY] tags) is emitted in both "summary" and "recent"
     // modes — they differ only in WHICH turns get compressed, not in the
     // breadcrumb format. So the SUMMARY_GUIDANCE prompt applies to both.
+    // "compact" mode is excluded: it produces its own LLM narrative summary,
+    // so the deterministic-breadcrumb guidance doesn't apply there.
     return (
       this.settings.contextOptimize &&
       (this.settings.contextOptimizeMode === "summary" ||
@@ -545,12 +556,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /** Build the ContextOptimizeConfig shared by the agent and persisters. */
   private optimizeConfig(): {
     enabled: boolean;
-    mode?: "drop" | "summary" | "recent";
+    mode?: "drop" | "summary" | "recent" | "compact";
+    contextWindow?: number;
+    compactThreshold?: number;
+    compactKeepRecent?: number;
   } {
     return {
       enabled: this.settings.contextOptimize,
-      ...(this.settings.contextOptimizeMode !== "recent"
+      ...(this.settings.contextOptimizeMode !== "compact"
         ? { mode: this.settings.contextOptimizeMode }
+        : {}),
+      // Surface compact-mode tuning only when that mode is active, so other
+      // modes aren't cluttered with irrelevant config.
+      ...(this.settings.contextOptimizeMode === "compact"
+        ? {
+            contextWindow: this.settings.contextWindow,
+            compactThreshold: this.settings.compactThreshold,
+            compactKeepRecent: this.settings.compactKeepRecent,
+          }
         : {}),
     };
   }
@@ -572,6 +595,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     if (this.agent) {
       this.post({ kind: "tasks", tasks: this.agent.getTasks() as Task[] });
+    }
+    // Seed the context-usage bar with the resumed session's last prompt size.
+    if (this.current) {
+      this.post({
+        kind: "usage",
+        usage: this.current.usage,
+        optSaved: this.optSavedBytes,
+      });
     }
   }
 
@@ -608,6 +639,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (session.tasks?.length) {
       this.agent.loadTasks(session.tasks);
     }
+    // Restore the LLM compact summary (if any) so "compact" mode keeps rolling
+    // it forward instead of restarting from scratch on resume.
+    this.agent.loadSummary(session.summary ?? null);
     this.current = session;
   }
 
@@ -686,6 +720,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           this.post({ kind: "tool_call_args", index, delta }),
         onToolResult: (index, name, result) =>
           this.post({ kind: "tool_result", index, name, result }),
+        onToolBatchStart: (count) =>
+          this.post({ kind: "tool_batch_start", count }),
+        onToolBatchEnd: () => this.post({ kind: "tool_batch_end" }),
         onTasksUpdated: (tasks) => {
           this.post({ kind: "tasks", tasks: tasks as Task[] });
           if (this.current) {
@@ -786,6 +823,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       updatedAt: new Date().toISOString(),
       messages: [...this.agent.history()],
       tasks: [...this.agent.getTasks()],
+      ...(this.agent.summaryState()
+        ? { summary: this.agent.summaryState()! }
+        : {}),
     };
     await saveSession(session);
     this.current = session;
@@ -793,6 +833,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const { messages: optimized } = optimizeContext(
         session.messages,
         this.optimizeConfig(),
+        this.agent.summaryState(),
       );
       if (this.summaryModeActive()) {
         await saveOptimizedMiddleView(session, optimized);
@@ -801,6 +842,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
     }
     this.post({ kind: "session_changed", session: this.sessionInfo() });
+    // Push the updated usage so the webview's context-usage bar reflects the
+    // turn just completed (previously only sent on the manual /usage command).
+    this.post({
+      kind: "usage",
+      usage: this.current!.usage,
+      optSaved: this.optSavedBytes,
+    });
   }
 
   // -------- slash commands --------
@@ -1023,7 +1071,10 @@ function readSettings(): SettingsValues {
     },
     model: cfg.get<string>("model", ""),
     contextOptimize: cfg.get<boolean>("contextOptimize", true),
-    contextOptimizeMode: cfg.get<OptimizeMode>("contextOptimizeMode", "recent"),
+    contextOptimizeMode: cfg.get<OptimizeMode>("contextOptimizeMode", "compact"),
+    contextWindow: cfg.get<number>("contextWindow", 200000),
+    compactThreshold: cfg.get<number>("compactThreshold", 0.8),
+    compactKeepRecent: cfg.get<number>("compactKeepRecent", 2),
     autoContinue: cfg.get<boolean>("autoContinue", true),
     hideTools: cfg.get<boolean>("hideTools", false),
     debug: cfg.get<boolean>("debug", false),
@@ -1465,6 +1516,100 @@ body {
   color: var(--sf-muted);
   word-break: break-word;
 }
+
+/* ---------- Tool group card (parallel batch) ---------- */
+.tool-group {
+  margin: 6px 0;
+  padding: 7px 9px;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-sm);
+  background: color-mix(in srgb, var(--sf-surface-raised) 86%, transparent);
+}
+.tool-group.running {
+  border-color: var(--sf-accent);
+  border-style: dashed;
+}
+.tool-group-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--sf-accent);
+  font-weight: 600;
+  font-size: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+.tool-group-head:hover { opacity: 0.82; }
+.tool-group-head .tool-chevron { font-size: 9px; opacity: 0.65; width: 10px; }
+.tool-group-head .tool-icon { width: 12px; height: 12px; opacity: 0.8; flex-shrink: 0; }
+.tool-group-count { font-weight: 700; }
+.tool-group-names {
+  color: var(--sf-muted);
+  font-weight: 400;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-group-status {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--sf-muted);
+}
+.tool-group-status.done { color: var(--sf-success, #4eaa78); }
+.tool-group-body {
+  margin-top: 8px;
+  padding-left: 6px;
+  border-left: 2px solid var(--sf-border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tool-group.collapsed .tool-group-body { display: none; }
+/* Nested tool blocks inside an expanded group: softer borders, tighter. */
+.tool-group-body .tool {
+  margin: 0;
+  border-style: dashed;
+  background: transparent;
+}
+
+/* ---------- Context usage bar (compact mode) ---------- */
+.sf-context-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 0;
+  font-size: 10px;
+  color: var(--sf-muted);
+}
+.sf-context-track {
+  flex: 1;
+  height: 4px;
+  background: var(--sf-border);
+  border-radius: 2px;
+  position: relative;
+}
+.sf-context-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width .3s ease, background .2s ease;
+}
+.sf-context-fill.ok { background: #4eaa78; }
+.sf-context-fill.warn { background: #d4a72c; }
+.sf-context-fill.danger { background: #e5484d; }
+.sf-context-threshold {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 0;
+  border-left: 1px dashed currentColor;
+  opacity: 0.45;
+}
+.sf-context-text {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.sf-context-thresh-label { opacity: 0.65; }
 
 /* ---------- Notices ---------- */
 .notice {

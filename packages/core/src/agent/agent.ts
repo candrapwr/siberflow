@@ -3,9 +3,15 @@ import type { ToolRegistry, ToolContext } from "../tools/index.js";
 import { toSchema } from "../tools/base.js";
 import {
   DEFAULT_OPTIMIZE_CONFIG,
+  SUMMARY_SYSTEM_PROMPT,
+  findTurnBoundaryFromEnd,
   optimizeContext,
+  serializeTurns,
+  snapToTurnBoundary,
+  type CompactionStats,
   type ContextOptimizeConfig,
   type OptimizationStats,
+  type SummaryState,
 } from "./optimize.js";
 import { TaskStore, renderTaskList, type Task } from "./tasks.js";
 import { debug } from "../debug.js";
@@ -19,11 +25,39 @@ import type {
 } from "./types.js";
 
 const MAX_AUTO_CONTINUES = 4;
+/**
+ * How many of the most recent COMPLETED turns the "compact" mode keeps
+ * verbatim in the request (not folded into the LLM summary). Mirrors the
+ * "recent" mode's intuition that the immediately preceding tool context
+ * matters and shouldn't be reduced to prose. Tunable via
+ * SIBERFLOW_COMPACT_KEEP_RECENT. A value of 0 folds everything older than the
+ * current turn.
+ */
 /** Default maximum consecutive run_browser calls before the agent forces a
  * final answer. Overridable via SIBERFLOW_MAX_CONSECUTIVE_RUN_BROWSER env. */
 const DEFAULT_MAX_CONSECUTIVE_RUN_BROWSER = 10;
 const CONTINUE_NUDGE =
   "Your previous message was cut off by the output length limit. Continue from exactly where you stopped — do not repeat anything you already wrote, and do not add a preamble.";
+
+/**
+ * Default context window (max prompt tokens) assumed for the active provider
+ * when neither the host config nor SIBERFLOW_CONTEXT_WINDOW supplies one. 200K
+ * matches GLM-5.x / Claude-class models; DeepSeek/Qwen with 1M will simply
+ * compact later. This is only the FALLBACK for the compact-mode threshold
+ * trigger — the actual hard limit is enforced by the provider.
+ */
+export const DEFAULT_CONTEXT_WINDOW = 200_000;
+/**
+ * Default ratio of (last prompt tokens / context window) at which "compact"
+ * mode fires its summarization pass. 0.8 = summarize once the request reaches
+ * 80% of the budget, leaving headroom for tool results and the reply.
+ */
+export const DEFAULT_COMPACT_THRESHOLD = 0.8;
+/**
+ * Default number of most recent COMPLETED turns kept verbatim (not folded into
+ * the LLM summary) when compaction fires.
+ */
+export const DEFAULT_COMPACT_KEEP_RECENT = 2;
 
 /**
  * Resolve the run_browser consecutive-call cap from the environment, falling
@@ -37,6 +71,17 @@ const MAX_CONSECUTIVE_RUN_BROWSER = (() => {
   if (!Number.isFinite(n) || n < 0) return DEFAULT_MAX_CONSECUTIVE_RUN_BROWSER;
   return n;
 })();
+
+/**
+ * Parse a positive integer from env, falling back to `def` on missing/garbage.
+ * Used for the compact-mode env fallbacks (CLI/Telegram path).
+ */
+function envInt(env: NodeJS.ProcessEnv, key: string, def: number): number {
+  const raw = env[key];
+  if (raw === undefined) return def;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : def;
+}
 
 export interface AgentOptions {
   provider: Provider;
@@ -70,6 +115,13 @@ export interface AgentOptions {
   botScript?: ToolContext["botScript"];
   /** Optional context optimization (default: disabled). */
   contextOptimize?: ContextOptimizeConfig;
+  /**
+   * Seed value for the compact-mode threshold trigger's `lastPromptTokens`
+   * (typically restored from `Session.usage.last.promptTokens` on resume).
+   * Lets a freshly-loaded large session compact on its very first turn
+   * instead of waiting for one round-trip to re-measure. Optional; defaults 0.
+   */
+  lastPromptTokens?: number;
   /** Enable task checklist injection (the task_update tool must also be registered). */
   tasksEnabled?: boolean;
   /** Auto-continue responses cut off by max output tokens (default: true). */
@@ -89,10 +141,25 @@ export interface AgentEvents {
   onToolResult?: (index: number, name: string, result: string) => void;
   /** Fires per LLM call when context optimization truncates at least one tool result. */
   onContextOptimized?: (stats: OptimizationStats) => void;
+  /**
+   * Fires when the "compact" mode generates or updates the LLM narrative
+   * summary of older turns (one summary LLM call was made). Hosts can use this
+   * to surface compaction in the UI or persist the updated summary.
+   */
+  onContextCompacted?: (stats: CompactionStats) => void;
   /** Fires after the task list changes (task_update tool called). */
   onTasksUpdated?: (tasks: readonly Task[]) => void;
   /** Fires when the turn hit the maxIterations cap without a final answer. */
   onMaxIterations?: (limit: number) => void;
+  /**
+   * Fires right BEFORE the agent executes a batch of 2+ parallel tool calls
+   * from one assistant message. Single tool calls (count < 2) do NOT fire this
+   * — hosts use it to open a "tool group" container so the batch renders as
+   * one collapsible card. Always balanced by a later `onToolBatchEnd`.
+   */
+  onToolBatchStart?: (count: number) => void;
+  /** Fires right AFTER a tool-call batch completes (mirrors onToolBatchStart). */
+  onToolBatchEnd?: () => void;
 }
 
 export class Agent {
@@ -103,6 +170,10 @@ export class Agent {
   private readonly requestDelayMs: number;
   private readonly ctx: ToolContext;
   private readonly contextOpt: ContextOptimizeConfig;
+  /** Compact-mode tuning, resolved from config → env → default at construction. */
+  private readonly contextWindow: number;
+  private readonly compactThreshold: number;
+  private readonly compactKeepRecent: number;
   private readonly tasksEnabled: boolean;
   private readonly autoContinue: boolean;
   private readonly taskStore = new TaskStore();
@@ -116,6 +187,24 @@ export class Agent {
    * browsing loop. Guards against the agent getting stuck scraping endlessly.
    */
   private consecutiveRunBrowserCount = 0;
+  /**
+   * LLM-generated narrative summary of older turns, used by the "compact"
+   * optimize mode. Set via `loadSummary()` when restoring a session, and
+   * rolled forward by `generateSummaryIncremental()` each turn the compact
+   * mode is active. `null` when there's no summary yet (other modes, or a
+   * compact session before the first eligible compaction). Never mutated
+   * directly except by those two methods.
+   */
+  private summary: SummaryState | null = null;
+  /**
+   * Prompt-token count of the most recent LLM request, captured from the last
+   * `runStream` usage report. Used by the compact-mode threshold trigger to
+   * decide whether to summarize this turn: if the ratio of this over
+   * CONTEXT_WINDOW exceeds COMPACT_THRESHOLD, fold older turns. Seeded from
+   * `AgentOptions.lastPromptTokens` (host restores it from Session.usage on
+   * resume) so a freshly-loaded large session compacts on its first turn too.
+   */
+  private lastPromptTokens = 0;
 
   constructor(opts: AgentOptions) {
     this.provider = opts.provider;
@@ -124,6 +213,29 @@ export class Agent {
     this.maxIterations = opts.maxIterations ?? 16;
     this.requestDelayMs = opts.requestDelayMs ?? 0;
     this.contextOpt = opts.contextOptimize ?? DEFAULT_OPTIMIZE_CONFIG;
+    // Compact-mode tuning: explicit config wins, else env fallback (CLI/TG),
+    // else module default. Resolved once at construction so a host can change
+    // the value via settings without touching env vars.
+    this.contextWindow =
+      this.contextOpt.contextWindow ??
+      envInt(process.env, "SIBERFLOW_CONTEXT_WINDOW", DEFAULT_CONTEXT_WINDOW);
+    this.compactThreshold =
+      this.contextOpt.compactThreshold ??
+      (() => {
+        const raw = process.env.SIBERFLOW_COMPACT_THRESHOLD;
+        if (raw === undefined) return DEFAULT_COMPACT_THRESHOLD;
+        const n = Number.parseFloat(raw);
+        return Number.isFinite(n) && n > 0 && n <= 1 ? n : DEFAULT_COMPACT_THRESHOLD;
+      })();
+    this.compactKeepRecent =
+      this.contextOpt.compactKeepRecent ??
+      (() => {
+        const raw = process.env.SIBERFLOW_COMPACT_KEEP_RECENT;
+        if (raw === undefined) return DEFAULT_COMPACT_KEEP_RECENT;
+        const n = Number.parseInt(raw, 10);
+        return Number.isFinite(n) && n >= 0 ? n : DEFAULT_COMPACT_KEEP_RECENT;
+      })();
+    this.lastPromptTokens = opts.lastPromptTokens ?? 0;
     this.tasksEnabled = opts.tasksEnabled ?? false;
     this.autoContinue = opts.autoContinue ?? true;
     this.ctx = {
@@ -156,6 +268,30 @@ export class Agent {
   loadHistory(messages: readonly Message[]): void {
     this.messages.length = 0;
     for (const m of messages) this.messages.push(m);
+  }
+
+  /**
+   * Restore the persisted LLM summary (from `Session.summary`). Pass null to
+   * clear. Called by hosts after `loadHistory()` so the "compact" mode can
+   * continue rolling the summary forward instead of restarting from scratch.
+   */
+  loadSummary(state: SummaryState | null): void {
+    this.summary = state ? { ...state } : null;
+  }
+
+  /** Current summary state, or null when none. Hosts persist this with the session. */
+  summaryState(): SummaryState | null {
+    return this.summary ? { ...this.summary } : null;
+  }
+
+  /**
+   * Seed the compact-mode threshold trigger with the resumed session's last
+   * prompt-token count. Called by hosts after `loadHistory()` (when the agent
+   * is built before the session is known) so a large loaded session compacts
+   * on its first turn instead of waiting one round-trip to re-measure.
+   */
+  loadLastPromptTokens(n: number): void {
+    this.lastPromptTokens = Number.isFinite(n) && n > 0 ? n : 0;
   }
 
   /** Drop history but preserve the system prompt that was set at construction. */
@@ -205,6 +341,17 @@ export class Agent {
 
       const toolSchemas = this.registry.list().map(toSchema);
 
+      // Layer 2 — when "compact" mode is active, roll the LLM narrative summary
+      // forward BEFORE deterministic optimization runs. This is the only place
+      // that makes an extra LLM call for summarization; it folds any newly
+      // completed turns into the existing summary. No-op for other modes and
+      // when there's nothing new to summarize. Failures are swallowed so a
+      // summarization glitch never breaks the user's turn.
+      await this.generateSummaryIncremental(events).catch((err) => {
+        if (isAbortError(err) || events.signal?.aborted) throw err;
+        debug(`compact summary generation failed (continuing with prior state): ${err}`);
+      });
+
       // Optimize ONCE per user turn — snapshot includes the new user message
       // but excludes tool results produced during this turn's loop below.
       // That keeps the in-progress task's context intact while still
@@ -213,6 +360,7 @@ export class Agent {
       const { messages: optimizedBase, stats: optStats } = optimizeContext(
         this.messages,
         this.contextOpt,
+        this.summary,
       );
       if (this.contextOpt.enabled && optStats.collapsedCount > 0) {
         events.onContextOptimized?.(optStats);
@@ -278,6 +426,13 @@ export class Agent {
           finishReason,
           ...(usage ? { usage } : {}),
         });
+        // Track the latest prompt-token count for the compact-mode threshold
+        // trigger. The LAST successful iteration's prompt size is the best
+        // proxy for "how full is context right now" — it reflects the actual
+        // request the provider just accepted.
+        if (usage?.promptTokens && usage.promptTokens > 0) {
+          this.lastPromptTokens = usage.promptTokens;
+        }
         debug(
           `iteration ${i}: finishReason=${finishReason}`,
           `toolCalls=${assistant.toolCalls?.length ?? 0} contentLen=${assistant.content?.length ?? 0}`,
@@ -285,6 +440,15 @@ export class Agent {
 
         if (finishReason !== "tool_calls" || !assistant.toolCalls?.length) {
           return assistant.content ?? "";
+        }
+
+        // Signal a parallel tool-call batch so hosts can render the calls as
+        // one collapsible group card. Only emitted for 2+ calls — a single
+        // call is rendered as a normal standalone tool block. Balanced by
+        // onToolBatchEnd after the loop, even on early return paths below.
+        const batchCount = assistant.toolCalls.length;
+        if (batchCount >= 2) {
+          events.onToolBatchStart?.(batchCount);
         }
 
         for (let idx = 0; idx < assistant.toolCalls.length; idx++) {
@@ -325,6 +489,11 @@ export class Agent {
                 finishReason: stopAnswer.finishReason,
                 ...(stopAnswer.usage ? { usage: stopAnswer.usage } : {}),
               });
+              // Close the tool-call batch group before this early return so the
+              // host UI doesn't leave the group container open.
+              if (batchCount >= 2) {
+                events.onToolBatchEnd?.();
+              }
               return stopAnswer.assistant.content ?? "";
             } else {
               result = await this.registry.execute(
@@ -354,6 +523,11 @@ export class Agent {
             content: result,
           };
           this.messages.push(toolMsg);
+        }
+
+        // Close the tool-call batch group opened above.
+        if (batchCount >= 2) {
+          events.onToolBatchEnd?.();
         }
       }
 
@@ -489,6 +663,131 @@ export class Agent {
       result.unshift({ role: "system", content: block.trimStart() });
     }
     return result;
+  }
+
+  /**
+   * Layer 2 — roll the LLM narrative summary forward for "compact" mode.
+   *
+   * TRIGGER (threshold-based): only fires when the LAST request's prompt-token
+   * count reaches COMPACT_THRESHOLD of CONTEXT_WINDOW (default 80%). This makes
+   * compaction adaptive — a heavy turn fills the budget fast and compacts
+   * sooner, a light conversation may never compact. The token count is tracked
+   * from each `runStream` usage report (and seeded from `AgentOptions` on
+   * resume so a freshly-loaded large session compacts immediately).
+   *
+   * FOLD STRATEGY (when triggered): finds completed turns newer than the
+   * summary's current `upToIndex`, excluding the COMPACT_KEEP_RECENT most
+   * recent completed turns (those stay verbatim) and the current turn. Makes
+   * one `runStream` call with no tools and no UI callbacks to produce an
+   * updated narrative, stores it in `this.summary`, fires `onContextCompacted`.
+   *
+   * No-op for non-compact modes, when under threshold, or when there are no
+   * newly-eligible turns. Designed to be awaitable and to throw only on abort
+   * — other failures are the caller's responsibility (send() swallows them).
+   *
+   * Invariants: never mutates `this.messages`; only `this.summary` changes.
+   */
+  private async generateSummaryIncremental(events: AgentEvents): Promise<void> {
+    const mode = this.contextOpt.mode ?? "compact";
+    if (mode !== "compact" || !this.contextOpt.enabled) return;
+
+    // THRESHOLD CHECK — adaptive trigger. Compare the last request's prompt
+    // size against the configured context window. Skip summarization entirely
+    // when we're comfortably under budget (saves an API call per turn). On the
+    // very first turn of a fresh session lastPromptTokens is 0, so we naturally
+    // skip; on resume it's seeded from Session.usage so large sessions compact.
+    const ratio = this.contextWindow > 0 ? this.lastPromptTokens / this.contextWindow : 0;
+    if (ratio < this.compactThreshold) {
+      debug(
+        `📦 compact: under threshold (${this.lastPromptTokens}/${this.contextWindow} = ${(ratio * 100).toFixed(0)}% < ${(this.compactThreshold * 100).toFixed(0)}%) — skip`,
+      );
+      return;
+    }
+
+    // Current user message was pushed by send() just before us, so it's the
+    // last message right now. Everything strictly before it is a completed
+    // turn eligible to be summarized.
+    if (this.messages.length < 2) return; // need at least [system?, user] — nothing completed yet
+    const currentUserIdx = this.messages.length - 1;
+    const lastEligibleIdx = currentUserIdx - 1;
+    if (lastEligibleIdx < 0) return;
+
+    const alreadySummarizedUpTo = this.summary?.upToIndex ?? -1;
+    // Keep the compactKeepRecent most recent COMPLETED TURNS verbatim —
+    // counted per-turn (a turn = user msg + its assistant/tool activity), NOT
+    // per-message. A heavy turn with 5 tool results counts as ONE unit, so we
+    // fold whole tool-call chains into the summary rather than leaving them in
+    // the verbatim tail.
+    const candidate = findTurnBoundaryFromEnd(
+      this.messages,
+      lastEligibleIdx,
+      this.compactKeepRecent,
+      alreadySummarizedUpTo,
+    );
+    // Snap down to a SAFE turn boundary so the verbatim tail we keep doesn't
+    // start mid-tool-call-chain (an orphan `tool` result with no preceding
+    // `assistant.tool_calls` is rejected by strict providers with HTTP 400).
+    const summarizeUpTo = snapToTurnBoundary(
+      this.messages,
+      candidate,
+      alreadySummarizedUpTo,
+    );
+    // Nothing new to fold in (or no safe boundary was found).
+    if (summarizeUpTo <= alreadySummarizedUpTo) return;
+
+    const turnsToSummarize = this.messages.slice(
+      alreadySummarizedUpTo + 1,
+      summarizeUpTo + 1,
+    );
+    if (turnsToSummarize.length === 0) return;
+
+    // Build the summarization prompt. The prior summary (if any) is fed back
+    // in so the model rolls it forward instead of restarting from scratch.
+    const summaryPrompt: Message[] = [
+      { role: "system", content: SUMMARY_SYSTEM_PROMPT },
+      ...(this.summary
+        ? [
+            {
+              role: "user" as const,
+              content: `Previous summary (update and extend it; preserve its key facts):\n${this.summary.text}`,
+            },
+          ]
+        : []),
+      {
+        role: "user",
+        content:
+          `Conversation turns to summarize (roles: user, assistant, tool):\n\n` +
+          serializeTurns(turnsToSummarize),
+      },
+    ];
+
+    debug(
+      `📦 compact: summarizing ${turnsToSummarize.length} message(s) [${alreadySummarizedUpTo + 1}..${summarizeUpTo}]`,
+    );
+
+    // Internal call: no tools, no UI streaming callbacks — only abort signal.
+    // runStream already applies requestDelayMs throttling.
+    const { assistant } = await this.runStream(summaryPrompt, [], {
+      signal: events.signal,
+    });
+    const text = (assistant.content ?? "").trim();
+    if (text.length === 0) {
+      debug("📦 compact: model returned empty summary, keeping prior state");
+      return;
+    }
+
+    this.summary = {
+      text,
+      upToIndex: summarizeUpTo,
+      updatedAt: new Date().toISOString(),
+    };
+    events.onContextCompacted?.({
+      turnsSummarized: turnsToSummarize.length,
+      summaryChars: text.length,
+    });
+    debug(
+      `📦 compact: summary updated (${text.length} chars), covers up to index ${summarizeUpTo}`,
+    );
   }
 }
 

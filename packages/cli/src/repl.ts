@@ -46,7 +46,7 @@ export interface ReplOptions {
 export async function runRepl(opts: ReplOptions): Promise<void> {
   const summaryMode =
     opts.contextOptimize.enabled &&
-    (opts.contextOptimize.mode ?? "summary") === "summary";
+    (opts.contextOptimize.mode ?? "compact") === "summary";
   const systemPrompt = buildSystemPrompt({
     interface: "terminal",
     summaryMode,
@@ -242,6 +242,12 @@ function applyChoice(ctx: SessionContext, choice: SessionChoice): void {
     if (choice.session.tasks?.length) {
       ctx.agent.loadTasks(choice.session.tasks);
     }
+    // Restore the LLM compact summary (if any) so "compact" mode keeps rolling
+    // it forward instead of restarting from scratch after a resume.
+    ctx.agent.loadSummary(choice.session.summary ?? null);
+    // Seed the threshold trigger with the resumed session's last prompt size,
+    // so a large loaded session compacts on turn 1 instead of waiting.
+    ctx.agent.loadLastPromptTokens(choice.session.usage?.last?.promptTokens ?? 0);
     ctx.current = choice.session;
     console.log(
       ui.info(
@@ -307,6 +313,7 @@ function buildSessionFromAgent(ctx: SessionContext, id: string): Session {
     messages: [...ctx.agent.history()],
     usage: existing?.usage ?? emptyUsage(),
     tasks: [...ctx.agent.getTasks()],
+    ...(ctx.agent.summaryState() ? { summary: ctx.agent.summaryState()! } : {}),
   };
 }
 
@@ -320,8 +327,9 @@ async function persistAfterTurn(ctx: SessionContext): Promise<void> {
     const { messages: optimized } = optimizeContext(
       session.messages,
       ctx.contextOptimize,
+      ctx.agent.summaryState(),
     );
-    if ((ctx.contextOptimize.mode ?? "drop") === "summary") {
+    if ((ctx.contextOptimize.mode ?? "compact") === "summary") {
       await saveOptimizedMiddleView(session, optimized);
     } else {
       await saveOptimizedView(session, optimized);

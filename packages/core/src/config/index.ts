@@ -63,22 +63,49 @@ function resolveContextOptimize(env: NodeJS.ProcessEnv): ContextOptimizeConfig {
   // want the raw, unoptimized view set SIBERFLOW_CONTEXT_OPTIMIZE=false.
   const enabled = env.SIBERFLOW_CONTEXT_OPTIMIZE !== "false";
   const mode = resolveOptimizeMode(env);
-  // Omit the mode field when it equals the default ("recent") so the
+  // Omit the mode field when it equals the default ("compact") so the
   // serialized config stays minimal; only emit it for the non-default case.
-  return { enabled, ...(mode !== "recent" ? { mode } : {}) };
+  return {
+    enabled,
+    ...(mode !== "compact" ? { mode } : {}),
+    // Compact-mode tuning (only surfaced to the agent when set). CLI/Telegram
+    // path; Desktop/VSCode construct ContextOptimizeConfig directly with these
+    // fields from their settings UI.
+    ...(env.SIBERFLOW_CONTEXT_WINDOW
+      ? { contextWindow: parseEnvInt(env.SIBERFLOW_CONTEXT_WINDOW) }
+      : {}),
+    ...(env.SIBERFLOW_COMPACT_THRESHOLD
+      ? { compactThreshold: parseEnvFloat(env.SIBERFLOW_COMPACT_THRESHOLD) }
+      : {}),
+    ...(env.SIBERFLOW_COMPACT_KEEP_RECENT
+      ? { compactKeepRecent: parseEnvInt(env.SIBERFLOW_COMPACT_KEEP_RECENT) }
+      : {}),
+  };
+}
+
+function parseEnvInt(raw: string): number {
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) ? n : undefined as unknown as number;
+}
+function parseEnvFloat(raw: string): number {
+  const n = Number.parseFloat(raw);
+  return Number.isFinite(n) ? n : undefined as unknown as number;
 }
 
 function resolveOptimizeMode(env: NodeJS.ProcessEnv): OptimizeMode {
-  // Default "recent" (signature breadcrumb, but keep the most recent
-  // completed turn's tool activity intact — compress only older turns).
-  // Other modes:
-  //   "drop"    — compact drop-everything behavior (no breadcrumb).
+  // Default "compact" — LLM-generated narrative summary of old turns (Layer 2).
+  // Richest context retention; threshold-triggered so it only fires when
+  // context fills up. Other modes:
+  //   "recent"  — signature breadcrumb, keep the most recent completed turn
+  //               intact (compress only older turns).
   //   "summary" — signature breadcrumb on ALL past turns.
+  //   "drop"    — drop-everything behavior (no breadcrumb).
   // Only honored when optimization is enabled; ignored otherwise.
   const raw = env.SIBERFLOW_CONTEXT_OPTIMIZE_MODE?.toLowerCase();
   if (raw === "drop") return "drop";
   if (raw === "summary") return "summary";
-  return "recent";
+  if (raw === "recent") return "recent";
+  return "compact";
 }
 
 function resolveMaxIterations(env: NodeJS.ProcessEnv): number {

@@ -31,6 +31,31 @@ export interface Session {
    * sessions that predate the feature.
    */
   knownMembers?: Record<string, { username?: string; name?: string }>;
+  /**
+   * LLM-generated narrative summary of older conversation turns, produced by
+   * the "compact" context-optimization mode. The summary covers messages
+   * `[0 .. upToIndex]` inclusive; messages after that index are still kept
+   * verbatim in `messages` and appended after the summary at request time.
+   * Absent for sessions using other optimize modes or before the first
+   * compaction.
+   */
+  summary?: SessionSummaryState;
+}
+
+/**
+ * Persisted state of an LLM-generated context summary. `upToIndex` is an
+ * index into `Session.messages` — the summary narrates messages `0..upToIndex`
+ * inclusive; everything after is still sent verbatim. Updated incrementally
+ * each turn the "compact" mode is active, so the summary rolls forward as the
+ * conversation grows.
+ */
+export interface SessionSummaryState {
+  /** The narrative summary text, prepended as a pseudo-system message. */
+  text: string;
+  /** Inclusive index into Session.messages the summary covers. */
+  upToIndex: number;
+  /** ISO timestamp of the last summary update. */
+  updatedAt: string;
 }
 
 export interface SessionSummary {

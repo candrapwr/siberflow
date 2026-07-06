@@ -919,9 +919,17 @@ class BotRunner {
       autoContinue: this.config.autoContinue,
       maxIterations: this.config.maxIterations,
       requestDelayMs: this.config.requestDelayMs,
+      // Seed the compact-mode threshold trigger with the resumed session's
+      // last prompt size, so a large loaded session compacts on turn 1.
+      ...(session.usage?.last?.promptTokens
+        ? { lastPromptTokens: session.usage.last.promptTokens }
+        : {}),
       botScript: this.createBotScriptHost(),
     });
     agent.loadHistory(withSystemPrompt(session.messages, systemPrompt));
+    // Restore the LLM compact summary (if any) so "compact" mode keeps rolling
+    // it forward instead of restarting from scratch on bot restart.
+    agent.loadSummary(session.summary ?? null);
     runtime.agent = agent;
 
     this.sessions.set(id, runtime);
@@ -1229,13 +1237,22 @@ class BotRunner {
     } else {
       delete runtime.session.knownMembers;
     }
+    // Persist the LLM compact summary (if any) produced by "compact" mode so
+    // it survives bot restarts and keeps rolling forward.
+    const summary = runtime.agent.summaryState();
+    if (summary) {
+      runtime.session.summary = summary;
+    } else {
+      delete runtime.session.summary;
+    }
     await saveSession(runtime.session);
     if (this.config.contextOptimize.enabled) {
       const { messages: optimized } = optimizeContext(
         runtime.session.messages,
         this.config.contextOptimize,
+        runtime.agent.summaryState(),
       );
-      if ((this.config.contextOptimize.mode ?? "recent") === "summary") {
+      if ((this.config.contextOptimize.mode ?? "compact") === "summary") {
         await saveOptimizedMiddleView(runtime.session, optimized);
       } else {
         await saveOptimizedView(runtime.session, optimized);

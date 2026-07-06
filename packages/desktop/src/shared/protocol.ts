@@ -34,7 +34,13 @@ export interface SettingsValues {
   multimodalProvider: MultimodalProviderSettings;
   model: string;
   contextOptimize: boolean;
-  contextOptimizeMode: "drop" | "summary" | "recent";
+  contextOptimizeMode: "drop" | "summary" | "recent" | "compact";
+  /** Compact-mode: max prompt tokens (context window budget). Default 200000. */
+  contextWindow: number;
+  /** Compact-mode: ratio (0..1) triggering summarization. Default 0.8. */
+  compactThreshold: number;
+  /** Compact-mode: recent completed turns kept verbatim. Default 2. */
+  compactKeepRecent: number;
   autoContinue: boolean;
   hideTools: boolean;
   debug: boolean;
@@ -58,7 +64,10 @@ export const DEFAULT_SETTINGS: SettingsValues = {
   },
   model: "",
   contextOptimize: true,
-  contextOptimizeMode: "recent",
+  contextOptimizeMode: "compact",
+  contextWindow: 200000,
+  compactThreshold: 0.8,
+  compactKeepRecent: 2,
   autoContinue: true,
   hideTools: true,
   debug: false,
@@ -126,9 +135,9 @@ export interface PickedFile {
 // ---- Main → Renderer (streaming events) ----
 
 export type MainEvent =
-  | { type: "ready"; banner: BannerInfo; session: CurrentSessionInfo | null; hideTools: boolean; tasksEnabled: boolean; enabledTools: string[] }
+  | { type: "ready"; banner: BannerInfo; session: CurrentSessionInfo | null; hideTools: boolean; tasksEnabled: boolean; enabledTools: string[]; values: SettingsValues }
   | { type: "require-settings"; mustConfigure: boolean; values: SettingsValues; hasApiKey: boolean; hasMultimodalApiKey: boolean; hasExaApiKey: boolean }
-  | { type: "settings-saved" }
+  | { type: "settings-saved"; values: SettingsValues }
   | { type: "session-changed"; session: CurrentSessionInfo | null }
   | { type: "session-list"; sessions: SessionSummary[] }
   | { type: "history"; messages: HistoryEntry[] }

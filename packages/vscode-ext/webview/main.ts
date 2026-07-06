@@ -8,6 +8,7 @@ import type {
   SessionInfo,
   SettingsValues,
 } from "../src/protocol.js";
+import type { OptimizeMode } from "../src/protocol.js";
 import type { SessionUsage, Task } from "@siberflow/core";
 
 // VSCode webview API
@@ -29,10 +30,21 @@ interface UIState {
   currentAssistantText: string;
   /** Tool call elements by index for the current assistant turn. */
   currentTools: Map<number, ToolElements>;
+  /** Active tool-group container (set between tool_batch_start/end). Null when
+   * no batch is open OR when the current assistant iteration has < 2 calls. */
+  currentToolGroup: ToolGroupElements | null;
   busy: boolean;
   stopping: boolean;
   /** Excel files staged for the next send (copied into the workspace sandbox). */
   attachments: PickedFile[];
+  /** Latest token usage for the active session (drives the context-usage bar). */
+  usage: SessionUsage | null;
+  /** Compact-mode context window budget (tokens). */
+  contextWindow: number;
+  /** Compact-mode threshold ratio (0..1) at which auto-compact fires. */
+  compactThreshold: number;
+  /** Active context-optimize mode; the bar only renders when "compact". */
+  optimizeMode: OptimizeMode;
 }
 
 interface ToolElements {
@@ -52,6 +64,24 @@ interface HiddenToolSummary {
   completed: number;
 }
 
+/**
+ * Live elements for a "tool group" card — a collapsible container that wraps
+ * 2+ parallel tool calls in one assistant iteration. Mirrors the per-tool
+ * ToolElements pattern but aggregates N children. Created by
+ * `tool_batch_start`, populated as tool_call_start events arrive, and closed
+ * by `tool_batch_end`. Single tool calls (no batch) bypass this entirely.
+ */
+interface ToolGroupElements {
+  root: HTMLElement;          // .tool-group container
+  bodyEl: HTMLElement;        // .tool-group-body (holds child .tool divs)
+  statusEl: HTMLElement;      // progress / done text in the head
+  countEl: HTMLElement;       // "N tool calls" text
+  namesEl: HTMLElement;       // names summary text
+  names: string[];            // unique tool names, in arrival order
+  completed: number;
+  total: number;
+}
+
 const state: UIState = {
   banner: null,
   session: null,
@@ -62,9 +92,14 @@ const state: UIState = {
   currentAssistant: null,
   currentAssistantText: "",
   currentTools: new Map(),
+  currentToolGroup: null,
   busy: false,
   stopping: false,
   attachments: [],
+  usage: null,
+  contextWindow: 200000,
+  compactThreshold: 0.8,
+  optimizeMode: "compact",
 };
 
 /**
@@ -435,7 +470,7 @@ function showSettingsModal(
     <div class="form-section">
       <div class="form-section-title">Context optimization</div>
       <div class="form-row inline">
-        <label for="cfg-optimize">Context optimization (drop/summary/recent)</label>
+        <label for="cfg-optimize">Context optimization (drop/summary/recent/compact)</label>
         <input type="checkbox" id="cfg-optimize">
       </div>
       <div class="form-row">
@@ -444,7 +479,22 @@ function showSettingsModal(
           <option value="drop">drop</option>
           <option value="summary">summary</option>
           <option value="recent">recent</option>
+          <option value="compact">compact (AI summary)</option>
         </select>
+      </div>
+      <div id="cfg-compact-rows" hidden>
+        <div class="form-row">
+          <label>Context window (max tokens)</label>
+          <input type="number" id="cfg-cw" min="1000" step="1000">
+        </div>
+        <div class="form-row">
+          <label>Compact threshold (0.1–1)</label>
+          <input type="number" id="cfg-cthresh" min="0.1" max="1" step="0.05">
+        </div>
+        <div class="form-row">
+          <label>Keep recent turns</label>
+          <input type="number" id="cfg-ckr" min="0" max="20">
+        </div>
       </div>
     </div>
     <div class="form-section">
@@ -487,6 +537,12 @@ function showSettingsModal(
   // (cfg-tasks checkbox removed — task_update is now always-on, not toggleable)
   (modal.querySelector("#cfg-optimize") as HTMLInputElement).checked = values.contextOptimize;
   (modal.querySelector("#cfg-optmode") as HTMLSelectElement).value = values.contextOptimizeMode;
+  // Compact-mode tuning + visibility toggle.
+  (modal.querySelector("#cfg-cw") as HTMLInputElement).value = String(values.contextWindow);
+  (modal.querySelector("#cfg-cthresh") as HTMLInputElement).value = String(values.compactThreshold);
+  (modal.querySelector("#cfg-ckr") as HTMLInputElement).value = String(values.compactKeepRecent);
+  (modal.querySelector("#cfg-compact-rows") as HTMLElement).hidden =
+    values.contextOptimizeMode !== "compact";
   (modal.querySelector("#cfg-autocontinue") as HTMLInputElement).checked = values.autoContinue;
   (modal.querySelector("#cfg-hidetools") as HTMLInputElement).checked = values.hideTools;
   (modal.querySelector("#cfg-debug") as HTMLInputElement).checked = values.debug;
@@ -531,6 +587,13 @@ function showSettingsModal(
     updateCustomVisibility();
   });
 
+  // Toggle the compact-mode tuning rows based on the selected optimize mode.
+  const optmodeSelect = modal.querySelector("#cfg-optmode") as HTMLSelectElement;
+  const compactRows = modal.querySelector("#cfg-compact-rows") as HTMLElement;
+  optmodeSelect.addEventListener("change", () => {
+    compactRows.hidden = optmodeSelect.value !== "compact";
+  });
+
   modal.querySelector("#cfg-cancel")?.addEventListener("click", closeIfAllowed);
   modal.querySelector("#cfg-save")?.addEventListener("click", () => {
     const provider = providerSelect.value as SettingsValues["provider"];
@@ -551,7 +614,18 @@ function showSettingsModal(
       return;
     }
     const contextOptimize = (modal.querySelector("#cfg-optimize") as HTMLInputElement).checked;
-    const contextOptimizeMode = (modal.querySelector("#cfg-optmode") as HTMLSelectElement).value as "drop" | "summary" | "recent";
+    const contextOptimizeMode = (modal.querySelector("#cfg-optmode") as HTMLSelectElement).value as "drop" | "summary" | "recent" | "compact";
+    const contextWindow = Math.max(
+      1000,
+      parseInt((modal.querySelector("#cfg-cw") as HTMLInputElement).value, 10) || 200000,
+    );
+    const compactThresholdRaw = parseFloat((modal.querySelector("#cfg-cthresh") as HTMLInputElement).value);
+    const compactThreshold = Number.isFinite(compactThresholdRaw) && compactThresholdRaw > 0 && compactThresholdRaw <= 1
+      ? compactThresholdRaw : 0.8;
+    const compactKeepRecent = Math.max(
+      0,
+      parseInt((modal.querySelector("#cfg-ckr") as HTMLInputElement).value, 10) || 2,
+    );
     const autoContinue = (modal.querySelector("#cfg-autocontinue") as HTMLInputElement).checked;
     const hideTools = (modal.querySelector("#cfg-hidetools") as HTMLInputElement).checked;
     const debug = (modal.querySelector("#cfg-debug") as HTMLInputElement).checked;
@@ -585,6 +659,9 @@ function showSettingsModal(
         model,
         contextOptimize,
         contextOptimizeMode,
+        contextWindow,
+        compactThreshold,
+        compactKeepRecent,
         autoContinue,
         hideTools,
         debug,
@@ -602,6 +679,43 @@ function showSettingsModal(
   (modal.querySelector("#cfg-apikey") as HTMLInputElement).focus();
 }
 
+
+/** Compact a token count to a short label, e.g. 45200 -> "45K", 1200000 -> "1.2M". */
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${Math.round(n / 1_000)}K`;
+  return String(n);
+}
+
+/**
+ * Render the context-usage progress bar: fill = promptTokens/contextWindow,
+ * a dashed threshold marker where auto-compact triggers, and a textual
+ * "used / budget · pct" label. Hidden unless the active optimize mode is
+ * "compact". Called on composer init, on usage updates, and on settings change.
+ */
+function updateContextBar(): void {
+  const bar = document.getElementById("context-bar");
+  if (!bar) return;
+  if (state.optimizeMode !== "compact") {
+    bar.hidden = true;
+    bar.innerHTML = "";
+    return;
+  }
+  bar.hidden = false;
+  const used = state.usage?.last?.promptTokens ?? 0;
+  const cw = state.contextWindow > 0 ? state.contextWindow : 200000;
+  const pct = Math.min(100, (used / cw) * 100);
+  const threshPct = Math.min(100, state.compactThreshold * 100);
+  const tone = pct < 50 ? "ok" : pct < threshPct ? "warn" : "danger";
+  bar.title = `Auto-compact triggers at ${Math.round(threshPct)}% (≈ ${fmtTokens(Math.round(cw * state.compactThreshold))} tokens)`;
+  bar.innerHTML = `
+    <div class="sf-context-track">
+      <div class="sf-context-fill ${tone}" style="width:${pct}%"></div>
+      ${threshPct < 100 ? `<div class="sf-context-threshold" style="left:${threshPct}%"></div>` : ""}
+    </div>
+    <span class="sf-context-text">${fmtTokens(used)} / ${fmtTokens(cw)} · ${Math.round(pct)}%<span class="sf-context-thresh-label"> · auto-compact @ ${Math.round(threshPct)}%</span></span>
+  `;
+}
 
 function renderComposer(): HTMLElement {
   const el = document.createElement("div");
@@ -662,12 +776,19 @@ function renderComposer(): HTMLElement {
   shell.appendChild(ta);
   shell.appendChild(btn);
   el.appendChild(shell);
+  // Context-usage progress bar (visible only in compact mode).
+  const contextBar = document.createElement("div");
+  contextBar.className = "sf-context-bar";
+  contextBar.id = "context-bar";
+  contextBar.hidden = true;
+  el.appendChild(contextBar);
   const hint = document.createElement("div");
   hint.className = "composer-hint";
   hint.id = "composer-hint";
   el.appendChild(hint);
   updateAttachments();
   updateComposerState();
+  updateContextBar();
   return el;
 }
 
@@ -857,6 +978,9 @@ function startAssistant(): void {
   state.currentAssistant = el;
   state.currentAssistantText = "";
   state.currentTools.clear();
+  // A new assistant iteration ends any open tool batch (defensive — the agent
+  // emits tool_batch_end, but sessions/history swaps can land mid-stream).
+  state.currentToolGroup = null;
   hiddenToolSummary = null;
   currentTextEl = null;
   scrollToBottom();
@@ -1090,7 +1214,17 @@ function startToolCall(index: number, name: string): void {
   }
 
   // Append inside body so it interleaves naturally with .seg text segments.
-  body.appendChild(root);
+  // When a tool batch is open, nest the tool inside the group card instead of
+  // the assistant body — this is what makes parallel calls render as one
+  // collapsible unit rather than N stacked cards.
+  if (state.currentToolGroup) {
+    state.currentToolGroup.bodyEl.appendChild(root);
+    if (!state.currentToolGroup.names.includes(name)) {
+      state.currentToolGroup.names.push(name);
+    }
+  } else {
+    body.appendChild(root);
+  }
   state.currentTools.set(index, {
     root,
     argsEl,
@@ -1136,6 +1270,12 @@ function showToolResult(index: number, name: string, result: string): void {
   if (toolBody) toolBody.appendChild(r);
   else t.root.appendChild(r);
   t.resultEl = r;
+  // Update the parent tool-group's progress counter when this tool is part of
+  // a parallel batch.
+  if (state.currentToolGroup) {
+    state.currentToolGroup.completed += 1;
+    renderToolGroupStatus();
+  }
   scrollToBottom();
 }
 
@@ -1242,6 +1382,84 @@ function syncEmptyState(forceVisible?: boolean): void {
   } else {
     if (!messagesEl.contains(emptyStateEl)) messagesEl.prepend(emptyStateEl);
     emptyStateEl.style.display = "";
+  }
+}
+
+/**
+ * Open a tool-group container for an upcoming batch of 2+ parallel tool calls.
+ * Creates the `.tool-group` card (collapsed by default) and appends it to the
+ * current assistant body. Subsequent `startToolCall` events will nest their
+ * `.tool` divs inside this group's body until `endToolBatch` closes it.
+ */
+function startToolBatch(count: number): void {
+  hidePending();
+  if (!state.currentAssistant) startAssistant();
+  const body = state.currentAssistant!.querySelector(".body") as HTMLElement;
+  removeThinkingDot(body);
+  finalizeCurrentTextEl();
+
+  const root = document.createElement("div");
+  root.className = "tool-group collapsed";
+  const head = document.createElement("div");
+  head.className = "tool-group-head";
+  const countEl = document.createElement("span");
+  countEl.className = "tool-group-count";
+  countEl.textContent = `${count} tool calls`;
+  const namesEl = document.createElement("span");
+  namesEl.className = "tool-group-names";
+  const statusEl = document.createElement("span");
+  statusEl.className = "tool-group-status";
+  const chev = document.createElement("span");
+  chev.className = "tool-group-chevron";
+  chev.innerHTML = ICONS.tool;
+  const chevron = document.createElement("span");
+  chevron.className = "tool-chevron";
+  chevron.textContent = "▸";
+  head.append(chevron, chev, countEl, namesEl, statusEl);
+  const bodyEl = document.createElement("div");
+  bodyEl.className = "tool-group-body";
+  root.append(head, bodyEl);
+  head.addEventListener("click", () => {
+    const collapsed = root.classList.toggle("collapsed");
+    chevron.textContent = collapsed ? "▸" : "▾";
+  });
+
+  body.appendChild(root);
+  state.currentToolGroup = {
+    root,
+    bodyEl,
+    statusEl,
+    countEl,
+    namesEl,
+    names: [],
+    completed: 0,
+    total: count,
+  };
+  renderToolGroupStatus();
+  scrollToBottom();
+}
+
+/** Close the active tool-group. Called when the batch finishes. */
+function endToolBatch(): void {
+  state.currentToolGroup = null;
+}
+
+/**
+ * Repaint the active tool-group's head: names summary + progress (N/total
+ * while running, "done" when complete). Mirrors renderHiddenToolSummary.
+ */
+function renderToolGroupStatus(): void {
+  const g = state.currentToolGroup;
+  if (!g) return;
+  g.namesEl.textContent = summarizeToolNames(g.names);
+  if (g.completed >= g.total) {
+    g.statusEl.textContent = "done";
+    g.statusEl.classList.add("done");
+    g.root.classList.remove("running");
+  } else {
+    g.statusEl.textContent = `${g.completed}/${g.total}`;
+    g.statusEl.classList.remove("done");
+    g.root.classList.add("running");
   }
 }
 
@@ -1358,6 +1576,12 @@ window.addEventListener("message", (ev) => {
     case "tool_result":
       showToolResult(msg.index, msg.name, msg.result);
       break;
+    case "tool_batch_start":
+      startToolBatch(msg.count);
+      break;
+    case "tool_batch_end":
+      endToolBatch();
+      break;
     case "tasks":
       state.tasks = msg.tasks;
       updateTaskPanel();
@@ -1391,6 +1615,8 @@ window.addEventListener("message", (ev) => {
     }
     case "usage":
       showUsage(msg.usage, msg.optSaved);
+      state.usage = msg.usage;
+      updateContextBar();
       break;
     case "info":
       showNotice("info", msg.message);
@@ -1411,6 +1637,10 @@ window.addEventListener("message", (ev) => {
       }
       // Keep the composer upload toggle in sync with the latest tool set.
       state.enabledTools = msg.values.enabledTools;
+      state.contextWindow = msg.values.contextWindow;
+      state.compactThreshold = msg.values.compactThreshold;
+      state.optimizeMode = msg.values.contextOptimizeMode;
+      updateContextBar();
       showSettingsModal(msg.values, msg.hasApiKey, msg.hasMultimodalApiKey, msg.hasExaApiKey, msg.mustConfigure);
       break;
     case "history":

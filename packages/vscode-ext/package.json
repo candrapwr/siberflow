@@ -1,6 +1,6 @@
 {
   "name": "siberflow-chat",
-  "version": "0.5.29",
+  "version": "0.5.30",
   "displayName": "Siberflow",
   "description": "AI chat sidebar with multi-provider, tool calling, sandboxed file ops, and task checklists.",
   "publisher": "DatasiberLab",
@@ -165,10 +165,26 @@
           "enum": [
             "drop",
             "summary",
-            "recent"
+            "recent",
+            "compact"
           ],
-          "default": "recent",
-          "description": "Context optimization strategy. recent = signature breadcrumb on past turns, but keep the most recent completed turn's tool activity intact (default); summary = signature breadcrumb on ALL past turns; drop = remove tool history entirely. Only applies when contextOptimize is true."
+          "default": "compact",
+          "description": "Context optimization strategy. compact = generate an LLM narrative summary of older turns when context fills up (default; richest retention, costs 1 extra API call); recent = signature breadcrumb on past turns but keep the most recent completed turn intact; summary = signature breadcrumb on ALL past turns; drop = remove tool history entirely. Only applies when contextOptimize is true."
+        },
+        "siberflow.contextWindow": {
+          "type": "number",
+          "default": 200000,
+          "description": "Compact-mode: max prompt tokens (context window budget) of the active provider, used by the threshold trigger. Default 200000 (GLM-5.x / Claude-class). Set higher for 1M providers (DeepSeek-V4, Qwen-Plus, MiniMax) so they compact later. Only applies when contextOptimizeMode is compact."
+        },
+        "siberflow.compactThreshold": {
+          "type": "number",
+          "default": 0.8,
+          "description": "Compact-mode: ratio (0..1) of (last prompt tokens / contextWindow) at which summarization fires. Lower = compact sooner & more often; higher = compact later. Only applies when contextOptimizeMode is compact."
+        },
+        "siberflow.compactKeepRecent": {
+          "type": "number",
+          "default": 2,
+          "description": "Compact-mode: how many of the most recent COMPLETED turns stay verbatim (not folded into the summary) when compaction fires. 0 folds everything older than the current turn. Only applies when contextOptimizeMode is compact."
         },
         "siberflow.autoContinue": {
           "type": "boolean",

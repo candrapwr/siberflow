@@ -382,6 +382,10 @@ export default function App() {
                 state.enabledTools.includes("docx_script") ||
                 state.enabledTools.includes("pdf_script")
               }
+              usage={state.usage}
+              contextWindow={state.settingsValues?.contextWindow ?? 200000}
+              compactThreshold={state.settingsValues?.compactThreshold ?? 0.8}
+              optimizeMode={state.settingsValues?.contextOptimizeMode ?? "compact"}
             />
           </div>
         )}
