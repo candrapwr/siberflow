@@ -4,6 +4,7 @@ import { toSchema } from "../tools/base.js";
 import {
   DEFAULT_OPTIMIZE_CONFIG,
   SUMMARY_SYSTEM_PROMPT,
+  findSubTurnBoundaryFromEnd,
   findTurnBoundaryFromEnd,
   optimizeContext,
   serializeTurns,
@@ -126,6 +127,12 @@ export interface AgentOptions {
   tasksEnabled?: boolean;
   /** Auto-continue responses cut off by max output tokens (default: true). */
   autoContinue?: boolean;
+  /**
+   * Pre-truncate large tool outputs/arguments to keep context lean (default:
+   * true). Read in ToolContext.preTruncate by read_file/exec, and used here to
+   * digest write_file/edit_file arguments after execution.
+   */
+  preTruncate?: boolean;
 }
 
 export interface AgentEvents {
@@ -160,6 +167,13 @@ export interface AgentEvents {
   onToolBatchStart?: (count: number) => void;
   /** Fires right AFTER a tool-call batch completes (mirrors onToolBatchStart). */
   onToolBatchEnd?: () => void;
+  /**
+   * Fires right BEFORE the "compact" mode makes an LLM summarization call
+   * (start-of-turn `generateSummaryIncremental` or mid-loop
+   * `foldCurrentTurnMidLoop`). Hosts show a "Summarizing context…" indicator.
+   * Always paired with a later `onContextCompacted` once the call resolves.
+   */
+  onContextCompacting?: () => void;
 }
 
 export class Agent {
@@ -205,6 +219,15 @@ export class Agent {
    * resume) so a freshly-loaded large session compacts on its first turn too.
    */
   private lastPromptTokens = 0;
+  /**
+   * Last `summary.upToIndex` a mid-turn fold produced, used to dedupe: once a
+   * fold pass leaves `upToIndex` unchanged (nothing more to fold), we skip the
+   * extra LLM summary call on subsequent iterations that are still over
+   * threshold. Reset to -1 at the start of every turn. Avoids a wasteful
+   * "summarize the same region every iteration" loop when the current turn's
+   * remaining tool results are larger than the headroom even after folding.
+   */
+  private lastMidTurnFoldUpTo = -1;
 
   constructor(opts: AgentOptions) {
     this.provider = opts.provider;
@@ -244,6 +267,7 @@ export class Agent {
       ...(opts.uploadDir ? { uploadDir: opts.uploadDir } : {}),
       ...(opts.askUser ? { askUser: opts.askUser } : {}),
       ...(opts.botScript ? { botScript: opts.botScript } : {}),
+      ...(opts.preTruncate !== undefined ? { preTruncate: opts.preTruncate } : {}),
     };
 
     if (opts.systemPrompt) {
@@ -334,6 +358,8 @@ export class Agent {
     // starts fresh (the Agent instance is reused across turns in long-lived
     // hosts like Telegram, so without this the streak would carry over).
     this.consecutiveRunBrowserCount = 0;
+    // Reset the mid-turn fold dedupe gate so a fresh turn can fold again.
+    this.lastMidTurnFoldUpTo = -1;
     this.messages.push({ role: "user", content: userInput });
 
     try {
@@ -356,8 +382,8 @@ export class Agent {
       // but excludes tool results produced during this turn's loop below.
       // That keeps the in-progress task's context intact while still
       // truncating older turns' tool results.
-      const snapshotEndIndex = this.messages.length;
-      const { messages: optimizedBase, stats: optStats } = optimizeContext(
+      let snapshotEndIndex = this.messages.length;
+      let { messages: optimizedBase, stats: optStats } = optimizeContext(
         this.messages,
         this.contextOpt,
         this.summary,
@@ -523,11 +549,56 @@ export class Agent {
             content: result,
           };
           this.messages.push(toolMsg);
+          // Pre-truncation: after a write_file/edit_file lands its result,
+          // digest the call's content/new_string/old_string argument in the
+          // assistant's tool_calls so the full payload doesn't linger in
+          // context for all subsequent iterations. The filesystem is the source
+          // of truth — the model can re-read the file if it needs the content.
+          if (
+            this.ctx.preTruncate !== false &&
+            (call.name === "write_file" || call.name === "edit_file")
+          ) {
+            truncateToolCallArgs(this.messages, call.id);
+          }
         }
 
         // Close the tool-call batch group opened above.
         if (batchCount >= 2) {
           events.onToolBatchEnd?.();
+        }
+
+        // Mid-turn sliding-window compaction: if context filled up DURING
+        // this iteration loop, fold the oldest current-turn tool results
+        // into the rolling summary (keep compactKeepRecent sub-turns verbatim)
+        // then recompute optimizedBase + advance snapshotEndIndex so the next
+        // iteration's request uses the folded view. No-op for non-compact modes
+        // and when we're comfortably under threshold. this.messages is never
+        // mutated — only this.summary advances, so persistence stays intact.
+        if (
+          this.contextOpt.enabled &&
+          (this.contextOpt.mode ?? "compact") === "compact" &&
+          this.contextWindow > 0 &&
+          this.lastPromptTokens / this.contextWindow >= this.compactThreshold &&
+          // Dedupe: once a fold pass made no progress on upToIndex, don't keep
+          // firing the extra LLM summary call every subsequent iteration. Only
+          // dedupe once at least one fold pass has run (lastMidTurnFoldUpTo
+          // !== -1) — otherwise both values are -1 and we'd block the first.
+          (this.lastMidTurnFoldUpTo === -1 ||
+            this.lastMidTurnFoldUpTo !== (this.summary?.upToIndex ?? -1))
+        ) {
+          const folded = await this.foldCurrentTurnMidLoop(events, snapshotEndIndex).catch(
+            (err) => {
+              if (isAbortError(err) || events.signal?.aborted) throw err;
+              debug(`📦 mid-turn fold failed (continuing): ${err}`);
+              return false;
+            },
+          );
+          this.lastMidTurnFoldUpTo = this.summary?.upToIndex ?? -1;
+          if (folded) {
+            const next = optimizeContext(this.messages, this.contextOpt, this.summary);
+            optimizedBase = next.messages;
+            snapshotEndIndex = this.messages.length;
+          }
         }
       }
 
@@ -764,6 +835,7 @@ export class Agent {
     debug(
       `📦 compact: summarizing ${turnsToSummarize.length} message(s) [${alreadySummarizedUpTo + 1}..${summarizeUpTo}]`,
     );
+    events.onContextCompacting?.();
 
     // Internal call: no tools, no UI streaming callbacks — only abort signal.
     // runStream already applies requestDelayMs throttling.
@@ -788,6 +860,146 @@ export class Agent {
     debug(
       `📦 compact: summary updated (${text.length} chars), covers up to index ${summarizeUpTo}`,
     );
+  }
+
+  /**
+   * Mid-turn sliding-window fold. When context fills up DURING the iteration
+   * loop (not just at send() start), fold the OLDEST tool results of the
+   * CURRENT turn into the rolling summary, keeping only the
+   * `compactKeepRecent` most recent sub-turns verbatim. Sibling of
+   * `generateSummaryIncremental`, but operates on the current-turn region
+   * `[snapshotEndIndex .. end]` (which has no `user` messages — only
+   * assistant-with-toolCalls + tool results), so it uses sub-turn boundaries.
+   *
+   * Returns true if a fold happened (caller must recompute optimizedBase +
+   * advance snapshotEndIndex); false if nothing was eligible. Never mutates
+   * `this.messages` — only advances `this.summary.upToIndex` + text.
+   */
+  private async foldCurrentTurnMidLoop(
+    events: AgentEvents,
+    snapshotEndIndex: number,
+  ): Promise<boolean> {
+    // The current user message sits at snapshotEndIndex - 1; the current-turn
+    // region is [snapshotEndIndex .. end]. We can only fold if there are more
+    // sub-turns there than we want to keep.
+    const floor = snapshotEndIndex - 1; // never fold the current user message
+    const alreadySummarizedUpTo = this.summary?.upToIndex ?? -1;
+    if (alreadySummarizedUpTo >= floor) {
+      debug(
+        `📦 mid-turn fold: skip — alreadySummarizedUpTo=${alreadySummarizedUpTo} >= floor=${floor} (snapshotEnd=${snapshotEndIndex}, msgs=${this.messages.length})`,
+      );
+      return false;
+    }
+
+    const candidate = findSubTurnBoundaryFromEnd(
+      this.messages,
+      this.messages.length - 1,
+      this.compactKeepRecent,
+      floor,
+    );
+    const foldTo = snapToTurnBoundary(this.messages, candidate, floor);
+    if (foldTo <= alreadySummarizedUpTo) {
+      debug(
+        `📦 mid-turn fold: skip — foldTo=${foldTo} <= alreadySummarizedUpTo=${alreadySummarizedUpTo} (candidate=${candidate}, floor=${floor}, keepRecent=${this.compactKeepRecent})`,
+      );
+      return false;
+    }
+
+    const foldRegion = this.messages.slice(alreadySummarizedUpTo + 1, foldTo + 1);
+    if (foldRegion.length === 0) {
+      debug(`📦 mid-turn fold: skip — empty fold region`);
+      return false;
+    }
+
+    const summaryPrompt: Message[] = [
+      { role: "system", content: SUMMARY_SYSTEM_PROMPT },
+      ...(this.summary
+        ? [
+            {
+              role: "user" as const,
+              content: `Previous summary (update and extend it; preserve its key facts):\n${this.summary.text}`,
+            },
+          ]
+        : []),
+      {
+        role: "user",
+        content:
+          `Conversation turns to summarize (this is the active task in progress; roles: user, assistant, tool):\n\n` +
+          serializeTurns(foldRegion),
+      },
+    ];
+
+    debug(
+      `📦 mid-turn fold: summarizing ${foldRegion.length} message(s) [${alreadySummarizedUpTo + 1}..${foldTo}] (sub-turn window = ${this.compactKeepRecent})`,
+    );
+    events.onContextCompacting?.();
+
+    const { assistant } = await this.runStream(summaryPrompt, [], {
+      signal: events.signal,
+    });
+    const text = (assistant.content ?? "").trim();
+    if (text.length === 0) {
+      debug("📦 mid-turn fold: model returned empty summary, keeping prior state");
+      return false;
+    }
+
+    this.summary = {
+      text,
+      upToIndex: foldTo,
+      updatedAt: new Date().toISOString(),
+    };
+    events.onContextCompacted?.({
+      turnsSummarized: foldRegion.length,
+      summaryChars: text.length,
+    });
+    debug(
+      `📦 mid-turn fold: summary updated (${text.length} chars), now covers up to index ${foldTo}`,
+    );
+    return true;
+  }
+}
+
+/**
+ * Pre-truncation threshold for write_file/edit_file argument payloads. When a
+ * field exceeds this many characters, it's replaced with a head+tail digest so
+ * the model keeps an anchor (what it wrote/edited) without the full payload
+ * bloating context for the rest of the turn.
+ */
+const PRE_TRUNCATE_ARG_CAP = 1000;
+
+/**
+ * Find the assistant toolCall matching `toolCallId` in the message history and
+ * digest its large text payload fields (`content` for write_file; `old_string`
+ * / `new_string` for edit_file) so the full content doesn't linger in context.
+ * The filesystem retains the full content; the model can re-read it if needed.
+ * Mutates `messages` in place (the assistant tool_calls live there permanently).
+ */
+function truncateToolCallArgs(messages: Message[], toolCallId: string): void {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (m.role !== "assistant" || !m.toolCalls) continue;
+    const tc = m.toolCalls.find((t) => t.id === toolCallId);
+    if (!tc) continue;
+    try {
+      const parsed = JSON.parse(tc.arguments) as Record<string, unknown>;
+      let changed = false;
+      for (const field of ["content", "new_string", "old_string"]) {
+        const v = parsed[field];
+        if (typeof v === "string" && v.length > PRE_TRUNCATE_ARG_CAP) {
+          const head = v.length / 2 > 500 ? v.slice(0, 500) : v.slice(0, Math.floor(v.length / 2));
+          const tail = v.length / 2 > 500 ? v.slice(v.length - 300) : "";
+          parsed[field] =
+            `${head}\n[...truncated ${v.length - head.length - tail.length} chars; full content is on disk...]\n${tail}`;
+          changed = true;
+        }
+      }
+      if (changed) {
+        tc.arguments = JSON.stringify(parsed);
+      }
+    } catch {
+      // Args weren't valid JSON — leave them untouched.
+    }
+    return;
   }
 }
 

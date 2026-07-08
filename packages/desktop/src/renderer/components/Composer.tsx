@@ -35,6 +35,8 @@ interface ComposerProps {
   compactThreshold?: number;
   /** Active context-optimize mode; the bar only renders when "compact". */
   optimizeMode?: "drop" | "summary" | "recent" | "compact";
+  /** True while the agent is making an LLM summarization call (compact mode). */
+  summarizing?: boolean;
 }
 
 /** Compact a token count to a short human label, e.g. 45200 -> "45K", 1200000 -> "1.2M". */
@@ -51,7 +53,7 @@ function docIcon(kind: DocKind) {
   return FileExcelIcon;
 }
 
-export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, prefill, hasWorkdir = true, docEnabled = true, usage = null, contextWindow = 200000, compactThreshold = 0.8, optimizeMode = "compact" }: ComposerProps) {
+export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, prefill, hasWorkdir = true, docEnabled = true, usage = null, contextWindow = 200000, compactThreshold = 0.8, optimizeMode = "compact", summarizing = false }: ComposerProps) {
   const [value, setValue] = useState("");
   const [attachments, setAttachments] = useState<PickedFile[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -197,7 +199,7 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={busy ? "Generating…" : "Message Siberflow…"}
+          placeholder={summarizing ? "Summarizing context…" : busy ? "Generating…" : "Message Siberflow…"}
           disabled={busy}
           rows={1}
         />
@@ -212,7 +214,7 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
         )}
       </div>
       {optimizeMode === "compact" && (() => {
-        const used = usage?.last?.promptTokens ?? 0;
+        const used = usage?.last?.contextSize ?? usage?.last?.promptTokens ?? 0;
         const pct = contextWindow > 0 ? Math.min(100, (used / contextWindow) * 100) : 0;
         const threshPct = Math.min(100, compactThreshold * 100);
         const tone = pct < 50 ? "ok" : pct < threshPct ? "warn" : "danger";

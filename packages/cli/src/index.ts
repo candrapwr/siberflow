@@ -41,6 +41,7 @@ async function main(): Promise<void> {
     contextOptimize: config.contextOptimize,
     enabledToolNames: registry.list().map((t) => t.name),
     autoContinue: config.autoContinue,
+    preTruncate: config.preTruncate,
     maxIterations: config.maxIterations,
     requestDelayMs: config.requestDelayMs,
     hideTools: config.hideTools,

@@ -14,6 +14,8 @@ export type ExtToView =
   | { kind: "tool_batch_end" }
   | { kind: "tasks"; tasks: Task[] }
   | { kind: "context_optimized"; bytesSaved: number }
+  | { kind: "context_compacting" }
+  | { kind: "context_compacted"; turnsSummarized: number; summaryChars: number }
   | { kind: "max_iterations"; limit: number }
   | { kind: "error"; message: string }
   | { kind: "info"; message: string }
@@ -91,6 +93,8 @@ export interface SettingsValues {
   /** Compact-mode: recent completed turns kept verbatim. Default 2. */
   compactKeepRecent: number;
   autoContinue: boolean;
+  /** Pre-truncate large tool outputs/arguments. Default true. */
+  preTruncate: boolean;
   hideTools: boolean;
   debug: boolean;
   maxIterations: number;

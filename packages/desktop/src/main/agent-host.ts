@@ -55,7 +55,7 @@ function filterHistory(messages: Session["messages"]): HistoryEntry[] {
 
 function emptyUsage(): UsageInfo {
   return {
-    last: { promptTokens: 0, completionTokens: 0 },
+    last: { promptTokens: 0, completionTokens: 0, contextSize: 0 },
     total: { promptTokens: 0, completionTokens: 0 },
   };
 }
@@ -348,12 +348,14 @@ export class AgentHost {
       contextOptimize: this.optimizeConfig(),
       tasksEnabled: true,
       autoContinue: this.settings.autoContinue,
+      preTruncate: this.settings.preTruncate,
       maxIterations: this.settings.maxIterations,
       requestDelayMs: this.settings.requestDelayMs,
       // Seed the compact-mode threshold trigger with the resumed session's
-      // last prompt size, so a large loaded session compacts on turn 1.
-      ...(this.current?.usage?.last?.promptTokens
-        ? { lastPromptTokens: this.current.usage.last.promptTokens }
+      // last prompt size (contextSize = last iteration's prompt, accurate
+      // context window — not the turn-accumulated promptTokens).
+      ...(this.current?.usage?.last?.contextSize
+        ? { lastPromptTokens: this.current.usage.last.contextSize }
         : {}),
     });
   }
@@ -655,6 +657,9 @@ export class AgentHost {
     const initialTaskCount = this.agent.getTasks().length;
     let turnAddPrompt = 0;
     let turnAddCompletion = 0;
+    // Track the LAST iteration's prompt size so usage.last.contextSize
+    // reflects the actual context the model saw (not the turn accumulation).
+    let lastIterPrompt = 0;
 
     try {
       await this.agent.send(input, {
@@ -665,6 +670,7 @@ export class AgentHost {
           if (meta.usage) {
             turnAddPrompt += meta.usage.promptTokens;
             turnAddCompletion += meta.usage.completionTokens;
+            lastIterPrompt = meta.usage.promptTokens;
           }
           // Close the current iteration so the next one opens a fresh bubble.
           this.emit({ type: "iteration-end" });
@@ -697,17 +703,26 @@ export class AgentHost {
           this.optSavedBytes += stats.bytesSaved;
           this.emit({ type: "context-optimized", bytesSaved: stats.bytesSaved });
         },
+        onContextCompacting: () => this.emit({ type: "context-compacting" }),
+        onContextCompacted: (stats) =>
+          this.emit({
+            type: "context-compacted",
+            turnsSummarized: stats.turnsSummarized,
+            summaryChars: stats.summaryChars,
+          }),
         onMaxIterations: (limit) =>
           this.emit({ type: "max-iterations", limit }),
       });
 
       if (this.current) {
-        // usage.last = AKUMULASI seluruh iterasi pada turn terakhir (semua tool
-        // loops digabung), bukan hanya iterasi terakhir. Ini yang ditampilkan ke
-        // UI sebagai "token yang dikirim ke AI" untuk satu turn.
+        // usage.last.promptTokens = AKUMULASI seluruh iterasi pada turn terakhir
+        // (semua tool loops digabung) — info billing. contextSize = prompt size
+        // iterasi TERAKHIR — itu context window asli yg dilihat model, dipakai
+        // context bar & compact threshold saat resume.
         this.current.usage.last = {
           promptTokens: turnAddPrompt,
           completionTokens: turnAddCompletion,
+          contextSize: lastIterPrompt,
         };
         this.current.usage.total.promptTokens += turnAddPrompt;
         this.current.usage.total.completionTokens += turnAddCompletion;

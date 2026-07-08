@@ -20,6 +20,8 @@ export interface SiberflowConfig {
   requestDelayMs: number;
   /** Tool names to register for the agent. Default: file ops only. */
   enabledTools: Set<string>;
+  /** Pre-truncate large tool outputs/arguments to keep context lean. Default true. */
+  preTruncate: boolean;
 }
 
 export function loadConfigFromEnv(
@@ -43,6 +45,7 @@ export function loadConfigFromEnv(
     maxIterations: resolveMaxIterations(env),
     requestDelayMs: resolveRequestDelay(env),
     enabledTools: resolveEnabledTools(env),
+    preTruncate: env.SIBERFLOW_PRE_TRUNCATE !== "false",
     hideTools: env.SIBERFLOW_HIDE_TOOLS === "true",
     ...(env.SIBERFLOW_MODEL ? { model: env.SIBERFLOW_MODEL } : {}),
     ...(env.SIBERFLOW_BASE_URL ? { baseUrl: env.SIBERFLOW_BASE_URL } : {}),

@@ -69,6 +69,10 @@ interface ChatState {
     defaultChoice?: string;
   } | null;
   busy: boolean;
+  /** True while the agent is making an LLM context-summarization call (compact
+   * mode start-of-turn or mid-loop fold). Drives a "Summarizing context…"
+   * indicator in the composer. Cleared by assistant-start/assistant-end. */
+  summarizing: boolean;
   stopping: boolean;
   notices: Array<{ id: number; kind: "info" | "error" | "warn"; text: string }>;
   showActions: boolean;
@@ -95,6 +99,7 @@ const initial: ChatState = {
   enabledTools: ["read_file", "write_file", "edit_file", "copy_file", "list_dir", "delete_file", "grep"],
   askUserPrompt: null,
   busy: false,
+  summarizing: false,
   stopping: false,
   notices: [],
   showActions: false,
@@ -297,6 +302,7 @@ function reducer(state: ChatState, action: Action): ChatState {
       return {
         ...state,
         busy: true,
+        summarizing: false,
         stopping: false,
         showActions: false,
         messages: [...state.messages, { role: "assistant", blocks: [] }],
@@ -384,6 +390,7 @@ function reducer(state: ChatState, action: Action): ChatState {
       return {
         ...state,
         busy: false,
+        summarizing: false,
         stopping: false,
         showActions: !state.stopping,
       };
@@ -396,6 +403,17 @@ function reducer(state: ChatState, action: Action): ChatState {
 
     case "context-optimized":
       return state;
+
+    case "context-compacting":
+      // The agent is about to make an LLM summarization call; surface it so
+      // the composer can show "Summarizing context…" instead of idle.
+      return { ...state, summarizing: true };
+
+    case "context-compacted":
+      // Summary resolved — clear the indicator. busy may still be true if the
+      // turn continues (mid-loop fold), which is fine; the placeholder/dots
+      // for the next assistant iteration will show normally.
+      return { ...state, summarizing: false };
 
     case "max-iterations":
       return {

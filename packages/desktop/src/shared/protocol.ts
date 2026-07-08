@@ -42,6 +42,9 @@ export interface SettingsValues {
   /** Compact-mode: recent completed turns kept verbatim. Default 2. */
   compactKeepRecent: number;
   autoContinue: boolean;
+  /** Pre-truncate large tool outputs/arguments (read_file 200 lines, exec 20K chars,
+   * write_file/edit_file arg digest). Default true. */
+  preTruncate: boolean;
   hideTools: boolean;
   debug: boolean;
   maxIterations: number;
@@ -69,6 +72,7 @@ export const DEFAULT_SETTINGS: SettingsValues = {
   compactThreshold: 0.8,
   compactKeepRecent: 2,
   autoContinue: true,
+  preTruncate: true,
   hideTools: true,
   debug: false,
   maxIterations: 50,
@@ -100,7 +104,7 @@ export interface CurrentSessionInfo {
 
 /** Usage stats shown in the usage view. */
 export interface UsageInfo {
-  last: { promptTokens: number; completionTokens: number };
+  last: { promptTokens: number; completionTokens: number; contextSize?: number };
   total: { promptTokens: number; completionTokens: number };
 }
 
@@ -151,6 +155,8 @@ export type MainEvent =
   | { type: "task-plan"; tasks: Task[] }
   | { type: "tasks"; tasks: Task[] }
   | { type: "context-optimized"; bytesSaved: number }
+  | { type: "context-compacting" }
+  | { type: "context-compacted"; turnsSummarized: number; summaryChars: number }
   | { type: "max-iterations"; limit: number }
   | { type: "usage"; usage: UsageInfo }
   | { type: "info"; message: string }
