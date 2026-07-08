@@ -460,6 +460,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.provider = createProvider(this.settings.provider, this.providerConfig());
     this.registry = createDefaultRegistry({
       enabledTools: new Set(this.settings.enabledTools),
+      provider: this.provider,
+      subagent: true,
+      subagentMaxIterations: this.settings.maxIterations,
     });
     this.agent = this.buildAgent();
     if (this.current) {
@@ -501,10 +504,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       requestDelayMs: this.settings.requestDelayMs,
       // Seed the compact-mode threshold trigger with the resumed session's
       // last prompt size (contextSize = last iteration's prompt, accurate).
-      ...(session.usage?.last?.contextSize
-        ? { lastPromptTokens: session.usage.last.contextSize }
-        : session.usage?.last?.promptTokens
-          ? { lastPromptTokens: session.usage.last.promptTokens }
+      ...(this.current?.usage?.last?.contextSize
+        ? { lastPromptTokens: this.current.usage.last.contextSize }
+        : this.current?.usage?.last?.promptTokens
+          ? { lastPromptTokens: this.current.usage.last.promptTokens }
           : {}),
     });
   }
@@ -748,6 +751,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             turnsSummarized: stats.turnsSummarized,
             summaryChars: stats.summaryChars,
           }),
+        onSubagentUpdate: (phase, detail) =>
+          this.post({ kind: "subagent_update", phase, detail }),
         onMaxIterations: (limit) => this.post({ kind: "max_iterations", limit }),
       });
 
@@ -960,10 +965,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.post({ kind: "info", message: "no active session" });
       return;
     }
+    // Push usage so the context bar refreshes, plus an info notice so the
+    // /usage command still shows a visible summary (the auto usage events
+    // from persistAfterTurn/postReady update the bar silently).
     this.post({
       kind: "usage",
       usage: this.current.usage,
       optSaved: this.optSavedBytes,
+    });
+    const u = this.current.usage;
+    const ctx = u.last.contextSize ?? u.last.promptTokens;
+    this.post({
+      kind: "info",
+      message: `context: ${ctx.toLocaleString()} tokens · last turn: ${u.last.promptTokens.toLocaleString()} prompt / ${u.last.completionTokens.toLocaleString()} completion · total: ${u.total.promptTokens.toLocaleString()} prompt / ${u.total.completionTokens.toLocaleString()} completion`,
     });
   }
 

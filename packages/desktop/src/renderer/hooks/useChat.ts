@@ -73,6 +73,10 @@ interface ChatState {
    * mode start-of-turn or mid-loop fold). Drives a "Summarizing context…"
    * indicator in the composer. Cleared by assistant-start/assistant-end. */
   summarizing: boolean;
+  /** When non-null, a subagent tool is running and this holds its latest
+   * progress label (e.g. "calling read_file…"). Shown as a nested indicator
+   * inside the subagent tool block. */
+  subagentPhase: { phase: string; detail?: string } | null;
   stopping: boolean;
   notices: Array<{ id: number; kind: "info" | "error" | "warn"; text: string }>;
   showActions: boolean;
@@ -100,6 +104,7 @@ const initial: ChatState = {
   askUserPrompt: null,
   busy: false,
   summarizing: false,
+  subagentPhase: null,
   stopping: false,
   notices: [],
   showActions: false,
@@ -414,6 +419,14 @@ function reducer(state: ChatState, action: Action): ChatState {
       // turn continues (mid-loop fold), which is fine; the placeholder/dots
       // for the next assistant iteration will show normally.
       return { ...state, summarizing: false };
+
+    case "subagent-update":
+      // Track the subagent's progress so the UI can show a nested indicator.
+      // Clear when the subagent reports "done" or "error".
+      if (e.phase === "done" || e.phase === "error") {
+        return { ...state, subagentPhase: null };
+      }
+      return { ...state, subagentPhase: { phase: e.phase, detail: e.detail } };
 
     case "max-iterations":
       return {

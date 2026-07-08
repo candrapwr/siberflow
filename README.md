@@ -310,6 +310,8 @@ cd packages/desktop && npm run rebuild
 - **Context optimization** - compacts old tool history. Layer 1 deterministic modes (`recent`, `summary`, `drop`) plus Layer 2 `compact` mode (default) that generates an LLM narrative summary of older turns, threshold-triggered and persisted per session
 - **Context usage bar** - live progress bar (Desktop + VS Code) showing how full the context window is and where auto-compact triggers
 - **Parallel tool grouping** - concurrent tool calls in one assistant turn render as a single collapsible card (Desktop + VS Code)
+- **Subagent & Explore tools** - delegate a task to a focused helper agent that runs in an isolated context and returns a summary, keeping the main conversation lean. `subagent` takes a task + tool list; `explore` is a read-only searcher for codebase research. Enabled by default on Desktop and VS Code; CLI/Telegram opt in via `SIBERFLOW_SUBAGENT=true`
+- **Pre-truncation** - `read_file`, `exec`, and `write_file` outputs are capped at the source so a single large result can't flood the context window. Default ON (`SIBERFLOW_PRE_TRUNCATE`)
 - **Auto-continue** - automatically continues responses cut off by max token limits
 - **Silent task updates** - `task_update` runs without cluttering the transcript
 - **Document upload from chat** - Desktop and VS Code can upload `.xlsx`, `.docx`, and `.pdf` into a per-session temporary directory

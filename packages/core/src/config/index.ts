@@ -22,6 +22,8 @@ export interface SiberflowConfig {
   enabledTools: Set<string>;
   /** Pre-truncate large tool outputs/arguments to keep context lean. Default true. */
   preTruncate: boolean;
+  /** Enable the subagent + explore tools. Default false (opt-in via env). */
+  subagent: boolean;
 }
 
 export function loadConfigFromEnv(
@@ -46,6 +48,7 @@ export function loadConfigFromEnv(
     requestDelayMs: resolveRequestDelay(env),
     enabledTools: resolveEnabledTools(env),
     preTruncate: env.SIBERFLOW_PRE_TRUNCATE !== "false",
+    subagent: env.SIBERFLOW_SUBAGENT === "true",
     hideTools: env.SIBERFLOW_HIDE_TOOLS === "true",
     ...(env.SIBERFLOW_MODEL ? { model: env.SIBERFLOW_MODEL } : {}),
     ...(env.SIBERFLOW_BASE_URL ? { baseUrl: env.SIBERFLOW_BASE_URL } : {}),

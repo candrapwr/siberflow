@@ -37,6 +37,8 @@ interface ComposerProps {
   optimizeMode?: "drop" | "summary" | "recent" | "compact";
   /** True while the agent is making an LLM summarization call (compact mode). */
   summarizing?: boolean;
+  /** When set, a subagent tool is running; show its latest progress. */
+  subagentPhase?: { phase: string; detail?: string } | null;
 }
 
 /** Compact a token count to a short human label, e.g. 45200 -> "45K", 1200000 -> "1.2M". */
@@ -53,7 +55,7 @@ function docIcon(kind: DocKind) {
   return FileExcelIcon;
 }
 
-export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, prefill, hasWorkdir = true, docEnabled = true, usage = null, contextWindow = 200000, compactThreshold = 0.8, optimizeMode = "compact", summarizing = false }: ComposerProps) {
+export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, prefill, hasWorkdir = true, docEnabled = true, usage = null, contextWindow = 200000, compactThreshold = 0.8, optimizeMode = "compact", summarizing = false, subagentPhase = null }: ComposerProps) {
   const [value, setValue] = useState("");
   const [attachments, setAttachments] = useState<PickedFile[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -199,7 +201,7 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={summarizing ? "Summarizing context…" : busy ? "Generating…" : "Message Siberflow…"}
+          placeholder={subagentPhase ? `Subagent: ${subagentPhase.detail ?? subagentPhase.phase}…` : summarizing ? "Summarizing context…" : busy ? "Generating…" : "Message Siberflow…"}
           disabled={busy}
           rows={1}
         />

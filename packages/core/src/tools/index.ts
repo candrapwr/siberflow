@@ -1,3 +1,4 @@
+import type { Provider } from "../providers/base.js";
 import { ToolRegistry } from "./registry.js";
 import { fileTools } from "./file/index.js";
 import { cliTools } from "./cli/index.js";
@@ -14,6 +15,7 @@ import { botTools } from "./bot/index.js";
 import { webTools } from "./web/index.js";
 import { speechTools } from "./speech/index.js";
 import { musicTools } from "./music/index.js";
+import { createSubagentTool, createExploreTool } from "./agent/index.js";
 
 export * from "./base.js";
 export { ToolRegistry } from "./registry.js";
@@ -32,6 +34,7 @@ export { botTools } from "./bot/index.js";
 export { webTools } from "./web/index.js";
 export { speechTools } from "./speech/index.js";
 export { musicTools } from "./music/index.js";
+export { createSubagentTool, createExploreTool } from "./agent/index.js";
 
 export interface RegistryOptions {
   /**
@@ -60,6 +63,26 @@ export interface RegistryOptions {
    * disable this so the model sees only the explicitly enabled capabilities.
    */
   interaction?: boolean;
+  /**
+   * Register the `subagent` tool (spawn a focused, context-isolated agent for
+   * a single task). Default false — it's an opt-in power-user tool that costs
+   * extra LLM calls per use. When true, `provider` MUST also be supplied (the
+   * subagent tool captures it to spin up child agents).
+   */
+  subagent?: boolean;
+  /**
+   * The provider used to build the `subagent` tool's child agents. Required
+   * when `subagent: true`; ignored otherwise. This is a chicken-and-egg
+   * workaround: the tool needs the provider at execute time, but
+   * `ToolContext` carries none, so we closure-capture it here.
+   */
+  provider?: Provider;
+  /**
+   * Max iterations cap for subagents spawned by the `subagent` tool. When
+   * unset, a safe fallback is used. Inherited from the parent agent's
+   * `maxIterations` when the host passes it through.
+   */
+  subagentMaxIterations?: number;
 }
 
 /**
@@ -100,6 +123,12 @@ export function createDefaultRegistry(opts: RegistryOptions = {}): ToolRegistry 
   // Interaction tools (ask_user) are enabled by default for interactive hosts.
   if (opts.interaction !== false) {
     for (const tool of interactionTools) registry.register(tool);
+  }
+  // Subagent + Explore tools: opt-in power-user features. Registered LAST so
+  // the factory closures capture the fully-built registry.
+  if (opts.subagent && opts.provider) {
+    registry.register(createSubagentTool(opts.provider, registry, opts.subagentMaxIterations));
+    registry.register(createExploreTool(opts.provider, registry, opts.subagentMaxIterations));
   }
   return registry;
 }

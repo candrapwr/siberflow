@@ -36,6 +36,8 @@ interface UIState {
   busy: boolean;
   /** True while the agent is making an LLM context-summarization call. */
   summarizing: boolean;
+  /** When set, a subagent tool is running; { phase, detail } for the indicator. */
+  subagentPhase: { phase: string; detail?: string } | null;
   stopping: boolean;
   /** Excel files staged for the next send (copied into the workspace sandbox). */
   attachments: PickedFile[];
@@ -97,6 +99,7 @@ const state: UIState = {
   currentToolGroup: null,
   busy: false,
   summarizing: false,
+  subagentPhase: null,
   stopping: false,
   attachments: [],
   usage: null,
@@ -946,13 +949,15 @@ function updateComposerState(): void {
         : "Upload file dokumen (.xlsx/.docx/.pdf)";
   }
   if (hint) {
-    hint.innerHTML = state.summarizing
-      ? "Summarizing context…"
-      : state.busy
-        ? state.stopping
-          ? "Stopping generation..."
-          : "Generating — click Stop to cancel"
-        : `<kbd>Enter</kbd> send · <kbd>Shift+Enter</kbd> newline`;
+    hint.innerHTML = state.subagentPhase
+      ? `Subagent: ${state.subagentPhase.detail ?? state.subagentPhase.phase}…`
+      : state.summarizing
+        ? "Summarizing context…"
+        : state.busy
+          ? state.stopping
+            ? "Stopping generation..."
+            : "Generating — click Stop to cancel"
+          : `<kbd>Enter</kbd> send · <kbd>Shift+Enter</kbd> newline`;
   }
 }
 
@@ -1410,6 +1415,13 @@ function startToolBatch(count: number): void {
   removeThinkingDot(body);
   finalizeCurrentTextEl();
 
+  // Collect any .tool blocks already created in this body by earlier
+  // tool_call_start events that arrived BEFORE tool_batch_start (runStream
+  // emits tool_call_start during streaming, before the agent fires the batch
+  // open signal once the full message is parsed). Relocate them into the group
+  // so the batch renders as one card instead of loose blocks.
+  const existingTools = Array.from(body.querySelectorAll(":scope > .tool")) as HTMLElement[];
+
   const root = document.createElement("div");
   root.className = "tool-group collapsed";
   const head = document.createElement("div");
@@ -1436,6 +1448,9 @@ function startToolBatch(count: number): void {
     chevron.textContent = collapsed ? "▸" : "▾";
   });
 
+  // Move existing tool blocks into the group body.
+  for (const t of existingTools) bodyEl.appendChild(t);
+
   body.appendChild(root);
   state.currentToolGroup = {
     root,
@@ -1447,6 +1462,14 @@ function startToolBatch(count: number): void {
     completed: 0,
     total: count,
   };
+  // Sync state from relocated tools so the status line is accurate.
+  for (const t of existingTools) {
+    const label = t.querySelector(".tool-label")?.textContent;
+    if (label && !state.currentToolGroup!.names.includes(label)) {
+      state.currentToolGroup!.names.push(label);
+    }
+    if (t.querySelector(".result")) state.currentToolGroup!.completed += 1;
+  }
   renderToolGroupStatus();
   scrollToBottom();
 }
@@ -1612,6 +1635,14 @@ window.addEventListener("message", (ev) => {
       updateComposerState();
       hidePending();
       break;
+    case "subagent_update":
+      if (msg.phase === "done" || msg.phase === "error") {
+        state.subagentPhase = null;
+      } else {
+        state.subagentPhase = { phase: msg.phase, detail: msg.detail };
+      }
+      updateComposerState();
+      break;
     case "max_iterations":
       showNotice(
         "warn",
@@ -1638,7 +1669,8 @@ window.addEventListener("message", (ev) => {
       break;
     }
     case "usage":
-      showUsage(msg.usage, msg.optSaved);
+      // Update context bar silently — the visible notice is only for the
+      // manual /usage command (which posts a separate "info" message).
       state.usage = msg.usage;
       updateContextBar();
       break;

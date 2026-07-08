@@ -387,6 +387,7 @@ export default function App() {
               compactThreshold={state.settingsValues?.compactThreshold ?? 0.8}
               optimizeMode={state.settingsValues?.contextOptimizeMode ?? "compact"}
               summarizing={state.summarizing}
+              subagentPhase={state.subagentPhase}
             />
           </div>
         )}
