@@ -242,6 +242,9 @@ function loadAppConfig(): AppConfig {
     enabledTools: resolveTelegramTools(),
     tasks: false,
     interaction: false,
+    provider,
+    subagent: coreConfig.subagent,
+    subagentMaxIterations: coreConfig.maxIterations,
   });
 
   const { adminUserIds, adminUsernames } = resolveTelegramAdmins();

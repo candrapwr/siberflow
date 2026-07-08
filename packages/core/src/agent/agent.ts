@@ -133,6 +133,8 @@ export interface AgentOptions {
    * digest write_file/edit_file arguments after execution.
    */
   preTruncate?: boolean;
+  /** Max iterations for subagents (defaults to parent's maxIterations). */
+  subagentMaxIterations?: number;
 }
 
 export interface AgentEvents {
@@ -174,6 +176,8 @@ export interface AgentEvents {
    * Always paired with a later `onContextCompacted` once the call resolves.
    */
   onContextCompacting?: () => void;
+  /** Fires when a subagent reports progress (phase: thinking|tool|tool_done|done, detail: tool name/preview). */
+  onSubagentUpdate?: (phase: string, detail?: string) => void;
 }
 
 export class Agent {
@@ -190,6 +194,10 @@ export class Agent {
   private readonly compactKeepRecent: number;
   private readonly tasksEnabled: boolean;
   private readonly autoContinue: boolean;
+  /** Cap for subagent iterations; falls back to this.maxIterations when unset. */
+  private readonly subagentMaxIterations: number;
+  /** In-flight send() events, used by subagentProgress callback to forward to UI. */
+  private currentEvents: AgentEvents | null = null;
   private readonly taskStore = new TaskStore();
   private readonly messages: Message[] = [];
   /**
@@ -261,6 +269,7 @@ export class Agent {
     this.lastPromptTokens = opts.lastPromptTokens ?? 0;
     this.tasksEnabled = opts.tasksEnabled ?? false;
     this.autoContinue = opts.autoContinue ?? true;
+    this.subagentMaxIterations = opts.subagentMaxIterations ?? this.maxIterations;
     this.ctx = {
       projectDir: opts.projectDir ?? process.cwd(),
       ...(this.tasksEnabled ? { taskStore: this.taskStore } : {}),
@@ -268,6 +277,11 @@ export class Agent {
       ...(opts.askUser ? { askUser: opts.askUser } : {}),
       ...(opts.botScript ? { botScript: opts.botScript } : {}),
       ...(opts.preTruncate !== undefined ? { preTruncate: opts.preTruncate } : {}),
+      // Forward subagent progress to the host UI. The closure captures `this`
+      // so it can read the current turn's events at call time.
+      subagentProgress: (phase: string, detail?: string) => {
+        this.currentEvents?.onSubagentUpdate?.(phase, detail);
+      },
     };
 
     if (opts.systemPrompt) {
@@ -354,6 +368,7 @@ export class Agent {
   async send(userInput: string, events: AgentEvents = {}): Promise<string> {
     const baseMessageCount = this.messages.length;
     const baseTasks = this.taskStore.get().map((t) => ({ ...t }));
+    this.currentEvents = events;
     // Reset the per-turn consecutive run_browser counter so a new user turn
     // starts fresh (the Agent instance is reused across turns in long-lived
     // hosts like Telegram, so without this the streak would carry over).
@@ -448,10 +463,6 @@ export class Agent {
 
         throwIfAborted(events.signal);
         this.messages.push(assistant);
-        events.onAssistantEnd?.(assistant, {
-          finishReason,
-          ...(usage ? { usage } : {}),
-        });
         // Track the latest prompt-token count for the compact-mode threshold
         // trigger. The LAST successful iteration's prompt size is the best
         // proxy for "how full is context right now" — it reflects the actual
@@ -465,6 +476,11 @@ export class Agent {
         );
 
         if (finishReason !== "tool_calls" || !assistant.toolCalls?.length) {
+          // No tool batch — emit onAssistantEnd now to close the iteration.
+          events.onAssistantEnd?.(assistant, {
+            finishReason,
+            ...(usage ? { usage } : {}),
+          });
           return assistant.content ?? "";
         }
 
@@ -472,10 +488,20 @@ export class Agent {
         // one collapsible group card. Only emitted for 2+ calls — a single
         // call is rendered as a normal standalone tool block. Balanced by
         // onToolBatchEnd after the loop, even on early return paths below.
+        //
+        // IMPORTANT: this is emitted BEFORE onAssistantEnd on purpose. Hosts
+        // use onAssistantEnd/iteration_end to close the current assistant DOM
+        // element, so the batch-open signal must arrive while that element is
+        // still the active one — otherwise the group card has nowhere to adopt
+        // the tool blocks that streaming already created inside it.
         const batchCount = assistant.toolCalls.length;
         if (batchCount >= 2) {
           events.onToolBatchStart?.(batchCount);
         }
+        events.onAssistantEnd?.(assistant, {
+          finishReason,
+          ...(usage ? { usage } : {}),
+        });
 
         for (let idx = 0; idx < assistant.toolCalls.length; idx++) {
           throwIfAborted(events.signal);
@@ -612,6 +638,8 @@ export class Agent {
         throw createAbortError();
       }
       throw err;
+    } finally {
+      this.currentEvents = null;
     }
   }
 

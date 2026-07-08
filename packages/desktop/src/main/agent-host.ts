@@ -308,6 +308,9 @@ export class AgentHost {
     this.registry = createDefaultRegistry({
       filesystem: hasWorkdir,
       enabledTools: new Set(this.settings.enabledTools),
+      provider: this.provider,
+      subagent: true,
+      subagentMaxIterations: this.settings.maxIterations,
     });
     this.agent = this.buildAgent();
     if (this.current) {
@@ -710,6 +713,8 @@ export class AgentHost {
             turnsSummarized: stats.turnsSummarized,
             summaryChars: stats.summaryChars,
           }),
+        onSubagentUpdate: (phase, detail) =>
+          this.emit({ type: "subagent-update", phase, detail }),
         onMaxIterations: (limit) =>
           this.emit({ type: "max-iterations", limit }),
       });

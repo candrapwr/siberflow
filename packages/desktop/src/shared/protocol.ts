@@ -157,6 +157,7 @@ export type MainEvent =
   | { type: "context-optimized"; bytesSaved: number }
   | { type: "context-compacting" }
   | { type: "context-compacted"; turnsSummarized: number; summaryChars: number }
+  | { type: "subagent-update"; phase: string; detail?: string }
   | { type: "max-iterations"; limit: number }
   | { type: "usage"; usage: UsageInfo }
   | { type: "info"; message: string }

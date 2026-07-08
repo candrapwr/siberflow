@@ -30,6 +30,9 @@ async function main(): Promise<void> {
   });
   const registry = createDefaultRegistry({
     enabledTools: config.enabledTools,
+    provider,
+    subagent: config.subagent,
+    subagentMaxIterations: config.maxIterations,
   });
   const model = config.model ?? provider.defaultModel;
 

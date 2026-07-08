@@ -103,6 +103,8 @@ export interface ToolContext {
    * Set to false to preserve raw full outputs (status quo before this flag).
    */
   preTruncate?: boolean;
+  /** Progress callback for the subagent/explore tools (phase + detail for UI indicators). */
+  subagentProgress?: (phase: string, detail?: string) => void;
 }
 
 export interface Tool {

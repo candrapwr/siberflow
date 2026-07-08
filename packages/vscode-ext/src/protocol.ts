@@ -16,6 +16,7 @@ export type ExtToView =
   | { kind: "context_optimized"; bytesSaved: number }
   | { kind: "context_compacting" }
   | { kind: "context_compacted"; turnsSummarized: number; summaryChars: number }
+  | { kind: "subagent_update"; phase: string; detail?: string }
   | { kind: "max_iterations"; limit: number }
   | { kind: "error"; message: string }
   | { kind: "info"; message: string }
