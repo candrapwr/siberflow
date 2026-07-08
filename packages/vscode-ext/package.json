@@ -190,6 +190,11 @@
           "type": "boolean",
           "default": true
         },
+        "siberflow.preTruncate": {
+          "type": "boolean",
+          "default": true,
+          "description": "Pre-truncate large tool outputs/arguments to keep context lean. read_file caps to ~200 lines (unless an explicit offset/limit is given), exec caps stdout/stderr to ~20K chars, and write_file/edit_file arguments are digested after execution. Default true."
+        },
         "siberflow.hideTools": {
           "type": "boolean",
           "default": true

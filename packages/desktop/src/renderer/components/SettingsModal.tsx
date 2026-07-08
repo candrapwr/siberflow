@@ -200,6 +200,10 @@ export const SettingsModal = memo(function SettingsModal({
             <label>Hide tool call details</label>
             <input type="checkbox" checked={form.hideTools} onChange={(e) => set("hideTools", e.target.checked)} />
           </div>
+          <div className="form-row inline">
+            <label>Pre-truncate large tool output (read_file, exec, write_file)</label>
+            <input type="checkbox" checked={form.preTruncate} onChange={(e) => set("preTruncate", e.target.checked)} />
+          </div>
           <div className="form-row">
             <label>Max iterations per turn</label>
             <input

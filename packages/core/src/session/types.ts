@@ -4,8 +4,14 @@ import type { Task } from "../agent/tasks.js";
 export const SESSION_FORMAT_VERSION = 1;
 
 export interface SessionUsage {
-  /** Last LLM call's usage — prompt size = current context. */
-  last: UsageStats;
+  /**
+   * Last turn's usage. `promptTokens`/`completionTokens` are host-specific
+   * (Desktop accumulates across iterations; others hold the last call). For an
+   * accurate "current context size" use `contextSize`, which is always the
+   * prompt-token count of the LAST iteration in the turn — i.e. what the model
+   * actually saw. Optional for backward compatibility with old session files.
+   */
+  last: UsageStats & { contextSize?: number };
   /** Sum of every LLM call's usage — reflects actual API billing. */
   total: UsageStats;
 }

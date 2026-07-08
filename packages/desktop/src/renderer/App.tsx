@@ -386,6 +386,7 @@ export default function App() {
               contextWindow={state.settingsValues?.contextWindow ?? 200000}
               compactThreshold={state.settingsValues?.compactThreshold ?? 0.8}
               optimizeMode={state.settingsValues?.contextOptimizeMode ?? "compact"}
+              summarizing={state.summarizing}
             />
           </div>
         )}

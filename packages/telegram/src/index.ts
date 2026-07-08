@@ -173,6 +173,7 @@ interface AppConfig {
   requestDelayMs: number;
   maxIterations: number;
   autoContinue: boolean;
+  preTruncate: boolean;
   contextOptimize: ReturnType<typeof loadConfigFromEnv>["contextOptimize"];
   /** Telegram user IDs allowed to use the shell (exec) tool in private chats. */
   adminUserIds: Set<number>;
@@ -261,6 +262,7 @@ function loadAppConfig(): AppConfig {
     requestDelayMs: coreConfig.requestDelayMs,
     maxIterations: coreConfig.maxIterations,
     autoContinue: coreConfig.autoContinue,
+    preTruncate: coreConfig.preTruncate,
     contextOptimize: coreConfig.contextOptimize,
     adminUserIds,
     adminUsernames,
@@ -876,7 +878,7 @@ class BotRunner {
         updatedAt: now,
         messages: [],
         usage: {
-          last: { promptTokens: 0, completionTokens: 0 },
+          last: { promptTokens: 0, completionTokens: 0, contextSize: 0 },
           total: { promptTokens: 0, completionTokens: 0 },
         },
       };
@@ -917,13 +919,16 @@ class BotRunner {
       contextOptimize: this.config.contextOptimize,
       tasksEnabled: false,
       autoContinue: this.config.autoContinue,
+      preTruncate: this.config.preTruncate,
       maxIterations: this.config.maxIterations,
       requestDelayMs: this.config.requestDelayMs,
       // Seed the compact-mode threshold trigger with the resumed session's
-      // last prompt size, so a large loaded session compacts on turn 1.
-      ...(session.usage?.last?.promptTokens
-        ? { lastPromptTokens: session.usage.last.promptTokens }
-        : {}),
+      // last prompt size (contextSize = last iteration's prompt, accurate).
+      ...(session.usage?.last?.contextSize
+        ? { lastPromptTokens: session.usage.last.contextSize }
+        : session.usage?.last?.promptTokens
+          ? { lastPromptTokens: session.usage.last.promptTokens }
+          : {}),
       botScript: this.createBotScriptHost(),
     });
     agent.loadHistory(withSystemPrompt(session.messages, systemPrompt));
@@ -1218,7 +1223,9 @@ class BotRunner {
   private async persist(runtime: RuntimeSession): Promise<void> {
     const usage = runtime.pendingUsage;
     if (usage) {
-      runtime.session.usage.last = usage;
+      // pendingUsage = last iteration's usage (overwritten each call), so
+      // promptTokens == contextSize. Set it explicitly for parity.
+      runtime.session.usage.last = { ...usage, contextSize: usage.promptTokens };
       runtime.session.usage.total = {
         promptTokens:
           runtime.session.usage.total.promptTokens + usage.promptTokens,

@@ -219,20 +219,16 @@ export function optimizeContext(
   // summary itself (as a pseudo-system message), then append the messages
   // after `summary.upToIndex` verbatim. Unlike Layer 1 modes this requires an
   // LLM call to PRODUCE the summary (done by the agent before calling us), but
-  // applying it here is still pure/deterministic: we just splice. Falls back
-  // to "recent" behavior when no summary exists yet (first turns of a session
-  // before the first compaction has run).
+  // applying it here is still pure/deterministic: we just splice. When no
+  // summary exists yet (before the first compaction threshold is crossed),
+  // keep the full history verbatim — "compact" mode is meant to be the richest
+  // retention mode, so we do NOT fall back to Layer 1 breadcrumb folding here.
   if (mode === "compact") {
     if (!summary || summary.text.trim().length === 0 || summary.upToIndex < 0) {
-      // No summary yet — behave like "recent" so the request still gets some
-      // optimization instead of sending the raw full history.
-      const keepStart = findSecondLastUserIndex(messages);
-      if (keepStart === -1) {
-        return { messages: [...messages], stats };
-      }
-      const head = compressToolHistory(messages.slice(0, keepStart), "summary", stats);
-      const tail = messages.slice(keepStart);
-      return { messages: mergeAdjacent([...head, ...tail]), stats };
+      // No summary yet — send the raw full history. The threshold trigger in
+      // generateSummaryIncremental / foldCurrentTurnMidLoop decides WHEN to
+      // start summarizing; until then, nothing is compressed.
+      return { messages: [...messages], stats };
     }
     const upTo = Math.min(summary.upToIndex, messages.length - 1);
     // Defensive: snap the boundary down so the verbatim tail can't start with
@@ -379,14 +375,53 @@ export function findTurnBoundaryFromEnd(
   for (let i = fromIndex; i > alreadySummarizedUpTo; i--) {
     if (messages[i]!.role === "user") {
       turnsSeen++;
-      if (turnsSeen === keepTurns + 1) {
-        // This user message opens the first turn we DON'T keep. The summary
-        // should cover everything strictly before it.
+      if (turnsSeen === keepTurns) {
+        // This user message opens the keepTurns-th turn from the end — the
+        // OLDEST turn we still want to keep verbatim. Everything strictly
+        // before it should be folded into the summary.
         return i - 1;
       }
     }
   }
   return alreadySummarizedUpTo; // not enough turns — fold nothing new
+}
+
+/**
+ * Mid-turn sibling of `findTurnBoundaryFromEnd`. The current-turn region
+ * `[snapshotEndIndex .. end]` contains NO `user` messages (it's all
+ * assistant-with-toolCalls + tool results from THIS turn's iteration loop).
+ * So we treat an `assistant` message that carries `toolCalls` as a sub-turn
+ * boundary instead. Finds the end-index (inclusive) of the sub-turn that is
+ * `keepSubTurns` sub-turns back from `fromIndex`, so the caller can fold
+ * everything before it into the rolling summary.
+ *
+ * Walks backward counting assistant.toolCalls-bearing messages as boundaries.
+ * Returns the index just before the (keepSubTurns+1)-th boundary from the end,
+ * or `floor` if there aren't enough sub-turns to keep.
+ */
+export function findSubTurnBoundaryFromEnd(
+  messages: readonly Message[],
+  fromIndex: number,
+  keepSubTurns: number,
+  floor: number,
+): number {
+  if (keepSubTurns <= 0) {
+    return fromIndex;
+  }
+  let subTurnsSeen = 0;
+  for (let i = fromIndex; i > floor; i--) {
+    const m = messages[i]!;
+    if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
+      subTurnsSeen++;
+      if (subTurnsSeen === keepSubTurns) {
+        // This assistant opens the keepSubTurns-th sub-turn from the end — the
+        // OLDEST sub-turn we still want to keep verbatim. Everything strictly
+        // before it should be folded into the summary.
+        return i - 1;
+      }
+    }
+  }
+  return floor; // not enough sub-turns — fold nothing new
 }
 
 /**

@@ -38,6 +38,7 @@ export interface ReplOptions {
   contextOptimize: ContextOptimizeConfig;
   enabledToolNames: string[];
   autoContinue: boolean;
+  preTruncate: boolean;
   maxIterations: number;
   hideTools: boolean;
   requestDelayMs: number;
@@ -64,6 +65,7 @@ export async function runRepl(opts: ReplOptions): Promise<void> {
     contextOptimize: opts.contextOptimize,
     tasksEnabled: true,
     autoContinue: opts.autoContinue,
+    preTruncate: opts.preTruncate,
     maxIterations: opts.maxIterations,
     requestDelayMs: opts.requestDelayMs,
     // ask_user tool callback — prompts the user inline via readline. Supports
@@ -245,9 +247,13 @@ function applyChoice(ctx: SessionContext, choice: SessionChoice): void {
     // Restore the LLM compact summary (if any) so "compact" mode keeps rolling
     // it forward instead of restarting from scratch after a resume.
     ctx.agent.loadSummary(choice.session.summary ?? null);
-    // Seed the threshold trigger with the resumed session's last prompt size,
-    // so a large loaded session compacts on turn 1 instead of waiting.
-    ctx.agent.loadLastPromptTokens(choice.session.usage?.last?.promptTokens ?? 0);
+    // Seed the threshold trigger with the resumed session's last prompt size
+    // (contextSize = last iteration's prompt, accurate context window).
+    ctx.agent.loadLastPromptTokens(
+      choice.session.usage?.last?.contextSize ??
+        choice.session.usage?.last?.promptTokens ??
+        0,
+    );
     ctx.current = choice.session;
     console.log(
       ui.info(
@@ -293,7 +299,7 @@ function formatRelative(iso: string): string {
 
 function emptyUsage() {
   return {
-    last: { promptTokens: 0, completionTokens: 0 },
+    last: { promptTokens: 0, completionTokens: 0, contextSize: 0 },
     total: { promptTokens: 0, completionTokens: 0 },
   };
 }
@@ -488,7 +494,10 @@ async function runTurn(input: string, ctx: SessionContext): Promise<void> {
       },
     });
     if (ctx.current && latestUsage) {
-      ctx.current.usage.last = latestUsage;
+      ctx.current.usage.last = {
+        ...latestUsage,
+        contextSize: latestUsage.promptTokens,
+      };
       ctx.current.usage.total.promptTokens += turnAddPrompt;
       ctx.current.usage.total.completionTokens += turnAddCompletion;
     }

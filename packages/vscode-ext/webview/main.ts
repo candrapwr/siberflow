@@ -34,6 +34,8 @@ interface UIState {
    * no batch is open OR when the current assistant iteration has < 2 calls. */
   currentToolGroup: ToolGroupElements | null;
   busy: boolean;
+  /** True while the agent is making an LLM context-summarization call. */
+  summarizing: boolean;
   stopping: boolean;
   /** Excel files staged for the next send (copied into the workspace sandbox). */
   attachments: PickedFile[];
@@ -94,6 +96,7 @@ const state: UIState = {
   currentTools: new Map(),
   currentToolGroup: null,
   busy: false,
+  summarizing: false,
   stopping: false,
   attachments: [],
   usage: null,
@@ -226,11 +229,11 @@ function updateTaskPanel(): void {
   });
 }
 
-function showPending(): void {
+function showPending(label?: string): void {
   if (pendingEl || !messagesEl) return;
   pendingEl = document.createElement("div");
   pendingEl.className = "pending";
-  pendingEl.innerHTML = `<span class="thinking-dots"><span></span><span></span><span></span></span>`;
+  pendingEl.innerHTML = `<span class="thinking-dots"><span></span><span></span><span></span></span>${label ? `<span class="pending-label">${escape(label)}</span>` : ""}`;
   messagesEl.appendChild(pendingEl);
   scrollToBottom();
 }
@@ -452,6 +455,10 @@ function showSettingsModal(
         <label for="cfg-hidetools">Hide tool call details (spinner only)</label>
         <input type="checkbox" id="cfg-hidetools">
       </div>
+      <div class="form-row inline">
+        <label for="cfg-pretrunc">Pre-truncate large tool output (read_file, exec, write_file)</label>
+        <input type="checkbox" id="cfg-pretrunc">
+      </div>
       <div class="form-row">
         <label>Max iterations per turn</label>
         <input type="number" id="cfg-max" min="1" max="500">
@@ -544,6 +551,7 @@ function showSettingsModal(
   (modal.querySelector("#cfg-compact-rows") as HTMLElement).hidden =
     values.contextOptimizeMode !== "compact";
   (modal.querySelector("#cfg-autocontinue") as HTMLInputElement).checked = values.autoContinue;
+  (modal.querySelector("#cfg-pretrunc") as HTMLInputElement).checked = values.preTruncate;
   (modal.querySelector("#cfg-hidetools") as HTMLInputElement).checked = values.hideTools;
   (modal.querySelector("#cfg-debug") as HTMLInputElement).checked = values.debug;
   (modal.querySelector("#cfg-max") as HTMLInputElement).value = String(values.maxIterations);
@@ -627,6 +635,7 @@ function showSettingsModal(
       parseInt((modal.querySelector("#cfg-ckr") as HTMLInputElement).value, 10) || 2,
     );
     const autoContinue = (modal.querySelector("#cfg-autocontinue") as HTMLInputElement).checked;
+    const preTruncate = (modal.querySelector("#cfg-pretrunc") as HTMLInputElement).checked;
     const hideTools = (modal.querySelector("#cfg-hidetools") as HTMLInputElement).checked;
     const debug = (modal.querySelector("#cfg-debug") as HTMLInputElement).checked;
     const maxIterations = Math.max(
@@ -663,6 +672,7 @@ function showSettingsModal(
         compactThreshold,
         compactKeepRecent,
         autoContinue,
+        preTruncate,
         hideTools,
         debug,
         maxIterations,
@@ -702,7 +712,7 @@ function updateContextBar(): void {
     return;
   }
   bar.hidden = false;
-  const used = state.usage?.last?.promptTokens ?? 0;
+  const used = state.usage?.last?.contextSize ?? state.usage?.last?.promptTokens ?? 0;
   const cw = state.contextWindow > 0 ? state.contextWindow : 200000;
   const pct = Math.min(100, (used / cw) * 100);
   const threshPct = Math.min(100, state.compactThreshold * 100);
@@ -936,11 +946,13 @@ function updateComposerState(): void {
         : "Upload file dokumen (.xlsx/.docx/.pdf)";
   }
   if (hint) {
-    hint.innerHTML = state.busy
-      ? state.stopping
-        ? "Stopping generation..."
-        : "Generating — click Stop to cancel"
-      : `<kbd>Enter</kbd> send · <kbd>Shift+Enter</kbd> newline`;
+    hint.innerHTML = state.summarizing
+      ? "Summarizing context…"
+      : state.busy
+        ? state.stopping
+          ? "Stopping generation..."
+          : "Generating — click Stop to cancel"
+        : `<kbd>Enter</kbd> send · <kbd>Shift+Enter</kbd> newline`;
   }
 }
 
@@ -1551,6 +1563,8 @@ window.addEventListener("message", (ev) => {
     case "assistant_start":
       // Show pending indicator between iterations (each iteration starts
       // with a brief wait for the model's first token).
+      state.summarizing = false;
+      updateComposerState();
       showPending();
       break;
     case "assistant_content":
@@ -1587,6 +1601,16 @@ window.addEventListener("message", (ev) => {
       updateTaskPanel();
       break;
     case "context_optimized":
+      break;
+    case "context_compacting":
+      state.summarizing = true;
+      updateComposerState();
+      showPending("Summarizing context…");
+      break;
+    case "context_compacted":
+      state.summarizing = false;
+      updateComposerState();
+      hidePending();
       break;
     case "max_iterations":
       showNotice(

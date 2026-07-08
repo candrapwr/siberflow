@@ -94,6 +94,15 @@ export interface ToolContext {
    * bot integration.
    */
   botScript?: BotScriptHost;
+  /**
+   * Pre-truncate large tool outputs/arguments to keep context lean (default:
+   * true). When true, read_file caps to ~200 lines (unless an explicit
+   * offset/limit is given), exec caps stdout/stderr to ~20K chars (down from
+   * the 200K safety cap), and the agent digests write_file/edit_file arguments
+   * after execution so the full content payload doesn't linger in context.
+   * Set to false to preserve raw full outputs (status quo before this flag).
+   */
+  preTruncate?: boolean;
 }
 
 export interface Tool {

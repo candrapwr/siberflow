@@ -343,6 +343,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       cfg.update("compactThreshold", values.compactThreshold, target),
       cfg.update("compactKeepRecent", values.compactKeepRecent, target),
       cfg.update("autoContinue", values.autoContinue, target),
+      cfg.update("preTruncate", values.preTruncate, target),
       cfg.update("hideTools", values.hideTools, target),
       cfg.update("debug", values.debug, target),
       cfg.update("maxIterations", values.maxIterations, target),
@@ -495,13 +496,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       contextOptimize: this.optimizeConfig(),
       tasksEnabled: true,
       autoContinue: this.settings.autoContinue,
+      preTruncate: this.settings.preTruncate,
       maxIterations: this.settings.maxIterations,
       requestDelayMs: this.settings.requestDelayMs,
       // Seed the compact-mode threshold trigger with the resumed session's
-      // last prompt size, so a large loaded session compacts on turn 1.
-      ...(this.current?.usage?.last?.promptTokens
-        ? { lastPromptTokens: this.current.usage.last.promptTokens }
-        : {}),
+      // last prompt size (contextSize = last iteration's prompt, accurate).
+      ...(session.usage?.last?.contextSize
+        ? { lastPromptTokens: session.usage.last.contextSize }
+        : session.usage?.last?.promptTokens
+          ? { lastPromptTokens: session.usage.last.promptTokens }
+          : {}),
     });
   }
 
@@ -737,11 +741,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           this.optSavedBytes += stats.bytesSaved;
           this.post({ kind: "context_optimized", bytesSaved: stats.bytesSaved });
         },
+        onContextCompacting: () => this.post({ kind: "context_compacting" }),
+        onContextCompacted: (stats) =>
+          this.post({
+            kind: "context_compacted",
+            turnsSummarized: stats.turnsSummarized,
+            summaryChars: stats.summaryChars,
+          }),
         onMaxIterations: (limit) => this.post({ kind: "max_iterations", limit }),
       });
 
       if (this.current && latestUsage) {
-        this.current.usage.last = latestUsage;
+        // VSCode already overwrites usage.last with the FINAL iteration's
+        // usage (latestUsage), so promptTokens == contextSize here. Set
+        // contextSize explicitly for parity with other hosts.
+        this.current.usage.last = {
+          ...latestUsage,
+          contextSize: latestUsage.promptTokens,
+        };
         this.current.usage.total.promptTokens += turnAddPrompt;
         this.current.usage.total.completionTokens += turnAddCompletion;
       }
@@ -1076,6 +1093,7 @@ function readSettings(): SettingsValues {
     compactThreshold: cfg.get<number>("compactThreshold", 0.8),
     compactKeepRecent: cfg.get<number>("compactKeepRecent", 2),
     autoContinue: cfg.get<boolean>("autoContinue", true),
+    preTruncate: cfg.get<boolean>("preTruncate", true),
     hideTools: cfg.get<boolean>("hideTools", false),
     debug: cfg.get<boolean>("debug", false),
     maxIterations: cfg.get<number>("maxIterations", 50),
@@ -1142,7 +1160,7 @@ function displayProviderName(settings: SettingsValues): string {
 
 function emptyUsage() {
   return {
-    last: { promptTokens: 0, completionTokens: 0 },
+    last: { promptTokens: 0, completionTokens: 0, contextSize: 0 },
     total: { promptTokens: 0, completionTokens: 0 },
   };
 }
