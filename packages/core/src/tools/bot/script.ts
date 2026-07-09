@@ -12,6 +12,15 @@ export const botScriptTool: Tool = {
     "Run JavaScript automation against the active bot host (e.g. the Telegram bot). " +
     "Write any JS; the host injects a `bot` helper. Use it to send messages and media, " +
     "run polls, share locations, edit/delete the bot's own messages, and inspect chat info.\n\n" +
+    "# IMPORTANT — how to write the script\n" +
+    "Write TOP-LEVEL STATEMENTS that CALL `bot.*` directly. Do NOT wrap your code in a " +
+    "function and forget to call it. `bot` is a GLOBAL available in the script scope.\n\n" +
+    "CORRECT:\n" +
+    "  const res = await bot.sendDocument('file.txt', 'caption');\n" +
+    "  return res;\n\n" +
+    "WRONG (creates a function but never calls it — nothing happens):\n" +
+    "  async ({ bot }) => { await bot.sendDocument(...); }\n" +
+    "  const send = async () => { await bot.sendDocument(...); }  // missing send()\n\n" +
     "# Available helpers (the `bot` object)\n" +
     "## bot.chat (read-only metadata of the ACTIVE chat)\n" +
     "- bot.chat.id — active chat id (group/supergroup/private)\n" +
@@ -76,6 +85,24 @@ export const botScriptTool: Tool = {
     assertNoShellLikeScriptAccess(script, "bot_script");
     if (!ctx.botScript) {
       throw new Error("bot_script is not available in this host.");
+    }
+
+    // Detect the common mistake of writing an arrow function / function
+    // declaration but never CALLING it. This is dead code — nothing runs, so
+    // the bot does nothing yet the tool reports "completed". We catch it early
+    // and give the model a clear error so it retries with top-level calls.
+    const trimmed = script.trim();
+    const looksLikeUnusedFunction =
+      /^(async\s*)?\(.*\)\s*=>\s*\{/.test(trimmed) ||
+      /^(async\s+)?function\s+\w+\s*\(/.test(trimmed) ||
+      /^const\s+\w+\s*=\s*(async\s*)?\(.*\)\s*=>/.test(trimmed);
+    if (looksLikeUnusedFunction) {
+      throw new Error(
+        "Your script defines a function but does not call it, so nothing runs. " +
+          "Write TOP-LEVEL statements that call `bot.*` directly — e.g. " +
+          "`const res = await bot.sendDocument('file.txt', 'caption'); return res;` " +
+          "— NOT `async ({ bot }) => { ... }` or `const fn = async () => { ... }` without invoking it.",
+      );
     }
 
     // Log the script body so the admin can see EXACTLY what the AI ran inside
