@@ -27,6 +27,12 @@ import {
 } from "@siberflow/core";
 import { loadDotEnv } from "./env.js";
 import { generateAdminToken, startWebService } from "./web.js";
+import {
+  defaultAiSettings,
+  loadAiSettings,
+  saveAiSettings,
+  type TelegramAiSettings,
+} from "./settings.js";
 
 type ChatType = "private" | "group" | "supergroup" | "channel";
 
@@ -218,11 +224,13 @@ async function main(): Promise<void> {
 
   const api = new TelegramApi(config.telegramToken, config.telegramApiBase);
   const runner = new BotRunner(api, config);
+  // Load persisted AI provider override settings (disabled by default → env).
+  await runner.initAiSettings();
 
   // Start the local-only admin web service (session browser, message log,
-  // workdir viewer, send-message). Runs alongside the polling loop. The token
-  // is read from env; if unset, a random one is generated and logged so the
-  // admin can open the UI from the printed URL.
+  // workdir viewer, send-message, AI settings). Runs alongside the polling
+  // loop. The token is read from env; if unset, a random one is generated and
+  // logged so the admin can open the UI from the printed URL.
   const webToken =
     process.env.SIBERFLOW_TELEGRAM_ADMIN_TOKEN ?? generateAdminToken();
   const webPort = Number(process.env.SIBERFLOW_TELEGRAM_ADMIN_PORT ?? 7070);
@@ -231,6 +239,8 @@ async function main(): Promise<void> {
     workdirRoot: config.workdirRoot,
     port: webPort,
     token: webToken,
+    getAiSettings: () => runner.getAiSettings(),
+    applyAiSettings: (s) => runner.applyAiSettings(s),
   });
   console.log(
     `Admin web service: http://127.0.0.1:${webPort}/?token=${webToken}`,
@@ -422,6 +432,13 @@ class BotRunner {
    */
   private turnAbort: AbortController | null = null;
 
+  /**
+   * Runtime AI provider override settings. When `enabled`, new Agents use the
+   * provider/model built from these settings instead of the env-based config.
+   * Loaded from disk at startup; updated at runtime via the admin web service.
+   */
+  private aiSettings: TelegramAiSettings = defaultAiSettings();
+
   constructor(
     private readonly api: TelegramApi,
     private readonly config: AppConfig,
@@ -462,6 +479,113 @@ class BotRunner {
       if (!registry.get(tool.name)) registry.register(tool);
     }
     return registry;
+  }
+
+  /**
+   * Resolve the active provider, model, and registry for new Agents.
+   *
+   * When the runtime AI settings override is ENABLED, a fresh provider is built
+   * from the settings (custom OpenAI-compatible provider) and a fresh registry
+   * is built around it — so new sessions immediately use the override.
+   *
+   * When DISABLED (or settings incomplete), the env-based config captured at
+   * startup (this.config) is used as-is.
+   *
+   * Returns the shared `this.config.registry` for non-admin chats when no
+   * override is active; admin chats always get a per-session registry via
+   * createAdminRegistry() in getRuntime().
+   */
+  private getActiveProviderModel(): {
+    provider: Provider;
+    model: string;
+    registry: ToolRegistry;
+  } {
+    if (this.aiSettings.enabled && this.canUseAiSettings(this.aiSettings)) {
+      const provider = createProvider("custom", {
+        apiKey: this.aiSettings.apiKey,
+        baseUrl: this.aiSettings.baseUrl,
+        customName: this.aiSettings.customProviderName || "custom",
+        customDefaultModel: this.aiSettings.customDefaultModel,
+      });
+      const registry = createDefaultRegistry({
+        enabledTools: resolveTelegramTools(),
+        tasks: false,
+        interaction: false,
+        provider,
+      });
+      return { provider, model: this.aiSettings.customDefaultModel, registry };
+    }
+    return {
+      provider: this.config.provider,
+      model: this.config.model,
+      registry: this.config.registry,
+    };
+  }
+
+  /** Whether the AI settings have all required fields to build a custom provider. */
+  private canUseAiSettings(s: TelegramAiSettings): boolean {
+    return !!(
+      s.baseUrl.trim() &&
+      s.apiKey.trim() &&
+      s.customDefaultModel.trim()
+    );
+  }
+
+  /** Current AI settings (for the admin web service GET endpoint). */
+  getAiSettings(): TelegramAiSettings {
+    return { ...this.aiSettings };
+  }
+
+  /** Load persisted AI settings from disk at startup. Called once from main(). */
+  async initAiSettings(): Promise<void> {
+    this.aiSettings = await loadAiSettings();
+    if (this.aiSettings.enabled) {
+      console.log("AI settings override is ENABLED — using custom provider from settings.");
+    }
+  }
+
+  /**
+   * Apply new AI settings from the admin web service: persist to disk, update
+   * the in-memory settings, and rebuild every cached Agent so existing chats
+   * pick up the new provider/model on their next turn.
+   *
+   * If the new settings are disabled (or incomplete), cached Agents are still
+   * rebuilt so they fall back to the env-based config. The system prompt is
+   * rebuilt lazily on the next incoming message (getRuntime refreshes it for
+   * cached sessions), so here we just re-seed the Agent with the existing
+   * history — the first message's system prompt carries over as-is.
+   */
+  async applyAiSettings(s: TelegramAiSettings): Promise<void> {
+    await saveAiSettings(s);
+    this.aiSettings = s;
+    // Rebuild every cached session's Agent with the new provider/model. The
+    // history is preserved via agent.history() → new Agent → loadHistory().
+    // The registry is the shared default; admin private sessions get their
+    // per-session registry rebuilt on the next turn in getRuntime.
+    const active = this.getActiveProviderModel();
+    for (const [, runtime] of this.sessions) {
+      const oldHistory = runtime.agent.history();
+      const agent = new Agent({
+        provider: active.provider,
+        registry: active.registry,
+        model: active.model,
+        projectDir: runtime.session.projectDir,
+        systemPrompt: oldHistory[0]?.role === "system" ? oldHistory[0].content : "",
+        contextOptimize: this.config.contextOptimize,
+        tasksEnabled: false,
+        autoContinue: this.config.autoContinue,
+        preTruncate: this.config.preTruncate,
+        maxIterations: this.config.maxIterations,
+        requestDelayMs: this.config.requestDelayMs,
+        botScript: this.createBotScriptHost(),
+      });
+      agent.loadHistory(oldHistory);
+      runtime.agent = agent;
+    }
+    console.log(
+      `AI settings ${s.enabled ? "ENABLED (override)" : "DISABLED (env)"} — ` +
+        `${this.sessions.size} cached session(s) rebuilt.`,
+    );
   }
 
   /**
@@ -887,6 +1011,10 @@ class BotRunner {
     const workdir = join(this.config.workdirRoot, id);
     await mkdir(workdir, { recursive: true });
 
+    // Resolve the active provider/model — may be overridden by runtime AI
+    // settings (admin web panel) instead of the env-based startup config.
+    const active = this.getActiveProviderModel();
+
     const session: Session =
       loaded ??
       {
@@ -894,8 +1022,8 @@ class BotRunner {
         id,
         name: sessionNameFor(message.chat),
         projectDir: workdir,
-        provider: this.config.provider.name,
-        model: this.config.model,
+        provider: active.provider.name,
+        model: active.model,
         createdAt: now,
         updatedAt: now,
         messages: [],
@@ -906,15 +1034,15 @@ class BotRunner {
       };
 
     session.projectDir = workdir;
-    session.provider = this.config.provider.name;
-    session.model = this.config.model;
+    session.provider = active.provider.name;
+    session.model = active.model;
 
     // Admin private chats get a per-session registry that includes the shell
     // (exec) tool for server administration. Every other chat (groups, and
     // private chats with non-admins) uses the shared default registry without
     // exec. This keeps shell access out of shared group sessions entirely.
     const adminPrivate = message.chat.type === "private" && this.isAdmin(message.from);
-    const registry = adminPrivate ? this.createAdminRegistry() : this.config.registry;
+    const registry = adminPrivate ? this.createAdminRegistry() : active.registry;
 
     const runtime: RuntimeSession = {
       agent: undefined as unknown as Agent,
@@ -933,9 +1061,9 @@ class BotRunner {
 
     const systemPrompt = this.buildSystemPromptFor(message, runtime, registry, adminPrivate);
     const agent = new Agent({
-      provider: this.config.provider,
+      provider: active.provider,
       registry,
-      model: this.config.model,
+      model: active.model,
       projectDir: workdir,
       systemPrompt,
       contextOptimize: this.config.contextOptimize,

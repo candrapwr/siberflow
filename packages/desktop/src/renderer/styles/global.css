@@ -1732,12 +1732,34 @@ kbd {
 
 /* ---------- Notices ---------- */
 .notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   padding: 7px 10px;
   border-radius: var(--radius-sm);
   font-size: 11px;
   line-height: 1.4;
   border: 1px solid transparent;
   white-space: pre-wrap;
+  cursor: pointer;
+}
+.notice-text {
+  flex: 1;
+  min-width: 0;
+}
+.notice-close {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  opacity: 0.5;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 0;
+}
+.notice-close:hover {
+  opacity: 1;
 }
 .notice.info {
   background: rgba(77, 170, 252, 0.1);

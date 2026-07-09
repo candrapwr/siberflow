@@ -24,6 +24,11 @@ import {
 } from "@siberflow/core";
 import type { TelegramApi } from "./index.js";
 import { ADMIN_HTML } from "./web-ui.js";
+import {
+  isMaskedApiKey,
+  maskApiKey,
+  type TelegramAiSettings,
+} from "./settings.js";
 
 /** Options passed from main() to start the admin web service. */
 export interface WebServiceOptions {
@@ -31,6 +36,10 @@ export interface WebServiceOptions {
   workdirRoot: string;
   port: number;
   token: string;
+  /** Returns the current AI provider override settings (for GET endpoint). */
+  getAiSettings: () => TelegramAiSettings;
+  /** Applies new AI settings (persist + rebuild agents). May throw on invalid. */
+  applyAiSettings: (s: TelegramAiSettings) => Promise<void>;
 }
 
 /** Parsed components of a Telegram session id. */
@@ -141,9 +150,9 @@ function buildMessageRows(session: Session): MessageRow[] {
  * listen() is non-blocking.
  */
 export async function startWebService(opts: WebServiceOptions): Promise<Server> {
-  const { api, workdirRoot, port, token } = opts;
+  const { api, workdirRoot, port, token, getAiSettings, applyAiSettings } = opts;
   const server = createServer((req, res) => {
-    void handleRequest(req, res, { api, workdirRoot, token }).catch((err) => {
+    void handleRequest(req, res, { api, workdirRoot, token, getAiSettings, applyAiSettings }).catch((err) => {
       console.error(`Admin web error: ${(err as Error).message}`);
       sendJson(res, 500, { error: "Internal server error" });
     });
@@ -158,7 +167,13 @@ export async function startWebService(opts: WebServiceOptions): Promise<Server> 
 async function handleRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  ctx: { api: TelegramApi; workdirRoot: string; token: string },
+  ctx: {
+    api: TelegramApi;
+    workdirRoot: string;
+    token: string;
+    getAiSettings: () => TelegramAiSettings;
+    applyAiSettings: (s: TelegramAiSettings) => Promise<void>;
+  },
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   const path = url.pathname;
@@ -202,8 +217,98 @@ async function handleRequest(
   if (path === "/api/send" && req.method === "POST") {
     return handleSendMessage(req, res, ctx.api);
   }
+  if (path === "/api/ai-settings" && req.method === "GET") {
+    return handleGetAiSettings(res, ctx.getAiSettings);
+  }
+  if (path === "/api/ai-settings" && req.method === "POST") {
+    return handleSaveAiSettings(req, res, ctx.getAiSettings, ctx.applyAiSettings);
+  }
 
   sendJson(res, 404, { error: "Not found" });
+}
+
+/** GET /api/ai-settings — return current settings with the API key masked. */
+function handleGetAiSettings(
+  res: ServerResponse,
+  getAiSettings: () => TelegramAiSettings,
+): void {
+  const s = getAiSettings();
+  sendJson(res, 200, {
+    enabled: s.enabled,
+    provider: s.provider,
+    customProviderName: s.customProviderName,
+    baseUrl: s.baseUrl,
+    apiKey: maskApiKey(s.apiKey),
+    hasApiKey: s.apiKey.length > 0,
+    customDefaultModel: s.customDefaultModel,
+    updatedAt: s.updatedAt,
+  });
+}
+
+/** POST /api/ai-settings — validate, preserve masked API key, apply, persist. */
+async function handleSaveAiSettings(
+  req: IncomingMessage,
+  res: ServerResponse,
+  getAiSettings: () => TelegramAiSettings,
+  applyAiSettings: (s: TelegramAiSettings) => Promise<void>,
+): Promise<void> {
+  const body = await readJsonBody(req);
+  const current = getAiSettings();
+  const enabled = body.enabled === true || body.enabled === "true";
+  const provider = typeof body.provider === "string" ? body.provider : "custom";
+  const customProviderName = typeof body.customProviderName === "string" ? body.customProviderName : "";
+  const baseUrl = typeof body.baseUrl === "string" ? body.baseUrl : "";
+  const customDefaultModel = typeof body.customDefaultModel === "string" ? body.customDefaultModel : "";
+
+  // API key handling: if the submitted value is masked (contains *), keep the
+  // previously-stored key — the UI sends the masked value back when the user
+  // didn't retype the key.
+  let apiKey: string;
+  const submittedKey = typeof body.apiKey === "string" ? body.apiKey : "";
+  if (submittedKey && !isMaskedApiKey(submittedKey)) {
+    apiKey = submittedKey;
+  } else {
+    apiKey = current.apiKey;
+  }
+
+  // Validate: when enabling, all required fields must be present.
+  if (enabled) {
+    const missing: string[] = [];
+    if (!baseUrl.trim()) missing.push("Base URL");
+    if (!apiKey.trim()) missing.push("API key");
+    if (!customDefaultModel.trim()) missing.push("Default model");
+    if (missing.length > 0) {
+      sendJson(res, 200, {
+        ok: false,
+        error: `Field wajib belum diisi: ${missing.join(", ")}.`,
+      });
+      return;
+    }
+  }
+
+  const settings: TelegramAiSettings = {
+    enabled,
+    provider,
+    customProviderName: customProviderName.trim(),
+    baseUrl: baseUrl.trim().replace(/\/+$/, ""),
+    apiKey,
+    customDefaultModel: customDefaultModel.trim(),
+    updatedAt: "",
+  };
+
+  try {
+    await applyAiSettings(settings);
+    sendJson(res, 200, {
+      ok: true,
+      settings: {
+        ...settings,
+        apiKey: maskApiKey(settings.apiKey),
+        hasApiKey: settings.apiKey.length > 0,
+      },
+    });
+  } catch (err) {
+    sendJson(res, 200, { ok: false, error: (err as Error).message });
+  }
 }
 
 /** GET /api/sessions — list all Telegram sessions with user/chat metadata. */

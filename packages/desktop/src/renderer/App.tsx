@@ -245,14 +245,14 @@ export default function App() {
         return;
       }
 
-      // Escape → dismiss all notices
+      // Escape → dismiss all notices (one keypress clears every visible toast)
       if (e.key === "Escape") {
-        const notices = state.notices;
-        const last = notices[notices.length - 1];
-        if (last) {
-          dismissNotice(last.id);
+        if (state.notices.length > 0) {
+          for (const n of state.notices) {
+            dismissNotice(n.id);
+          }
+          return;
         }
-        return;
       }
     };
     window.addEventListener("keydown", handler);
@@ -344,8 +344,23 @@ export default function App() {
 
               {/* Notices */}
               {state.notices.map((n) => (
-                <div key={n.id} className={`notice ${n.kind}`}>
-                  {n.text}
+                <div
+                  key={n.id}
+                  className={`notice ${n.kind}`}
+                  onClick={() => dismissNotice(n.id)}
+                  title="Click to dismiss"
+                >
+                  <span className="notice-text">{n.text}</span>
+                  <button
+                    className="notice-close"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      dismissNotice(n.id);
+                    }}
+                    title="Dismiss"
+                  >
+                    ✕
+                  </button>
                 </div>
               ))}
 
