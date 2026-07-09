@@ -26,6 +26,7 @@ import {
   isDebug,
 } from "@siberflow/core";
 import { loadDotEnv } from "./env.js";
+import { generateAdminToken, startWebService } from "./web.js";
 
 type ChatType = "private" | "group" | "supergroup" | "channel";
 
@@ -217,6 +218,24 @@ async function main(): Promise<void> {
 
   const api = new TelegramApi(config.telegramToken, config.telegramApiBase);
   const runner = new BotRunner(api, config);
+
+  // Start the local-only admin web service (session browser, message log,
+  // workdir viewer, send-message). Runs alongside the polling loop. The token
+  // is read from env; if unset, a random one is generated and logged so the
+  // admin can open the UI from the printed URL.
+  const webToken =
+    process.env.SIBERFLOW_TELEGRAM_ADMIN_TOKEN ?? generateAdminToken();
+  const webPort = Number(process.env.SIBERFLOW_TELEGRAM_ADMIN_PORT ?? 7070);
+  await startWebService({
+    api,
+    workdirRoot: config.workdirRoot,
+    port: webPort,
+    token: webToken,
+  });
+  console.log(
+    `Admin web service: http://127.0.0.1:${webPort}/?token=${webToken}`,
+  );
+
   await runner.run();
 }
 
@@ -1537,7 +1556,7 @@ async function resolveTelegramWorkdirPath(
   throw new Error("Path escapes the Telegram session workdir.");
 }
 
-class TelegramApi {
+export class TelegramApi {
   constructor(
     private readonly token: string,
     private readonly baseUrl: string,
