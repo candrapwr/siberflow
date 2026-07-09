@@ -31,6 +31,24 @@ export interface TelegramAiSettings {
   customDefaultModel: string;
   /** ISO timestamp of the last update. */
   updatedAt: string;
+
+  // ── Image generator override ──
+  /** false = image_gen uses env (SIBERFLOW_IMAGE_GEN_*); true = use fields below. */
+  imageGenEnabled: boolean;
+  /** Image gen provider: openai | deepinfra | novita | qwen | grok. */
+  imageGenProvider: string;
+  /** Image gen API key. */
+  imageGenApiKey: string;
+  /** Image gen model id. */
+  imageGenModel: string;
+  /** Image gen API root. */
+  imageGenBaseUrl: string;
+
+  // ── Enabled-tools override ──
+  /** false = tool set from env (SIBERFLOW_TELEGRAM_TOOLS); true = use enabledTools. */
+  toolsOverride: boolean;
+  /** Comma-separated tool names to enable when toolsOverride is true. */
+  enabledTools: string;
 }
 
 /** Default settings: disabled, empty fields, provider defaults to "custom". */
@@ -43,6 +61,13 @@ export function defaultAiSettings(): TelegramAiSettings {
     apiKey: "",
     customDefaultModel: "",
     updatedAt: "",
+    imageGenEnabled: false,
+    imageGenProvider: "openai",
+    imageGenApiKey: "",
+    imageGenModel: "",
+    imageGenBaseUrl: "",
+    toolsOverride: false,
+    enabledTools: "",
   };
 }
 

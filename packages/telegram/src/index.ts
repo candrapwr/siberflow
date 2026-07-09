@@ -467,14 +467,35 @@ class BotRunner {
    * Exec runs with the host shell (full server access) — appropriate for a
    * trusted admin managing the server, and only reachable in private chat.
    */
+  /**
+   * Resolve the active enabled-tools set — the single source of truth for which
+   * opt-in tools the bot exposes. When the tools override is ENABLED, the set
+   * comes from the persisted settings; otherwise it falls back to the env-based
+   * resolver (SIBERFLOW_TELEGRAM_TOOLS). Both getRuntime() and
+   * createAdminRegistry() route through here so admin and non-admin chats agree.
+   */
+  private getActiveEnabledTools(): Set<string> {
+    if (this.aiSettings.toolsOverride && this.aiSettings.enabledTools) {
+      return new Set(
+        this.aiSettings.enabledTools
+          .split(",")
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0),
+      );
+    }
+    return resolveTelegramTools();
+  }
+
   private createAdminRegistry(): ToolRegistry {
     const registry = createDefaultRegistry({
-      enabledTools: resolveTelegramTools(),
+      enabledTools: this.getActiveEnabledTools(),
       tasks: false,
       interaction: false,
     });
     // Register every CLI tool (currently just execTool). These names never
     // collide with the default registry because Telegram strips exec by default.
+    // exec is ALWAYS available to admins here regardless of the override set —
+    // admin status is the real gate (checked in getRuntime), not the tool list.
     for (const tool of cliTools) {
       if (!registry.get(tool.name)) registry.register(tool);
     }
@@ -491,9 +512,8 @@ class BotRunner {
    * When DISABLED (or settings incomplete), the env-based config captured at
    * startup (this.config) is used as-is.
    *
-   * Returns the shared `this.config.registry` for non-admin chats when no
-   * override is active; admin chats always get a per-session registry via
-   * createAdminRegistry() in getRuntime().
+   * The registry always reflects getActiveEnabledTools() so the tools override
+   * applies whether or not the provider override is active.
    */
   private getActiveProviderModel(): {
     provider: Provider;
@@ -508,12 +528,29 @@ class BotRunner {
         customDefaultModel: this.aiSettings.customDefaultModel,
       });
       const registry = createDefaultRegistry({
-        enabledTools: resolveTelegramTools(),
+        enabledTools: this.getActiveEnabledTools(),
         tasks: false,
         interaction: false,
         provider,
       });
       return { provider, model: this.aiSettings.customDefaultModel, registry };
+    }
+    // Provider/model from env, but the registry must still reflect the active
+    // tool set when only the tools override is on (provider override off).
+    const needsFreshRegistry =
+      this.aiSettings.toolsOverride || this.config.registry === undefined;
+    if (needsFreshRegistry) {
+      const registry = createDefaultRegistry({
+        enabledTools: this.getActiveEnabledTools(),
+        tasks: false,
+        interaction: false,
+        provider: this.config.provider,
+      });
+      return {
+        provider: this.config.provider,
+        model: this.config.model,
+        registry,
+      };
     }
     return {
       provider: this.config.provider,
@@ -541,6 +578,38 @@ class BotRunner {
     this.aiSettings = await loadAiSettings();
     if (this.aiSettings.enabled) {
       console.log("AI settings override is ENABLED — using custom provider from settings.");
+    }
+    this.applyImageGenEnv();
+  }
+
+  /**
+   * Push the image-gen override (when enabled) into process.env so the
+   * image_gen tool — which reads SIBERFLOW_IMAGE_GEN_* at execute time — picks
+   * up the web-configured provider/key/model/baseUrl. When disabled, delete the
+   * keys we injected so the tool falls back to the original env values. We
+   * track injected keys to avoid clobbering values the user set in their real
+   * .env.
+   */
+  private injectedImageEnvKeys: string[] = [];
+  private applyImageGenEnv(): void {
+    // Clear any previously-injected keys first (restore original env state).
+    for (const k of this.injectedImageEnvKeys) {
+      delete process.env[k];
+    }
+    this.injectedImageEnvKeys = [];
+    const s = this.aiSettings;
+    if (s.imageGenEnabled) {
+      const entries: Record<string, string> = {
+        SIBERFLOW_IMAGE_GEN_PROVIDER: s.imageGenProvider || "openai",
+        SIBERFLOW_IMAGE_GEN_API_KEY: s.imageGenApiKey,
+        ...(s.imageGenModel ? { SIBERFLOW_IMAGE_GEN_MODEL: s.imageGenModel } : {}),
+        ...(s.imageGenBaseUrl ? { SIBERFLOW_IMAGE_GEN_BASE_URL: s.imageGenBaseUrl } : {}),
+      };
+      for (const [k, v] of Object.entries(entries)) {
+        process.env[k] = v;
+        this.injectedImageEnvKeys.push(k);
+      }
+      console.log(`Image gen override ENABLED — provider: ${s.imageGenProvider}.`);
     }
   }
 
@@ -586,6 +655,7 @@ class BotRunner {
       `AI settings ${s.enabled ? "ENABLED (override)" : "DISABLED (env)"} — ` +
         `${this.sessions.size} cached session(s) rebuilt.`,
     );
+    this.applyImageGenEnv();
   }
 
   /**
@@ -700,14 +770,21 @@ class BotRunner {
 
     // Voice/audio messages are ALWAYS processed — in private chats, in groups,
     // and even without a caption or mention. They can't carry a @mention, and a
-    // user recording a voice note clearly intends it for the bot. Other
-    // text-only messages still need a mention/command in groups.
+    // user recording a voice note clearly intends it for the bot.
+    // Photo/document/other media are also processed when sent without any
+    // caption — in private chats unconditionally, and in groups when the bot is
+    // addressed (the mention lives in the caption; if there's no caption at
+    // all, the group gate below still requires a mention somewhere).
     const hasVoice = !!(message.voice || message.audio);
-    if (!messageText && !hasVoice) return;
+    const hasMedia = !hasVoice && !!resolveMediaFile(message);
+    if (!messageText && !hasVoice && !hasMedia) return;
     if (
-      messageText &&
       message.chat.type !== "private" &&
       !hasVoice &&
+      // In groups: require a mention/command. The mention may be in the text OR
+      // the caption (messageText is text ?? caption). A photo with no caption
+      // and no mention is NOT addressed to the bot — leave it for the roster
+      // pass above only.
       !isAddressedToBot(messageText, this.botUsername)
     ) {
       return;
@@ -855,11 +932,22 @@ class BotRunner {
       // withReplyContext (downloadMessageFile + describeDirectAttachment).
       if (message.voice) return "(The user sent a voice message. Transcribe it with speech_to_text, then answer ONLY what they asked — NEVER show the transcript or mention transcription. Reply as if they typed it.)";
       if (message.audio) return "(The user sent an audio file. Transcribe it with speech_to_text if possible, then answer ONLY the content — NEVER show the transcript or mention transcription. Reply as if they typed it.)";
+      // Photo/document/media with no caption: the user attached a file and
+      // wants the bot to look at it. A placeholder keeps the turn alive; the
+      // actual file path + metadata is appended by describeDirectAttachment.
+      if (resolveMediaFile(message)) return "(The user sent an image or file with no message. Acknowledge the attachment and ask what they want to do with it, or act on it if the intent is clear.)";
       return "";
     }
 
     const commandInput = stripCommand(text);
-    if (commandInput !== null) return commandInput;
+    if (commandInput !== null) {
+      // /siberflow with no accompanying text but a media attachment: keep the
+      // turn alive so the file is processed.
+      if (!commandInput && resolveMediaFile(message)) {
+        return "(The user sent an image or file with the /siberflow command but no other message. Acknowledge the attachment and ask what they want, or act on it if the intent is clear.)";
+      }
+      return commandInput;
+    }
 
     const mentionInput = stripBotMention(text, this.botUsername);
     // The message mentioned the bot. If there was accompanying text, use it.
@@ -870,6 +958,8 @@ class BotRunner {
     if (mentionInput === "") {
       if (message.voice) return "(The user sent a voice message. Transcribe it with speech_to_text, then answer ONLY what they asked — NEVER show the transcript or mention transcription. Reply as if they typed it.)";
       if (message.audio) return "(The user sent an audio file. Transcribe it with speech_to_text if possible, then answer ONLY the content — NEVER show the transcript or mention transcription. Reply as if they typed it.)";
+      // Mention with a media attachment but no other text.
+      if (resolveMediaFile(message)) return "(The user tagged the bot with an image or file but no message. Acknowledge the attachment and ask what they want, or act on it if the intent is clear.)";
       return "(The user mentioned the bot with no other message. Greet them briefly and ask what they need.)";
     }
 
@@ -2514,7 +2604,7 @@ function describeDirectAttachment(
   }
   const lines: string[] = [
     "# Telegram current message attachment",
-    "The user's current message includes an attached file. Use the local file path to read/process it.",
+    "The user's current message includes an attached file.",
   ];
   // Media type + metadata.
   if (message.photo?.length) {
@@ -2593,14 +2683,14 @@ function describeRepliedMessage(
 
   if (downloadedImagePath) {
     parts.push(
-      `[Local image path for analyze_image: ${downloadedImagePath}]`,
+      `[Local image file path: ${downloadedImagePath}]`,
     );
   }
 
   if (message.photo?.length) {
     const largest = message.photo[message.photo.length - 1]!;
     parts.push(
-      `[Replied message contains a photo: ${largest.width}x${largest.height}${formatBytes(largest.file_size)}. Use analyze_image with the local image path when visual understanding is needed.]`,
+      `[Replied message contains an image file: ${largest.width}x${largest.height}${formatBytes(largest.file_size)}.]`,
     );
   }
   if (message.document) {

@@ -223,8 +223,108 @@ async function handleRequest(
   if (path === "/api/ai-settings" && req.method === "POST") {
     return handleSaveAiSettings(req, res, ctx.getAiSettings, ctx.applyAiSettings);
   }
+  if (path === "/api/tools" && req.method === "GET") {
+    return handleListTools(res, ctx.getAiSettings);
+  }
 
   sendJson(res, 404, { error: "Not found" });
+}
+
+/**
+ * The full catalog of opt-in tools the admin panel can toggle, grouped by
+ * category. Always-on tools (task_update, ask_user) and factory tools
+ * (subagent, explore) are listed as informational but cannot be toggled. This
+ * mirrors the tool-name universe in packages/core/src/tools/index.ts.
+ */
+const TOOL_CATALOG: { category: string; tools: { name: string; description: string }[] }[] = [
+  {
+    category: "File",
+    tools: [
+      { name: "read_file", description: "Read file contents" },
+      { name: "write_file", description: "Write/create files" },
+      { name: "edit_file", description: "Edit existing files" },
+      { name: "copy_file", description: "Copy files" },
+      { name: "list_dir", description: "List directory contents" },
+      { name: "delete_file", description: "Delete files" },
+      { name: "grep", description: "Search file contents" },
+    ],
+  },
+  {
+    category: "Shell",
+    tools: [{ name: "exec", description: "Shell execution (admin private chat only)" }],
+  },
+  {
+    category: "Database",
+    tools: [{ name: "db_query", description: "SQL queries (MySQL/PostgreSQL/SQLite)" }],
+  },
+  {
+    category: "SSH",
+    tools: [
+      { name: "ssh_exec", description: "Run commands over SSH" },
+      { name: "sftp", description: "SFTP file transfer" },
+    ],
+  },
+  {
+    category: "Documents",
+    tools: [
+      { name: "excel_script", description: "Excel (.xlsx) read/create/modify" },
+      { name: "docx_script", description: "Word (.docx) create/read" },
+      { name: "pdf_script", description: "PDF create/read/OCR" },
+    ],
+  },
+  {
+    category: "Browser",
+    tools: [{ name: "run_browser", description: "Headless browser automation (Puppeteer)" }],
+  },
+  {
+    category: "Image",
+    tools: [
+      { name: "analyze_image", description: "Analyze/describe images (multimodal)" },
+      { name: "image_gen", description: "Generate/edit images" },
+    ],
+  },
+  {
+    category: "Search",
+    tools: [{ name: "web_search", description: "Web search (Exa)" }],
+  },
+  {
+    category: "Music",
+    tools: [{ name: "music_generate", description: "Generate music tracks" }],
+  },
+  {
+    category: "Bot",
+    tools: [{ name: "bot_script", description: "Bot actions (send media, polls, etc.)" }],
+  },
+  {
+    category: "Speech",
+    tools: [
+      { name: "speech_to_text", description: "Transcribe audio to text" },
+      { name: "text_to_speech", description: "Synthesize speech from text" },
+    ],
+  },
+];
+
+/** GET /api/tools — full catalog + the active/enabled tool set + env tool set. */
+function handleListTools(
+  res: ServerResponse,
+  getAiSettings: () => TelegramAiSettings,
+): void {
+  const s = getAiSettings();
+  // Env tool set (from SIBERFLOW_TELEGRAM_TOOLS).
+  const envTools = process.env.SIBERFLOW_TELEGRAM_TOOLS;
+  const envEnabled: string[] = envTools
+    ? envTools.split(",").map((t) => t.trim()).filter((t) => t.length > 0)
+    : ["run_browser"];
+  // Active tool set (override or env).
+  const activeEnabled: string[] = s.toolsOverride && s.enabledTools
+    ? s.enabledTools.split(",").map((t) => t.trim()).filter((t) => t.length > 0)
+    : envEnabled;
+  sendJson(res, 200, {
+    catalog: TOOL_CATALOG,
+    active: activeEnabled,
+    env: envEnabled,
+    toolsOverride: s.toolsOverride,
+  });
 }
 
 /** GET /api/ai-settings — return current settings with the API key masked. */
@@ -241,6 +341,16 @@ function handleGetAiSettings(
     apiKey: maskApiKey(s.apiKey),
     hasApiKey: s.apiKey.length > 0,
     customDefaultModel: s.customDefaultModel,
+    // Image generator override fields.
+    imageGenEnabled: s.imageGenEnabled,
+    imageGenProvider: s.imageGenProvider,
+    imageGenApiKey: maskApiKey(s.imageGenApiKey),
+    hasImageGenApiKey: s.imageGenApiKey.length > 0,
+    imageGenModel: s.imageGenModel,
+    imageGenBaseUrl: s.imageGenBaseUrl,
+    // Enabled-tools override fields.
+    toolsOverride: s.toolsOverride,
+    enabledTools: s.enabledTools,
     updatedAt: s.updatedAt,
   });
 }
@@ -254,11 +364,17 @@ async function handleSaveAiSettings(
 ): Promise<void> {
   const body = await readJsonBody(req);
   const current = getAiSettings();
-  const enabled = body.enabled === true || body.enabled === "true";
-  const provider = typeof body.provider === "string" ? body.provider : "custom";
-  const customProviderName = typeof body.customProviderName === "string" ? body.customProviderName : "";
-  const baseUrl = typeof body.baseUrl === "string" ? body.baseUrl : "";
-  const customDefaultModel = typeof body.customDefaultModel === "string" ? body.customDefaultModel : "";
+  // Each field preserves the current value when absent from the body, so the
+  // Tools panel can POST only {toolsOverride, enabledTools} without wiping the
+  // provider/image-gen settings, and vice versa.
+  const enabled =
+    body.enabled === undefined ? current.enabled : body.enabled === true || body.enabled === "true";
+  const provider = typeof body.provider === "string" ? body.provider : current.provider;
+  const customProviderName =
+    typeof body.customProviderName === "string" ? body.customProviderName : current.customProviderName;
+  const baseUrl = typeof body.baseUrl === "string" ? body.baseUrl : current.baseUrl;
+  const customDefaultModel =
+    typeof body.customDefaultModel === "string" ? body.customDefaultModel : current.customDefaultModel;
 
   // API key handling: if the submitted value is masked (contains *), keep the
   // previously-stored key — the UI sends the masked value back when the user
@@ -286,6 +402,50 @@ async function handleSaveAiSettings(
     }
   }
 
+  // ── Image generator override fields (preserve current when absent) ──
+  const imageGenEnabled =
+    body.imageGenEnabled === undefined
+      ? current.imageGenEnabled
+      : body.imageGenEnabled === true || body.imageGenEnabled === "true";
+  const imageGenProvider =
+    typeof body.imageGenProvider === "string" ? body.imageGenProvider : current.imageGenProvider;
+  const imageGenModel =
+    typeof body.imageGenModel === "string" ? body.imageGenModel : current.imageGenModel;
+  const imageGenBaseUrl =
+    typeof body.imageGenBaseUrl === "string" ? body.imageGenBaseUrl : current.imageGenBaseUrl;
+
+  // Image gen API key masking — same preserve-if-masked logic as the main key.
+  let imageGenApiKey: string;
+  const submittedImageKey = typeof body.imageGenApiKey === "string" ? body.imageGenApiKey : "";
+  if (submittedImageKey && !isMaskedApiKey(submittedImageKey)) {
+    imageGenApiKey = submittedImageKey;
+  } else {
+    imageGenApiKey = current.imageGenApiKey;
+  }
+
+  // Validate image gen fields when enabling the image override.
+  if (imageGenEnabled) {
+    if (!imageGenApiKey.trim()) {
+      sendJson(res, 200, { ok: false, error: "Image gen override aktif tapi API key kosong." });
+      return;
+    }
+  }
+
+  // ── Enabled-tools override fields (preserve current when absent) ──
+  const toolsOverride =
+    body.toolsOverride === undefined
+      ? current.toolsOverride
+      : body.toolsOverride === true || body.toolsOverride === "true";
+  // enabledTools: accept a string (comma-separated) or an array of strings.
+  let enabledTools: string;
+  if (Array.isArray(body.enabledTools)) {
+    enabledTools = body.enabledTools.filter((t) => typeof t === "string" && t.trim()).join(",");
+  } else if (typeof body.enabledTools === "string") {
+    enabledTools = body.enabledTools;
+  } else {
+    enabledTools = current.enabledTools;
+  }
+
   const settings: TelegramAiSettings = {
     enabled,
     provider,
@@ -294,6 +454,13 @@ async function handleSaveAiSettings(
     apiKey,
     customDefaultModel: customDefaultModel.trim(),
     updatedAt: "",
+    imageGenEnabled,
+    imageGenProvider: imageGenProvider.trim(),
+    imageGenApiKey,
+    imageGenModel: imageGenModel.trim(),
+    imageGenBaseUrl: imageGenBaseUrl.trim().replace(/\/+$/, ""),
+    toolsOverride,
+    enabledTools,
   };
 
   try {
@@ -304,6 +471,8 @@ async function handleSaveAiSettings(
         ...settings,
         apiKey: maskApiKey(settings.apiKey),
         hasApiKey: settings.apiKey.length > 0,
+        imageGenApiKey: maskApiKey(settings.imageGenApiKey),
+        hasImageGenApiKey: settings.imageGenApiKey.length > 0,
       },
     });
   } catch (err) {
