@@ -115,3 +115,95 @@ export function maskApiKey(key: string): string {
 export function isMaskedApiKey(key: string): boolean {
   return key.includes("*");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Image generator presets
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PRESETS_FILE = join(homedir(), ".siberflow", "telegram-image-presets.json");
+
+/**
+ * A saved image-gen provider configuration that can be loaded back into the
+ * panel. Stored separately from the active settings so presets survive even
+ * when the active override is disabled. The API key is stored in full here
+ * (the file is local, same as the settings file).
+ */
+export interface ImageGenPreset {
+  /** Unique id (slugified name + timestamp). */
+  id: string;
+  /** User-chosen label, e.g. "OpenAI Production". */
+  name: string;
+  /** Provider name: openai | deepinfra | novita | qwen | grok. */
+  provider: string;
+  /** API key (stored in full, local file). */
+  apiKey: string;
+  /** Model id. */
+  model: string;
+  /** API root. */
+  baseUrl: string;
+  /** ISO timestamp of creation/update. */
+  updatedAt: string;
+}
+
+/** Load all saved presets. Returns [] if the file is missing/corrupt. */
+export async function loadImageGenPresets(): Promise<ImageGenPreset[]> {
+  try {
+    const raw = await readFile(PRESETS_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as ImageGenPreset[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Persist all presets to disk. */
+async function persistImageGenPresets(presets: ImageGenPreset[]): Promise<void> {
+  await mkdir(dirname(PRESETS_FILE), { recursive: true });
+  await writeFile(PRESETS_FILE, JSON.stringify(presets, null, 2), "utf8");
+}
+
+/** Generate a stable id from a name. */
+function presetId(name: string): string {
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return `${slug || "preset"}-${Date.now().toString(36)}`;
+}
+
+/** Save (create or update by id) a preset and return the updated list. */
+export async function saveImageGenPreset(
+  preset: Omit<ImageGenPreset, "id" | "updatedAt"> & { id?: string },
+): Promise<ImageGenPreset[]> {
+  const presets = await loadImageGenPresets();
+  const now = new Date().toISOString();
+  const existingIdx = preset.id
+    ? presets.findIndex((p) => p.id === preset.id)
+    : presets.findIndex((p) => p.name === preset.name);
+  if (existingIdx !== -1) {
+    // Update existing preset (keep the same id).
+    presets[existingIdx] = {
+      ...presets[existingIdx]!,
+      ...preset,
+      id: presets[existingIdx]!.id,
+      updatedAt: now,
+    };
+  } else {
+    presets.push({
+      id: presetId(preset.name),
+      name: preset.name,
+      provider: preset.provider,
+      apiKey: preset.apiKey,
+      model: preset.model,
+      baseUrl: preset.baseUrl,
+      updatedAt: now,
+    });
+  }
+  await persistImageGenPresets(presets);
+  return presets;
+}
+
+/** Delete a preset by id and return the updated list. */
+export async function deleteImageGenPreset(id: string): Promise<ImageGenPreset[]> {
+  const presets = await loadImageGenPresets();
+  const filtered = presets.filter((p) => p.id !== id);
+  await persistImageGenPresets(filtered);
+  return filtered;
+}

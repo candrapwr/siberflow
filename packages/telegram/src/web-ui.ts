@@ -405,6 +405,43 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     font-size: 10px;
     margin-left: 4px;
   }
+
+  /* ── Preset store ── */
+  .preset-bar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+  .preset-bar select { flex: 1; min-width: 160px; }
+  .preset-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 16px;
+  }
+  .preset-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 12px;
+  }
+  .preset-card .pname { font-weight: 600; font-size: 13px; }
+  .preset-card .pmeta { font-size: 11px; color: var(--muted); font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  .preset-card .pbadge {
+    display: inline-block;
+    background: #1e3d2f;
+    color: var(--ok);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 10px;
+    margin-left: 4px;
+  }
 </style>
 </head>
 <body>
@@ -598,7 +635,12 @@ async function loadSettings() {
   const wrap = document.getElementById("settingsWrap");
   wrap.innerHTML = '<div class="empty"><span class="spin"></span> Memuat...</div>';
   try {
-    settingsCache = await api("/api/ai-settings");
+    const [settings, presets] = await Promise.all([
+      api("/api/ai-settings"),
+      api("/api/image-presets"),
+    ]);
+    settingsCache = settings;
+    igPresetsCache = Array.isArray(presets) ? presets : [];
     renderSettings();
   } catch (e) {
     wrap.innerHTML = '<div class="empty">Gagal: ' + esc(e.message) + '</div>';
@@ -643,6 +685,22 @@ function renderSettings() {
           : '<span class="status-badge env">ENV (default)</span>';
         const igDisabled = igEnabled ? '' : 'disabled';
         const igKeyPlaceholder = s.hasImageGenApiKey ? s.imageGenApiKey + ' (kosongkan untuk tetap)' : 'paste image gen key';
+        // Preset dropdown options built from the cached preset list.
+        const presetOpts = (igPresetsCache || []).map(function(p) {
+          return '<option value="' + esc(p.id) + '">' + esc(p.name) + ' (' + esc(p.provider) + ')</option>';
+        }).join('');
+        // Saved presets as cards with load/delete buttons.
+        const presetCards = (igPresetsCache || []).map(function(p) {
+          return '<div class="preset-card">' +
+            '<div><span class="pname">' + esc(p.name) + '</span>' +
+              '<span class="pbadge">stored</span><br>' +
+              '<span class="pmeta">' + esc(p.provider) + ' · ' + esc(p.model || 'default') + ' · key ' + esc(p.apiKey || '(none)') + '</span></div>' +
+            '<div style="display:flex;gap:6px">' +
+              '<button class="small" onclick="loadPreset(\\''+p.id+'\\')">📥 Load</button>' +
+              '<button class="small danger" onclick="deletePreset(\\''+p.id+'\\')">🗑</button>' +
+            '</div>' +
+          '</div>';
+        }).join('');
         return '' +
           '<div class="toggle-row">' +
             '<div><div class="label">Aktifkan Override Image Gen</div>' +
@@ -650,6 +708,16 @@ function renderSettings() {
             '<div class="toggle ' + (igEnabled ? 'on' : '') + '" id="igToggle" onclick="toggleIg()"></div>' +
           '</div>' +
           '<div style="margin-bottom:20px">Status image gen: ' + igStatus + '</div>' +
+          // ── Preset store ──
+          '<div class="preset-bar">' +
+            '<select id="presetSelect"' + ((igPresetsCache||[]).length ? '' : 'disabled') + '>' +
+              '<option value="">— Pilih preset —</option>' +
+              presetOpts +
+            '</select>' +
+            '<button class="small" onclick="loadSelectedPreset()" ' + ((igPresetsCache||[]).length ? '' : 'disabled') + '>📥 Load</button>' +
+            '<button class="small primary" onclick="savePresetPrompt()">💾 Simpan Config</button>' +
+          '</div>' +
+          (presetCards ? '<div class="preset-list">' + presetCards + '</div>' : '<div class="form-help" style="margin-bottom:16px">Belum ada preset tersimpan. Isi field di bawah lalu klik "Simpan Config" untuk menyimpan.</div>') +
           '<div class="form-field"><label>Provider</label>' +
             '<select id="setIgProvider" ' + igDisabled + '>' +
               '<option value="openai"' + (s.imageGenProvider === 'openai' ? ' selected' : '') + '>openai (gpt-image)</option>' +
@@ -680,6 +748,76 @@ function toggleIg() {
   if (!settingsCache) return;
   settingsCache.imageGenEnabled = !settingsCache.imageGenEnabled;
   renderSettings();
+}
+
+// ── Image gen preset store ──
+let igPresetsCache = [];
+async function loadPresets() {
+  try {
+    igPresetsCache = await api("/api/image-presets");
+  } catch { igPresetsCache = []; }
+}
+function loadSelectedPreset() {
+  const id = document.getElementById("presetSelect").value;
+  if (id) loadPreset(id);
+}
+function loadPreset(id) {
+  const p = igPresetsCache.find(function(x) { return x.id === id; });
+  if (!p) return;
+  // Fill the form fields with the preset values. API key is masked in the
+  // cache, so we only fill it if it's a real value (not masked).
+  document.getElementById("setIgProvider").value = p.provider;
+  document.getElementById("setIgModel").value = p.model;
+  document.getElementById("setIgBaseUrl").value = p.baseUrl;
+  // API key from preset is masked (contains *); keep current field value
+  // unless the preset key is unmasked (shouldn't happen via API, but defensive).
+  if (p.apiKey && !p.apiKey.includes("*")) {
+    document.getElementById("setIgApiKey").value = p.apiKey;
+  }
+  toast("Preset '" + p.name + "' dimuat. API key: " + (p.apiKey ? p.apiKey + " (kosongkan untuk tetap)" : "(tidak ada)") + ". Klik Simpan untuk menerapkan.", true);
+}
+async function savePresetPrompt() {
+  const name = prompt("Nama preset:", document.getElementById("setIgProvider").value);
+  if (!name) return;
+  const apiKey = document.getElementById("setIgApiKey").value;
+  // If the API key field contains a masked value (from loading), warn the user.
+  if (apiKey.includes("*")) {
+    toast("API key masih masked. Ketik key asli sebelum simpan preset, atau preset akan menyimpan key yang masked.", false);
+  }
+  const body = {
+    name: name,
+    provider: document.getElementById("setIgProvider").value,
+    apiKey: apiKey,
+    model: document.getElementById("setIgModel").value,
+    baseUrl: document.getElementById("setIgBaseUrl").value,
+  };
+  try {
+    const d = await api("/api/image-presets", { method: "POST", body: JSON.stringify(body) });
+    if (d.ok) {
+      igPresetsCache = d.presets || [];
+      toast("Preset '" + name + "' tersimpan.", true);
+      renderSettings();
+    } else {
+      toast("Gagal: " + (d.error || "unknown"), false);
+    }
+  } catch (e) {
+    toast("Gagal: " + e.message, false);
+  }
+}
+async function deletePreset(id) {
+  const p = igPresetsCache.find(function(x) { return x.id === id; });
+  if (!p) return;
+  if (!confirm("Hapus preset '" + p.name + "'?")) return;
+  try {
+    const d = await api("/api/image-presets/" + encodeURIComponent(id), { method: "DELETE" });
+    if (d.ok) {
+      igPresetsCache = d.presets || [];
+      toast("Preset dihapus.", true);
+      renderSettings();
+    }
+  } catch (e) {
+    toast("Gagal: " + e.message, false);
+  }
 }
 async function saveSettings() {
   const body = {

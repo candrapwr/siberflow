@@ -26,8 +26,12 @@ import type { TelegramApi } from "./index.js";
 import { ADMIN_HTML } from "./web-ui.js";
 import { LOGIN_HTML } from "./login-page.js";
 import {
+  deleteImageGenPreset,
   isMaskedApiKey,
+  loadImageGenPresets,
   maskApiKey,
+  saveImageGenPreset,
+  type ImageGenPreset,
   type TelegramAiSettings,
 } from "./settings.js";
 import {
@@ -280,8 +284,58 @@ async function handleRequest(
   if (path === "/api/tools" && req.method === "GET") {
     return handleListTools(res, ctx.getAiSettings);
   }
+  if (path === "/api/image-presets" && req.method === "GET") {
+    return handleListImagePresets(res);
+  }
+  if (path === "/api/image-presets" && req.method === "POST") {
+    return handleSaveImagePreset(req, res);
+  }
+  const presetDeleteMatch = path.match(/^\/api\/image-presets\/(.+)$/);
+  if (presetDeleteMatch && req.method === "DELETE") {
+    return handleDeleteImagePreset(res, decodeURIComponent(presetDeleteMatch[1]!));
+  }
 
   sendJson(res, 404, { error: "Not found" });
+}
+
+/** GET /api/image-presets — list all saved image-gen presets (keys masked). */
+async function handleListImagePresets(res: ServerResponse): Promise<void> {
+  const presets = await loadImageGenPresets();
+  sendJson(res, 200, presets.map((p) => ({ ...p, apiKey: maskApiKey(p.apiKey) })));
+}
+
+/** POST /api/image-presets — create or update a preset by name/id. */
+async function handleSaveImagePreset(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  const body = await readJsonBody(req);
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  if (!name) {
+    sendJson(res, 200, { ok: false, error: "Nama preset wajib diisi." });
+    return;
+  }
+  const presets = await saveImageGenPreset({
+    id: typeof body.id === "string" ? body.id : undefined,
+    name,
+    provider: typeof body.provider === "string" ? body.provider : "openai",
+    apiKey: typeof body.apiKey === "string" ? body.apiKey : "",
+    model: typeof body.model === "string" ? body.model : "",
+    baseUrl: typeof body.baseUrl === "string" ? body.baseUrl : "",
+  });
+  sendJson(res, 200, {
+    ok: true,
+    presets: presets.map((p) => ({ ...p, apiKey: maskApiKey(p.apiKey) })),
+  });
+}
+
+/** DELETE /api/image-presets/:id — remove a preset. */
+async function handleDeleteImagePreset(res: ServerResponse, id: string): Promise<void> {
+  const presets = await deleteImageGenPreset(id);
+  sendJson(res, 200, {
+    ok: true,
+    presets: presets.map((p) => ({ ...p, apiKey: maskApiKey(p.apiKey) })),
+  });
 }
 
 /**
