@@ -27,11 +27,15 @@ import { ADMIN_HTML } from "./web-ui.js";
 import { LOGIN_HTML } from "./login-page.js";
 import {
   deleteImageGenPreset,
+  deleteMainPreset,
   isMaskedApiKey,
   loadImageGenPresets,
+  loadMainPresets,
   maskApiKey,
   saveImageGenPreset,
+  saveMainPreset,
   type ImageGenPreset,
+  type MainProviderPreset,
   type TelegramAiSettings,
 } from "./settings.js";
 import {
@@ -294,6 +298,16 @@ async function handleRequest(
   if (presetDeleteMatch && req.method === "DELETE") {
     return handleDeleteImagePreset(res, decodeURIComponent(presetDeleteMatch[1]!));
   }
+  if (path === "/api/main-presets" && req.method === "GET") {
+    return handleListMainPresets(res);
+  }
+  if (path === "/api/main-presets" && req.method === "POST") {
+    return handleSaveMainPreset(req, res);
+  }
+  const mainPresetDeleteMatch = path.match(/^\/api\/main-presets\/(.+)$/);
+  if (mainPresetDeleteMatch && req.method === "DELETE") {
+    return handleDeleteMainPreset(res, decodeURIComponent(mainPresetDeleteMatch[1]!));
+  }
 
   sendJson(res, 404, { error: "Not found" });
 }
@@ -332,6 +346,48 @@ async function handleSaveImagePreset(
 /** DELETE /api/image-presets/:id — remove a preset. */
 async function handleDeleteImagePreset(res: ServerResponse, id: string): Promise<void> {
   const presets = await deleteImageGenPreset(id);
+  sendJson(res, 200, {
+    ok: true,
+    presets: presets.map((p) => ({ ...p, apiKey: maskApiKey(p.apiKey) })),
+  });
+}
+
+// ── Main provider presets ──────────────────────────────────────────────────
+
+/** GET /api/main-presets — list all saved main-provider presets (keys masked). */
+async function handleListMainPresets(res: ServerResponse): Promise<void> {
+  const presets = await loadMainPresets();
+  sendJson(res, 200, presets.map((p) => ({ ...p, apiKey: maskApiKey(p.apiKey) })));
+}
+
+/** POST /api/main-presets — create or update a main-provider preset by name/id. */
+async function handleSaveMainPreset(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  const body = await readJsonBody(req);
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  if (!name) {
+    sendJson(res, 200, { ok: false, error: "Nama preset wajib diisi." });
+    return;
+  }
+  const presets = await saveMainPreset({
+    id: typeof body.id === "string" ? body.id : undefined,
+    name,
+    customProviderName: typeof body.customProviderName === "string" ? body.customProviderName : "",
+    baseUrl: typeof body.baseUrl === "string" ? body.baseUrl : "",
+    apiKey: typeof body.apiKey === "string" ? body.apiKey : "",
+    customDefaultModel: typeof body.customDefaultModel === "string" ? body.customDefaultModel : "",
+  });
+  sendJson(res, 200, {
+    ok: true,
+    presets: presets.map((p) => ({ ...p, apiKey: maskApiKey(p.apiKey) })),
+  });
+}
+
+/** DELETE /api/main-presets/:id — remove a main-provider preset. */
+async function handleDeleteMainPreset(res: ServerResponse, id: string): Promise<void> {
+  const presets = await deleteMainPreset(id);
   sendJson(res, 200, {
     ok: true,
     presets: presets.map((p) => ({ ...p, apiKey: maskApiKey(p.apiKey) })),

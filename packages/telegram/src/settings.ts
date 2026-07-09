@@ -207,3 +207,87 @@ export async function deleteImageGenPreset(id: string): Promise<ImageGenPreset[]
   await persistImageGenPresets(filtered);
   return filtered;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main provider presets
+// ─────────────────────────────────────────────────────────────────────────────
+
+const MAIN_PRESETS_FILE = join(homedir(), ".siberflow", "telegram-main-presets.json");
+
+/**
+ * A saved main (chat) provider configuration. Mirrors {@link ImageGenPreset}
+ * but for the main LLM provider (custom OpenAI-compatible). The fields map to
+ * the "Override Provider" section of the AI Settings panel.
+ */
+export interface MainProviderPreset {
+  /** Unique id (slugified name + timestamp). */
+  id: string;
+  /** User-chosen label, e.g. "DeepSeek Production". */
+  name: string;
+  /** Custom provider display/internal name. */
+  customProviderName: string;
+  /** Model provider API root (e.g. https://api.example.com/v1). */
+  baseUrl: string;
+  /** API key for the model provider. */
+  apiKey: string;
+  /** Default model used for the custom provider. */
+  customDefaultModel: string;
+  /** ISO timestamp of creation/update. */
+  updatedAt: string;
+}
+
+/** Load all saved main-provider presets. Returns [] if missing/corrupt. */
+export async function loadMainPresets(): Promise<MainProviderPreset[]> {
+  try {
+    const raw = await readFile(MAIN_PRESETS_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as MainProviderPreset[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Persist all main-provider presets to disk. */
+async function persistMainPresets(presets: MainProviderPreset[]): Promise<void> {
+  await mkdir(dirname(MAIN_PRESETS_FILE), { recursive: true });
+  await writeFile(MAIN_PRESETS_FILE, JSON.stringify(presets, null, 2), "utf8");
+}
+
+/** Save (create or update by id/name) a main-provider preset. Returns the list. */
+export async function saveMainPreset(
+  preset: Omit<MainProviderPreset, "id" | "updatedAt"> & { id?: string },
+): Promise<MainProviderPreset[]> {
+  const presets = await loadMainPresets();
+  const now = new Date().toISOString();
+  const existingIdx = preset.id
+    ? presets.findIndex((p) => p.id === preset.id)
+    : presets.findIndex((p) => p.name === preset.name);
+  if (existingIdx !== -1) {
+    presets[existingIdx] = {
+      ...presets[existingIdx]!,
+      ...preset,
+      id: presets[existingIdx]!.id,
+      updatedAt: now,
+    };
+  } else {
+    presets.push({
+      id: presetId(preset.name),
+      name: preset.name,
+      customProviderName: preset.customProviderName,
+      baseUrl: preset.baseUrl,
+      apiKey: preset.apiKey,
+      customDefaultModel: preset.customDefaultModel,
+      updatedAt: now,
+    });
+  }
+  await persistMainPresets(presets);
+  return presets;
+}
+
+/** Delete a main-provider preset by id and return the updated list. */
+export async function deleteMainPreset(id: string): Promise<MainProviderPreset[]> {
+  const presets = await loadMainPresets();
+  const filtered = presets.filter((p) => p.id !== id);
+  await persistMainPresets(filtered);
+  return filtered;
+}

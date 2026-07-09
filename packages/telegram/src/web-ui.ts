@@ -631,16 +631,19 @@ function goPage(name) {
 
 // ── AI Settings ──
 let settingsCache = null;
+let mainPresetsCache = [];
 async function loadSettings() {
   const wrap = document.getElementById("settingsWrap");
   wrap.innerHTML = '<div class="empty"><span class="spin"></span> Memuat...</div>';
   try {
-    const [settings, presets] = await Promise.all([
+    const [settings, igPresets, mainPresets] = await Promise.all([
       api("/api/ai-settings"),
       api("/api/image-presets"),
+      api("/api/main-presets"),
     ]);
     settingsCache = settings;
-    igPresetsCache = Array.isArray(presets) ? presets : [];
+    igPresetsCache = Array.isArray(igPresets) ? igPresets : [];
+    mainPresetsCache = Array.isArray(mainPresets) ? mainPresets : [];
     renderSettings();
   } catch (e) {
     wrap.innerHTML = '<div class="empty">Gagal: ' + esc(e.message) + '</div>';
@@ -663,6 +666,30 @@ function renderSettings() {
       '</div>' +
       '<div style="margin-bottom:20px">Status saat ini: ' + statusBadge +
         (s.updatedAt ? ' · Update: ' + fmtDate(s.updatedAt) : '') + '</div>' +
+      // ── Main provider preset store ──
+      '<div class="preset-bar">' +
+        '<select id="mainPresetSelect"' + (mainPresetsCache.length ? '' : 'disabled') + '>' +
+          '<option value="">— Pilih preset —</option>' +
+          mainPresetsCache.map(function(p) {
+            return '<option value="' + esc(p.id) + '">' + esc(p.name) + (p.customDefaultModel ? ' (' + esc(p.customDefaultModel) + ')' : '') + '</option>';
+          }).join('') +
+        '</select>' +
+        '<button class="small" onclick="loadMainPresetSelected()" ' + (mainPresetsCache.length ? '' : 'disabled') + '>📥 Load</button>' +
+        '<button class="small primary" onclick="saveMainPresetPrompt()">💾 Simpan Config</button>' +
+      '</div>' +
+      (mainPresetsCache.length
+        ? '<div class="preset-list">' + mainPresetsCache.map(function(p) {
+            return '<div class="preset-card">' +
+              '<div><span class="pname">' + esc(p.name) + '</span>' +
+                '<span class="pbadge">stored</span><br>' +
+                '<span class="pmeta">' + esc(p.customProviderName || 'custom') + ' · ' + esc(p.customDefaultModel || 'default') + ' · key ' + esc(p.apiKey || '(none)') + '</span></div>' +
+              '<div style="display:flex;gap:6px">' +
+                '<button class="small" onclick="loadMainPreset(\\''+p.id+'\\')">📥 Load</button>' +
+                '<button class="small danger" onclick="deleteMainPreset(\\''+p.id+'\\')">🗑</button>' +
+              '</div>' +
+            '</div>';
+          }).join('') + '</div>'
+        : '<div class="form-help" style="margin-bottom:16px">Belum ada preset tersimpan. Isi field di bawah lalu klik "Simpan Config" untuk menyimpan.</div>') +
       '<div class="form-field"><label>Provider</label>' +
         '<select id="setProvider" ' + disabledAttr + '>' +
           '<option value="custom"' + (s.provider === 'custom' ? ' selected' : '') + '>custom (OpenAI-compatible)</option>' +
@@ -812,6 +839,65 @@ async function deletePreset(id) {
     const d = await api("/api/image-presets/" + encodeURIComponent(id), { method: "DELETE" });
     if (d.ok) {
       igPresetsCache = d.presets || [];
+      toast("Preset dihapus.", true);
+      renderSettings();
+    }
+  } catch (e) {
+    toast("Gagal: " + e.message, false);
+  }
+}
+
+// ── Main provider preset store ──
+function loadMainPresetSelected() {
+  const id = document.getElementById("mainPresetSelect").value;
+  if (id) loadMainPreset(id);
+}
+function loadMainPreset(id) {
+  const p = mainPresetsCache.find(function(x) { return x.id === id; });
+  if (!p) return;
+  document.getElementById("setName").value = p.customProviderName;
+  document.getElementById("setBaseUrl").value = p.baseUrl;
+  document.getElementById("setModel").value = p.customDefaultModel;
+  if (p.apiKey && !p.apiKey.includes("*")) {
+    document.getElementById("setApiKey").value = p.apiKey;
+  }
+  toast("Preset '" + p.name + "' dimuat. API key: " + (p.apiKey ? p.apiKey + " (kosongkan untuk tetap)" : "(tidak ada)") + ". Klik Simpan untuk menerapkan.", true);
+}
+async function saveMainPresetPrompt() {
+  const name = prompt("Nama preset:", document.getElementById("setModel").value || "custom-provider");
+  if (!name) return;
+  const apiKey = document.getElementById("setApiKey").value;
+  if (apiKey.includes("*")) {
+    toast("API key masih masked. Ketik key asli sebelum simpan preset.", false);
+  }
+  const body = {
+    name: name,
+    customProviderName: document.getElementById("setName").value,
+    baseUrl: document.getElementById("setBaseUrl").value,
+    apiKey: apiKey,
+    customDefaultModel: document.getElementById("setModel").value,
+  };
+  try {
+    const d = await api("/api/main-presets", { method: "POST", body: JSON.stringify(body) });
+    if (d.ok) {
+      mainPresetsCache = d.presets || [];
+      toast("Preset '" + name + "' tersimpan.", true);
+      renderSettings();
+    } else {
+      toast("Gagal: " + (d.error || "unknown"), false);
+    }
+  } catch (e) {
+    toast("Gagal: " + e.message, false);
+  }
+}
+async function deleteMainPreset(id) {
+  const p = mainPresetsCache.find(function(x) { return x.id === id; });
+  if (!p) return;
+  if (!confirm("Hapus preset '" + p.name + "'?")) return;
+  try {
+    const d = await api("/api/main-presets/" + encodeURIComponent(id), { method: "DELETE" });
+    if (d.ok) {
+      mainPresetsCache = d.presets || [];
       toast("Preset dihapus.", true);
       renderSettings();
     }
