@@ -252,6 +252,10 @@ function reducer(state: ChatState, action: Action): ChatState {
         enabledTools: e.enabledTools,
         messages: [],
         tasks: [],
+        // Clear notices on session load so stale error toasts from a previous
+        // session don't linger on screen. (ready fires on app start AND on
+        // every session switch via loadSessionById → postReady.)
+        notices: [],
         // usage is filled by the follow-up "usage" event (postReady emits it).
         usage: null,
         showActions: false,
@@ -280,6 +284,7 @@ function reducer(state: ChatState, action: Action): ChatState {
           session: null,
           messages: [],
           tasks: [],
+          notices: [],
           showActions: false,
           busy: false,
           stopping: false,

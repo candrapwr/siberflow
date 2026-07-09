@@ -314,6 +314,54 @@ export const ADMIN_HTML = `<!DOCTYPE html>
   .stat-card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
   .stat-card .val { font-size: 24px; font-weight: 700; }
   .stat-card .lbl { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }
+
+  /* ── Toggle switch ── */
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 18px;
+    margin-bottom: 20px;
+  }
+  .toggle-row .label { font-weight: 600; font-size: 14px; }
+  .toggle-row .desc { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .toggle {
+    position: relative;
+    width: 44px; height: 24px;
+    background: var(--border);
+    border-radius: 12px;
+    cursor: pointer;
+    transition: background 0.2s;
+    flex-shrink: 0;
+  }
+  .toggle.on { background: var(--accent); }
+  .toggle::after {
+    content: "";
+    position: absolute;
+    top: 3px; left: 3px;
+    width: 18px; height: 18px;
+    background: #fff;
+    border-radius: 50%;
+    transition: transform 0.2s;
+  }
+  .toggle.on::after { transform: translateX(20px); }
+
+  /* ── Settings form ── */
+  .settings-form { max-width: 640px; }
+  .settings-form .form-field { margin-bottom: 16px; }
+  .settings-form input:disabled, .settings-form select:disabled { opacity: 0.4; cursor: not-allowed; }
+  .status-badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .status-badge.env { background: #1e3a5f; color: #6cb0ff; }
+  .status-badge.override { background: #1e3d2f; color: #4ade80; }
 </style>
 </head>
 <body>
@@ -333,6 +381,9 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     </button>
     <button class="nav-item" data-page="overview" onclick="goPage('overview')">
       <span class="icon">📊</span> Overview
+    </button>
+    <button class="nav-item" data-page="settings" onclick="goPage('settings')">
+      <span class="icon">⚙</span> AI Settings
     </button>
   </nav>
   <div class="sidebar-foot" id="sidebarFoot">v0.1.0</div>
@@ -359,6 +410,13 @@ export const ADMIN_HTML = `<!DOCTYPE html>
       <div class="stat-grid" id="statGrid"></div>
       <div class="section-title">Session Terbaru</div>
       <div id="recentWrap"></div>
+    </div>
+
+    <!-- Page: AI Settings -->
+    <div class="page" id="page-settings">
+      <div id="settingsWrap">
+        <div class="empty"><span class="spin"></span> Memuat...</div>
+      </div>
     </div>
 
   </div>
@@ -444,7 +502,7 @@ function goPage(name) {
   document.querySelectorAll(".nav-item").forEach(n => n.classList.remove("active"));
   document.getElementById("page-" + name).classList.add("active");
   document.querySelector('.nav-item[data-page="' + name + '"]').classList.add("active");
-  const titles = { sessions: "Sessions", overview: "Overview" };
+  const titles = { sessions: "Sessions", overview: "Overview", settings: "AI Settings" };
   document.getElementById("pageTitle").textContent = titles[name] || name;
   const topActions = document.getElementById("topActions");
   if (name === "sessions") {
@@ -452,8 +510,87 @@ function goPage(name) {
   } else if (name === "overview") {
     topActions.innerHTML = '<button class="primary" onclick="loadOverview()">⟳ Refresh</button>';
     loadOverview();
+  } else if (name === "settings") {
+    topActions.innerHTML = '';
+    loadSettings();
   } else {
     topActions.innerHTML = '';
+  }
+}
+
+// ── AI Settings ──
+let settingsCache = null;
+async function loadSettings() {
+  const wrap = document.getElementById("settingsWrap");
+  wrap.innerHTML = '<div class="empty"><span class="spin"></span> Memuat...</div>';
+  try {
+    settingsCache = await api("/api/ai-settings");
+    renderSettings();
+  } catch (e) {
+    wrap.innerHTML = '<div class="empty">Gagal: ' + esc(e.message) + '</div>';
+  }
+}
+function renderSettings() {
+  const s = settingsCache || {};
+  const enabled = s.enabled === true;
+  const statusBadge = enabled
+    ? '<span class="status-badge override">OVERRIDE AKTIF</span>'
+    : '<span class="status-badge env">ENV (default)</span>';
+  const disabledAttr = enabled ? '' : 'disabled';
+  const apiKeyPlaceholder = s.hasApiKey ? s.apiKey + " (kosongkan untuk tetap)" : "paste your key";
+  const html =
+    '<div class="settings-form">' +
+      '<div class="toggle-row">' +
+        '<div><div class="label">Aktifkan Override Provider</div>' +
+        '<div class="desc">Saat aktif, config AI diambil dari settingan ini (bukan env). Saat nonaktif, kembali ke env.</div></div>' +
+        '<div class="toggle ' + (enabled ? 'on' : '') + '" id="aiToggle" onclick="toggleAi()"></div>' +
+      '</div>' +
+      '<div style="margin-bottom:20px">Status saat ini: ' + statusBadge +
+        (s.updatedAt ? ' · Update: ' + fmtDate(s.updatedAt) : '') + '</div>' +
+      '<div class="form-field"><label>Provider</label>' +
+        '<select id="setProvider" ' + disabledAttr + '>' +
+          '<option value="custom"' + (s.provider === 'custom' ? ' selected' : '') + '>custom (OpenAI-compatible)</option>' +
+        '</select></div>' +
+      '<div class="form-field"><label>Custom Provider Name</label>' +
+        '<input type="text" id="setName" value="' + esc(s.customProviderName) + '" placeholder="custom" ' + disabledAttr + '></div>' +
+      '<div class="form-field"><label>Base URL</label>' +
+        '<input type="text" id="setBaseUrl" value="' + esc(s.baseUrl) + '" placeholder="https://api.example.com/v1" ' + disabledAttr + '>' +
+        '<div class="form-help">OpenAI-compatible root URL. Siberflow appends /chat/completions.</div></div>' +
+      '<div class="form-field"><label>API Key</label>' +
+        '<input type="password" id="setApiKey" value="' + esc(enabled ? s.apiKey : '') + '" placeholder="' + apiKeyPlaceholder + '" ' + disabledAttr + '></div>' +
+      '<div class="form-field"><label>Default Model</label>' +
+        '<input type="text" id="setModel" value="' + esc(s.customDefaultModel) + '" placeholder="model-name" ' + disabledAttr + '></div>' +
+      '<div style="display:flex;gap:8px;margin-top:8px">' +
+        '<button class="primary" onclick="saveSettings()">💾 Simpan</button>' +
+      '</div>' +
+    '</div>';
+  document.getElementById("settingsWrap").innerHTML = html;
+}
+function toggleAi() {
+  if (!settingsCache) return;
+  settingsCache.enabled = !settingsCache.enabled;
+  renderSettings();
+}
+async function saveSettings() {
+  const body = {
+    enabled: settingsCache.enabled === true,
+    provider: document.getElementById("setProvider").value,
+    customProviderName: document.getElementById("setName").value,
+    baseUrl: document.getElementById("setBaseUrl").value,
+    apiKey: document.getElementById("setApiKey").value,
+    customDefaultModel: document.getElementById("setModel").value,
+  };
+  try {
+    const d = await api("/api/ai-settings", { method: "POST", body: JSON.stringify(body) });
+    if (d.ok) {
+      settingsCache = { ...settingsCache, ...d.settings, enabled: body.enabled };
+      toast("Settings tersimpan. " + (body.enabled ? "Override aktif." : "Kembali ke env."), true);
+      renderSettings();
+    } else {
+      toast("Gagal: " + (d.error || "unknown"), false);
+    }
+  } catch (e) {
+    toast("Gagal: " + e.message, false);
   }
 }
 

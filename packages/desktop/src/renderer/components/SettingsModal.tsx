@@ -91,6 +91,10 @@ export const SettingsModal = memo(function SettingsModal({
     void ipc().saveSettings(
       {
         ...form,
+        // For the custom provider the "Default model" field above is the
+        // authoritative model — clear any stale model override so it can't
+        // silently shadow the custom default model the user just configured.
+        ...(form.provider === "custom" ? { model: "" } : {}),
         customProvider: {
           name: form.customProvider.name.trim() || "custom",
           baseUrl: form.customProvider.baseUrl.trim().replace(/\/+$/, ""),
@@ -164,6 +168,7 @@ export const SettingsModal = memo(function SettingsModal({
                   onChange={(e) => setCustomProvider("defaultModel", e.target.value)}
                   placeholder="model-name"
                 />
+                <div className="form-help">The model used for this custom provider. This is the authoritative model — the general "Model override" below is hidden for custom providers.</div>
               </div>
             </>
           )}
@@ -179,15 +184,18 @@ export const SettingsModal = memo(function SettingsModal({
             <div className="form-help">Stored encrypted via OS keychain (safeStorage).</div>
           </div>
           {error && <div className="form-help form-error">{error}</div>}
-          <div className="form-row">
-            <label>Model override</label>
-            <input
-              type="text"
-              value={form.model}
-              onChange={(e) => set("model", e.target.value)}
-              placeholder="(leave empty for provider default)"
-            />
-          </div>
+          {form.provider !== "custom" && (
+            <div className="form-row">
+              <label>Model override</label>
+              <input
+                type="text"
+                value={form.model}
+                onChange={(e) => set("model", e.target.value)}
+                placeholder="(leave empty for provider default)"
+              />
+              <div className="form-help">Optional. Overrides the provider's default model when non-empty.</div>
+            </div>
+          )}
         </div>
 
         <div className="form-section">
