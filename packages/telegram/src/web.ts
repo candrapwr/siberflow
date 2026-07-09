@@ -24,18 +24,25 @@ import {
 } from "@siberflow/core";
 import type { TelegramApi } from "./index.js";
 import { ADMIN_HTML } from "./web-ui.js";
+import { LOGIN_HTML } from "./login-page.js";
 import {
   isMaskedApiKey,
   maskApiKey,
   type TelegramAiSettings,
 } from "./settings.js";
+import {
+  approveLogin,
+  pollLogin,
+  revokeSession,
+  startLogin,
+  verifySession,
+} from "./auth.js";
 
 /** Options passed from main() to start the admin web service. */
 export interface WebServiceOptions {
   api: TelegramApi;
   workdirRoot: string;
   port: number;
-  token: string;
   /** Returns the current AI provider override settings (for GET endpoint). */
   getAiSettings: () => TelegramAiSettings;
   /** Applies new AI settings (persist + rebuild agents). May throw on invalid. */
@@ -150,9 +157,9 @@ function buildMessageRows(session: Session): MessageRow[] {
  * listen() is non-blocking.
  */
 export async function startWebService(opts: WebServiceOptions): Promise<Server> {
-  const { api, workdirRoot, port, token, getAiSettings, applyAiSettings } = opts;
+  const { api, workdirRoot, port, getAiSettings, applyAiSettings } = opts;
   const server = createServer((req, res) => {
-    void handleRequest(req, res, { api, workdirRoot, token, getAiSettings, applyAiSettings }).catch((err) => {
+    void handleRequest(req, res, { api, workdirRoot, getAiSettings, applyAiSettings }).catch((err) => {
       console.error(`Admin web error: ${(err as Error).message}`);
       sendJson(res, 500, { error: "Internal server error" });
     });
@@ -163,14 +170,13 @@ export async function startWebService(opts: WebServiceOptions): Promise<Server> 
   return server;
 }
 
-/** Route a single HTTP request. All routes require the bearer token. */
+/** Route a single HTTP request. Public routes (login) bypass session auth. */
 async function handleRequest(
   req: IncomingMessage,
   res: ServerResponse,
   ctx: {
     api: TelegramApi;
     workdirRoot: string;
-    token: string;
     getAiSettings: () => TelegramAiSettings;
     applyAiSettings: (s: TelegramAiSettings) => Promise<void>;
   },
@@ -178,15 +184,46 @@ async function handleRequest(
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   const path = url.pathname;
 
-  // Token auth: accept either ?token= (for the HTML page / browser fetch) or
-  // Authorization: Bearer <token> (for API clients). 401 on mismatch.
-  const tokenParam = url.searchParams.get("token");
-  const authHeader = req.headers.authorization;
-  const bearerToken = authHeader?.startsWith("Bearer ")
-    ? authHeader.slice(7)
-    : null;
-  const providedToken = tokenParam ?? bearerToken;
-  if (providedToken !== ctx.token) {
+  // ── Public auth routes (no session required) ───────────────────────────
+  if (path === "/api/login/start" && req.method === "GET") {
+    const code = startLogin();
+    sendJson(res, 200, { code });
+    return;
+  }
+  if (path === "/api/login/poll" && req.method === "GET") {
+    const code = url.searchParams.get("code") ?? "";
+    const result = pollLogin(code);
+    sendJson(res, 200, result);
+    return;
+  }
+  if (path === "/api/logout" && req.method === "POST") {
+    const token = extractSessionToken(req);
+    if (token) revokeSession(token);
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  // ── Session auth: every other route requires a valid session token ─────
+  const sessionToken = extractSessionToken(req);
+  const adminUserId = sessionToken ? verifySession(sessionToken) : null;
+
+  // HTML page: serve login page when unauthenticated, dashboard when authed.
+  if (path === "/" || path === "/index.html") {
+    if (adminUserId) {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(ADMIN_HTML);
+    } else {
+      // Start a login flow and inject the code into the login page.
+      const code = startLogin();
+      const html = LOGIN_HTML.replaceAll("__CODE__", code);
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(html);
+    }
+    return;
+  }
+
+  // All remaining routes (API) require a valid session.
+  if (!adminUserId) {
     sendJson(res, 401, { error: "Unauthorized" });
     return;
   }
@@ -686,6 +723,19 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
   } catch {
     return {};
   }
+}
+
+/**
+ * Extract the session token from a request. Accepts the
+ * `Authorization: Bearer <token>` header (used by the dashboard's fetch calls
+ * after login) so the token lives in memory/localStorage, never in a URL.
+ */
+function extractSessionToken(req: IncomingMessage): string | null {
+  const authHeader = req.headers.authorization;
+  if (authHeader?.startsWith("Bearer ")) {
+    return authHeader.slice(7).trim() || null;
+  }
+  return null;
 }
 
 /** Send a JSON response with the given status code. */

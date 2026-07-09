@@ -432,7 +432,10 @@ export const ADMIN_HTML = `<!DOCTYPE html>
       <span class="icon">🔧</span> Tools
     </button>
   </nav>
-  <div class="sidebar-foot" id="sidebarFoot">v0.1.0</div>
+  <div class="sidebar-foot">
+    <div>v0.1.0</div>
+    <button onclick="logout()" style="margin-top:8px;width:100%;font-size:12px">🚪 Logout</button>
+  </div>
 </aside>
 
 <!-- Main -->
@@ -521,8 +524,27 @@ export const ADMIN_HTML = `<!DOCTYPE html>
 <div class="toast" id="toast"></div>
 
 <script>
-const TOKEN = new URLSearchParams(location.search).get("token") || "";
+// Session token is stored in localStorage after login (the login page sets it).
+// If absent, the server served the login page instead of this dashboard.
+const TOKEN = localStorage.getItem("admin_session") || "";
 const headers = { "Authorization": "Bearer " + TOKEN, "Content-Type": "application/json" };
+
+// If the session became invalid (expired / revoked), kick back to login.
+async function api(path, opts) {
+  const res = await fetch(path, { headers, ...(opts || {}) });
+  if (res.status === 401) {
+    localStorage.removeItem("admin_session");
+    location.reload();
+    throw new Error("Session expired");
+  }
+  return res.json();
+}
+
+async function logout() {
+  try { await fetch("/api/logout", { method: "POST", headers }); } catch {}
+  localStorage.removeItem("admin_session");
+  location.reload();
+}
 
 function fmtSize(bytes) {
   if (!bytes) return "0 B";
@@ -543,10 +565,6 @@ function toast(msg, ok) {
   t.textContent = msg;
   t.className = "toast show " + (ok ? "ok" : "err");
   setTimeout(() => t.className = "toast", 4000);
-}
-async function api(path, opts) {
-  const res = await fetch(path, { headers, ...(opts || {}) });
-  return res.json();
 }
 
 // ── Navigation ──
