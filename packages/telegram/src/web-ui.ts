@@ -362,6 +362,49 @@ export const ADMIN_HTML = `<!DOCTYPE html>
   }
   .status-badge.env { background: #1e3a5f; color: #6cb0ff; }
   .status-badge.override { background: #1e3d2f; color: #4ade80; }
+
+  /* ── Tools panel ── */
+  .tools-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .tool-cat {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+  }
+  .tool-cat-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--muted);
+    margin-bottom: 10px;
+    font-weight: 600;
+  }
+  .tool-opt {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 0;
+    cursor: pointer;
+  }
+  .tool-opt input { width: auto; cursor: pointer; }
+  .tool-opt .tn { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; }
+  .tool-opt .td { color: var(--muted); font-size: 11px; }
+  .tool-opt.locked { opacity: 0.5; cursor: not-allowed; }
+  .tool-opt.locked input { cursor: not-allowed; }
+  .tool-badge-exec {
+    display: inline-block;
+    background: #3d2f1e;
+    color: var(--tool);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 10px;
+    margin-left: 4px;
+  }
 </style>
 </head>
 <body>
@@ -384,6 +427,9 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     </button>
     <button class="nav-item" data-page="settings" onclick="goPage('settings')">
       <span class="icon">⚙</span> AI Settings
+    </button>
+    <button class="nav-item" data-page="tools" onclick="goPage('tools')">
+      <span class="icon">🔧</span> Tools
     </button>
   </nav>
   <div class="sidebar-foot" id="sidebarFoot">v0.1.0</div>
@@ -415,6 +461,13 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     <!-- Page: AI Settings -->
     <div class="page" id="page-settings">
       <div id="settingsWrap">
+        <div class="empty"><span class="spin"></span> Memuat...</div>
+      </div>
+    </div>
+
+    <!-- Page: Tools -->
+    <div class="page" id="page-tools">
+      <div id="toolsWrap">
         <div class="empty"><span class="spin"></span> Memuat...</div>
       </div>
     </div>
@@ -502,7 +555,7 @@ function goPage(name) {
   document.querySelectorAll(".nav-item").forEach(n => n.classList.remove("active"));
   document.getElementById("page-" + name).classList.add("active");
   document.querySelector('.nav-item[data-page="' + name + '"]').classList.add("active");
-  const titles = { sessions: "Sessions", overview: "Overview", settings: "AI Settings" };
+  const titles = { sessions: "Sessions", overview: "Overview", settings: "AI Settings", tools: "Tools" };
   document.getElementById("pageTitle").textContent = titles[name] || name;
   const topActions = document.getElementById("topActions");
   if (name === "sessions") {
@@ -513,6 +566,9 @@ function goPage(name) {
   } else if (name === "settings") {
     topActions.innerHTML = '';
     loadSettings();
+  } else if (name === "tools") {
+    topActions.innerHTML = '';
+    loadTools();
   } else {
     topActions.innerHTML = '';
   }
@@ -560,8 +616,39 @@ function renderSettings() {
         '<input type="password" id="setApiKey" value="' + esc(enabled ? s.apiKey : '') + '" placeholder="' + apiKeyPlaceholder + '" ' + disabledAttr + '></div>' +
       '<div class="form-field"><label>Default Model</label>' +
         '<input type="text" id="setModel" value="' + esc(s.customDefaultModel) + '" placeholder="model-name" ' + disabledAttr + '></div>' +
+      '<hr style="border:none;border-top:1px solid var(--border);margin:24px 0">' +
+      '<div class="section-title" style="margin-bottom:16px">Image Generator Override</div>' +
+      (function() {
+        const igEnabled = s.imageGenEnabled === true;
+        const igStatus = igEnabled
+          ? '<span class="status-badge override">OVERRIDE AKTIF</span>'
+          : '<span class="status-badge env">ENV (default)</span>';
+        const igDisabled = igEnabled ? '' : 'disabled';
+        const igKeyPlaceholder = s.hasImageGenApiKey ? s.imageGenApiKey + ' (kosongkan untuk tetap)' : 'paste image gen key';
+        return '' +
+          '<div class="toggle-row">' +
+            '<div><div class="label">Aktifkan Override Image Gen</div>' +
+            '<div class="desc">Override config untuk tool image_gen (bukan model utama).</div></div>' +
+            '<div class="toggle ' + (igEnabled ? 'on' : '') + '" id="igToggle" onclick="toggleIg()"></div>' +
+          '</div>' +
+          '<div style="margin-bottom:20px">Status image gen: ' + igStatus + '</div>' +
+          '<div class="form-field"><label>Provider</label>' +
+            '<select id="setIgProvider" ' + igDisabled + '>' +
+              '<option value="openai"' + (s.imageGenProvider === 'openai' ? ' selected' : '') + '>openai (gpt-image)</option>' +
+              '<option value="deepinfra"' + (s.imageGenProvider === 'deepinfra' ? ' selected' : '') + '>deepinfra (FLUX)</option>' +
+              '<option value="novita"' + (s.imageGenProvider === 'novita' ? ' selected' : '') + '>novita (Seedream)</option>' +
+              '<option value="qwen"' + (s.imageGenProvider === 'qwen' ? ' selected' : '') + '>qwen (Wanxiang)</option>' +
+              '<option value="grok"' + (s.imageGenProvider === 'grok' ? ' selected' : '') + '>grok (FLUX)</option>' +
+            '</select></div>' +
+          '<div class="form-field"><label>API Key</label>' +
+            '<input type="password" id="setIgApiKey" value="' + esc(igEnabled ? s.imageGenApiKey : '') + '" placeholder="' + igKeyPlaceholder + '" ' + igDisabled + '></div>' +
+          '<div class="form-field"><label>Model</label>' +
+            '<input type="text" id="setIgModel" value="' + esc(s.imageGenModel) + '" placeholder="(default per provider)" ' + igDisabled + '></div>' +
+          '<div class="form-field"><label>Base URL</label>' +
+            '<input type="text" id="setIgBaseUrl" value="' + esc(s.imageGenBaseUrl) + '" placeholder="(default per provider)" ' + igDisabled + '></div>';
+      })() +
       '<div style="display:flex;gap:8px;margin-top:8px">' +
-        '<button class="primary" onclick="saveSettings()">💾 Simpan</button>' +
+        '<button class="primary" onclick="saveSettings()">💾 Simpan Semua</button>' +
       '</div>' +
     '</div>';
   document.getElementById("settingsWrap").innerHTML = html;
@@ -569,6 +656,11 @@ function renderSettings() {
 function toggleAi() {
   if (!settingsCache) return;
   settingsCache.enabled = !settingsCache.enabled;
+  renderSettings();
+}
+function toggleIg() {
+  if (!settingsCache) return;
+  settingsCache.imageGenEnabled = !settingsCache.imageGenEnabled;
   renderSettings();
 }
 async function saveSettings() {
@@ -579,13 +671,126 @@ async function saveSettings() {
     baseUrl: document.getElementById("setBaseUrl").value,
     apiKey: document.getElementById("setApiKey").value,
     customDefaultModel: document.getElementById("setModel").value,
+    imageGenEnabled: settingsCache.imageGenEnabled === true,
+    imageGenProvider: document.getElementById("setIgProvider").value,
+    imageGenApiKey: document.getElementById("setIgApiKey").value,
+    imageGenModel: document.getElementById("setIgModel").value,
+    imageGenBaseUrl: document.getElementById("setIgBaseUrl").value,
   };
   try {
     const d = await api("/api/ai-settings", { method: "POST", body: JSON.stringify(body) });
     if (d.ok) {
-      settingsCache = { ...settingsCache, ...d.settings, enabled: body.enabled };
-      toast("Settings tersimpan. " + (body.enabled ? "Override aktif." : "Kembali ke env."), true);
+      settingsCache = { ...settingsCache, ...d.settings, enabled: body.enabled, imageGenEnabled: body.imageGenEnabled };
+      toast("Settings tersimpan.", true);
       renderSettings();
+    } else {
+      toast("Gagal: " + (d.error || "unknown"), false);
+    }
+  } catch (e) {
+    toast("Gagal: " + e.message, false);
+  }
+}
+
+// ── Tools panel ──
+let toolsCache = null;
+let toolsSelection = new Set();  // currently checked tool names in the UI
+async function loadTools() {
+  const wrap = document.getElementById("toolsWrap");
+  wrap.innerHTML = '<div class="empty"><span class="spin"></span> Memuat...</div>';
+  try {
+    toolsCache = await api("/api/tools");
+    // Initialize the selection to the active set.
+    toolsSelection = new Set(toolsCache.active || []);
+    renderTools();
+  } catch (e) {
+    wrap.innerHTML = '<div class="empty">Gagal: ' + esc(e.message) + '</div>';
+  }
+}
+function renderTools() {
+  const override = toolsCache.toolsOverride === true;
+  const statusBadge = override
+    ? '<span class="status-badge override">OVERRIDE AKTIF</span>'
+    : '<span class="status-badge env">ENV (default)</span>';
+  const activeSet = override ? toolsSelection : new Set(toolsCache.env || []);
+  // When override is off, checkboxes reflect env state and are disabled.
+  const disabledAttr = override ? '' : 'disabled';
+
+  let grid = '';
+  for (const cat of toolsCache.catalog) {
+    let opts = '';
+    for (const t of cat.tools) {
+      const checked = activeSet.has(t.name);
+      const isExec = t.name === 'exec';
+      const execNote = isExec ? '<span class="tool-badge-exec">admin only</span>' : '';
+      opts += '<label class="tool-opt' + (override ? '' : ' locked') + '">' +
+        '<input type="checkbox" data-tool="' + esc(t.name) + '" ' +
+          (checked ? 'checked' : '') + ' ' + disabledAttr +
+          (override ? ' onchange="toggleTool(\\''+t.name+'\\', this.checked)"' : '') + '>' +
+        '<span class="tn">' + esc(t.name) + execNote + '</span>' +
+        '<span class="td">— ' + esc(t.description) + '</span>' +
+      '</label>';
+    }
+    grid += '<div class="tool-cat"><div class="tool-cat-title">' + esc(cat.category) + '</div>' + opts + '</div>';
+  }
+
+  const html =
+    '<div class="toggle-row">' +
+      '<div><div class="label">Aktifkan Override Tools</div>' +
+        '<div class="desc">Saat aktif, tool diambil dari centangan di bawah (bukan env). Saat nonaktif, kembali ke SIBERFLOW_TELEGRAM_TOOLS.</div></div>' +
+      '<div class="toggle ' + (override ? 'on' : '') + '" onclick="toggleToolsOverride()"></div>' +
+    '</div>' +
+    '<div style="margin-bottom:16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">' +
+      '<span>Status: ' + statusBadge + '</span>' +
+      '<span class="muted" style="font-size:12px">' + activeSet.size + ' tool aktif</span>' +
+    '</div>' +
+    (override
+      ? '<div style="display:flex;gap:8px;margin-bottom:16px">' +
+          '<button onclick="loadEnvTools()">📥 Muat dari Env</button>' +
+          '<button class="primary" onclick="saveTools()">💾 Simpan & Terapkan</button>' +
+        '</div>'
+      : '<div class="form-help" style="margin-bottom:16px">Aktifkan override untuk mengubah centangan. Tombol "Muat dari Env" akan menyalin config dari SIBERFLOW_TELEGRAM_TOOLS.</div>') +
+    '<div class="tools-grid">' + grid + '</div>' +
+    (override
+      ? '<div style="display:flex;gap:8px"><button class="primary" onclick="saveTools()">💾 Simpan & Terapkan</button></div>'
+      : '');
+  document.getElementById("toolsWrap").innerHTML = html;
+}
+function toggleTool(name, checked) {
+  if (checked) toolsSelection.add(name);
+  else toolsSelection.delete(name);
+}
+async function toggleToolsOverride() {
+  if (!toolsCache) return;
+  toolsCache.toolsOverride = !toolsCache.toolsOverride;
+  // When turning ON, seed the selection from env so the user sees the current state.
+  if (toolsCache.toolsOverride) {
+    toolsSelection = new Set(toolsCache.env || []);
+  }
+  // Persist the toggle immediately so the backend knows.
+  await persistTools();
+  renderTools();
+}
+function loadEnvTools() {
+  toolsSelection = new Set(toolsCache.env || []);
+  renderTools();
+  toast('Centangan dimuat dari env (' + toolsSelection.size + ' tool). Klik Simpan untuk menerapkan.', true);
+}
+async function saveTools() {
+  await persistTools();
+  toast('Tools tersimpan & diterapkan. ' + (toolsCache.toolsOverride ? 'Override aktif.' : 'Kembali ke env.'), true);
+  renderTools();
+}
+async function persistTools() {
+  // Save via the ai-settings endpoint (merge into existing settings).
+  const body = {
+    toolsOverride: toolsCache.toolsOverride === true,
+    enabledTools: Array.from(toolsSelection),
+  };
+  try {
+    const d = await api("/api/ai-settings", { method: "POST", body: JSON.stringify(body) });
+    if (d.ok) {
+      toolsCache.toolsOverride = body.toolsOverride;
+      toolsCache.active = body.enabledTools;
     } else {
       toast("Gagal: " + (d.error || "unknown"), false);
     }

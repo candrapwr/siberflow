@@ -197,8 +197,11 @@ Features:
 - **Workdir browser** — recursive file tree of the session's workspace directory with file sizes.
 - **Delete session** — removes the session JSON (including optimized siblings) and the workdir. Requires confirmation.
 - **Send message** — send a text message to any chat by ID (with optional thread ID) directly from the UI; a per-row "fill chat ID" button pre-fills the form from a session. Telegram errors (e.g. "chat not found", "Forbidden: bot can't initiate conversation") are surfaced back to the UI.
+- **AI Settings override** — override the bot's model provider at runtime without editing `.env`. Toggle on, fill provider name, base URL, API key, and default model (custom OpenAI-compatible). Toggle off to fall back to `SIBERFLOW_TELEGRAM_*` env vars. Changes rebuild all cached Agents immediately and persist to `~/.siberflow/telegram-settings.json`.
+- **Image generator override** — independently override the `image_gen` tool's provider/key/model/base URL from the same panel, without touching the main model provider.
+- **Tools panel** — toggle which opt-in tools the bot exposes via a checkbox grid (File, Shell, Database, SSH, Documents, Browser, Image, Search, Music, Bot, Speech). A "Load from Env" button seeds the checkboxes from `SIBERFLOW_TELEGRAM_TOOLS`. When disabled, tools fall back to env. The `exec` tool is always shown but remains **admin-private-chat-only** regardless of the override — the panel cannot grant shell access to groups or non-admins.
 
-The web service uses Node's built-in `http` module — no extra dependencies. It is implemented in `packages/telegram/src/web.ts` and `packages/telegram/src/web-ui.ts`.
+All overrides persist to `~/.siberflow/telegram-settings.json` and survive restarts. The web service uses Node's built-in `http` module — no extra dependencies. Implemented in `packages/telegram/src/web.ts`, `packages/telegram/src/web-ui.ts`, and `packages/telegram/src/settings.ts`.
 
 ## VS Code Extension
 
@@ -531,6 +534,46 @@ SIBERFLOW_TELEGRAM_TOOLS=run_browser,bot_script,music_generate
 
 The tool accepts `prompt`, `lyrics`, and `duration`. Duration is intentionally capped to 30-180 seconds; short lyrics should use 30 seconds.
 
+## Image Generation Tool (`image_gen`)
+
+`image_gen` generates a new image from a text prompt or edits an existing image file via an external image API, then saves the result inside the active workdir. Use it to create, draw, or edit images, illustrations, logos, or artwork.
+
+It supports two modes:
+
+- **Generate** — omit `image`; the provider creates a new image from `prompt`.
+- **Edit** — pass a local image path in `image` (inside the workdir); the provider modifies that image per `prompt`.
+
+### Supported providers
+
+| Provider | Generation | Edit | Default model | Default base URL |
+|---|---|---|---|---|
+| `openai` | ✓ (`/images/generations`) | ✓ (`/images/edits`, multipart) | `gpt-image-1` | `https://api.openai.com/v1` |
+| `deepinfra` | ✓ (OpenAI-compatible) | ✓ | `black-forest-labs/FLUX-1-schnell` | `https://api.deepinfra.com/v1` |
+| `novita` | ✓ (Seedream) | ✓ (base64 image) | `seedream-5.0-lite` | `https://api.novita.ai` |
+| `qwen` | ✓ (Wanxiang, async task) | ✓ (img2img) | `wanx2.1-turbo` | `https://dashscope.aliyuncs.com` |
+| `grok` | ✓ (FLUX-based) | — | `grok-2-image` | `https://api.x.ai/v1` |
+
+Qwen is asynchronous: the tool submits a task and polls until it completes, which can take several seconds.
+
+### Configuration
+
+```bash
+SIBERFLOW_IMAGE_GEN_PROVIDER=openai
+SIBERFLOW_IMAGE_GEN_API_KEY=...
+# optional per-provider overrides:
+# SIBERFLOW_IMAGE_GEN_MODEL=gpt-image-1
+# SIBERFLOW_IMAGE_GEN_BASE_URL=https://api.openai.com/v1
+```
+
+Enable it like any other opt-in tool:
+
+```bash
+SIBERFLOW_TOOLS=...,image_gen
+SIBERFLOW_TELEGRAM_TOOLS=run_browser,bot_script,image_gen
+```
+
+The tool accepts `prompt` (required), `image` (optional path for edit mode), `outputPath` (optional), and `size` (`1024x1024` / `1792x1024` / `1024x1792`). Provider support for `size` varies. The result is written to `generated-images/<timestamp>-<slug>.png` by default.
+
 ## Bot Script Tool (`bot_script`)
 
 `bot_script` is an opt-in core tool backed by the active bot host. In Telegram it runs a JavaScript body inside a locked-down `node:vm` sandbox with a `bot` helper that exposes a curated slice of the Telegram Bot API. It does not include file manipulation helpers — enable `read_file`, `write_file`, `edit_file`, `copy_file`, `list_dir`, `delete_file`, or `grep` separately when the bot should work with files in its session workdir.
@@ -580,13 +623,16 @@ Default enabled tools are only:
 read_file,write_file,edit_file,copy_file,list_dir,delete_file,grep
 ```
 
-Other tools such as `exec`, `db_query`, `ssh_exec`, `sftp`, `excel_script`, `docx_script`, `pdf_script`, `run_browser`, `analyze_image`, `music_generate`, and `bot_script` are opt-in. `task_update` and `ask_user` are core UX tools and are always available.
+Other tools such as `exec`, `db_query`, `ssh_exec`, `sftp`, `excel_script`, `docx_script`, `pdf_script`, `run_browser`, `analyze_image`, `image_gen`, `music_generate`, and `bot_script` are opt-in. `task_update` and `ask_user` are core UX tools and are always available.
 
 | Interface | How to configure |
 |---|---|
 | **CLI** | `SIBERFLOW_TOOLS=read_file,write_file,edit_file,copy_file,list_dir,delete_file,grep,run_browser` |
 | **VS Code** | `siberflow.enabledTools` plus the settings UI checkbox grid |
 | **Desktop** | Settings modal -> Tools |
+| **Telegram** | `SIBERFLOW_TELEGRAM_TOOLS` env, or the **Tools panel** in the admin web service (runtime override, no restart needed) |
+
+In Telegram, the enabled-tool set can be overridden at runtime from the admin web service's **Tools** panel — a checkbox grid covering all 22 opt-in tools, with a "Load from Env" button. The override is independent of the provider and image-gen overrides, and the `exec` tool remains admin-private-chat-only regardless of the panel setting.
 
 ## Developer Docs
 
