@@ -141,6 +141,10 @@ SIBERFLOW_TELEGRAM_TOOLS=run_browser,analyze_image,bot_script
 # real forum topics get their own session. Set "true" if your group is NOT a
 # forum but you still see sessions splitting by thread id.
 SIBERFLOW_TELEGRAM_ONE_SESSION_PER_CHAT=false
+# Admin web service (local-only session management UI). Leave the token empty
+# to auto-generate a random one, printed to the console at startup.
+SIBERFLOW_TELEGRAM_ADMIN_TOKEN=
+SIBERFLOW_TELEGRAM_ADMIN_PORT=7070
 ```
 
 #### Session isolation per topic (forum groups)
@@ -175,6 +179,26 @@ Commands:
 - `/start` - short bot introduction
 - `/reset` - delete the current Telegram chat/thread session
 - `/siberflow <message>` - optional explicit prefix in groups
+
+### Admin Web Service
+
+When the bot starts, a local-only admin web service launches alongside it for managing Telegram sessions. It binds to `127.0.0.1` only (never exposed to the network) and requires a bearer token on every request. If `SIBERFLOW_TELEGRAM_ADMIN_TOKEN` is unset, a random token is generated and the full URL — including the token — is printed to the console at startup, for example:
+
+```text
+Admin web service: http://127.0.0.1:7070/?token=853e708e88136bc8522a398904b8f4934564e3e7416715f8
+```
+
+Open that URL in a browser to access the management UI. Only Telegram sessions (id prefixed `telegram-`) are exposed.
+
+Features:
+
+- **Session list** — every private chat, group, supergroup, and forum thread, with name, chat type, chat ID, username, message count, known-member count, and last-updated time. Data is read from the raw (non-optimized) session JSON.
+- **Message detail** — opens a structured log table of the session's full history: index, role (color-coded: system/user/assistant/tool), content (click to expand; long system prompts are truncated with a "show all" affordance), and tool columns showing `🔧 tool_name` badges with pretty-printed JSON arguments, plus `← tool_name` markers on tool-result rows.
+- **Workdir browser** — recursive file tree of the session's workspace directory with file sizes.
+- **Delete session** — removes the session JSON (including optimized siblings) and the workdir. Requires confirmation.
+- **Send message** — send a text message to any chat by ID (with optional thread ID) directly from the UI; a per-row "fill chat ID" button pre-fills the form from a session. Telegram errors (e.g. "chat not found", "Forbidden: bot can't initiate conversation") are surfaced back to the UI.
+
+The web service uses Node's built-in `http` module — no extra dependencies. It is implemented in `packages/telegram/src/web.ts` and `packages/telegram/src/web-ui.ts`.
 
 ## VS Code Extension
 
