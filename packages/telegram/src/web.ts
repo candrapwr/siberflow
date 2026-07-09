@@ -193,13 +193,30 @@ async function handleRequest(
   if (path === "/api/login/poll" && req.method === "GET") {
     const code = url.searchParams.get("code") ?? "";
     const result = pollLogin(code);
+    // On approval, set a session cookie so the subsequent page reload carries
+    // the token automatically (browsers send cookies on navigation, unlike
+    // custom headers). The token is also returned in the JSON body for the
+    // localStorage copy used by fetch calls.
+    if (result.status === "approved" && result.token) {
+      res.writeHead(200, {
+        "content-type": "application/json; charset=utf-8",
+        "set-cookie": sessionCookie(result.token),
+      });
+      res.end(JSON.stringify(result));
+      return;
+    }
     sendJson(res, 200, result);
     return;
   }
   if (path === "/api/logout" && req.method === "POST") {
     const token = extractSessionToken(req);
     if (token) revokeSession(token);
-    sendJson(res, 200, { ok: true });
+    // Clear the cookie so the browser stops sending the revoked token.
+    res.writeHead(200, {
+      "content-type": "application/json; charset=utf-8",
+      "set-cookie": clearSessionCookie(),
+    });
+    res.end(JSON.stringify({ ok: true }));
     return;
   }
 
@@ -726,16 +743,44 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
 }
 
 /**
- * Extract the session token from a request. Accepts the
- * `Authorization: Bearer <token>` header (used by the dashboard's fetch calls
- * after login) so the token lives in memory/localStorage, never in a URL.
+ * Extract the session token from a request. Checks, in order:
+ * 1. `Authorization: Bearer <token>` header (sent by the dashboard's fetch calls)
+ * 2. `admin_session` cookie (sent automatically by the browser on EVERY request,
+ *    including page navigation — this is what makes the post-login reload work,
+ *    since navigation requests can't carry custom headers)
  */
 function extractSessionToken(req: IncomingMessage): string | null {
+  // 1. Authorization header (fetch calls from the dashboard JS).
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith("Bearer ")) {
     return authHeader.slice(7).trim() || null;
   }
+  // 2. Cookie (page navigations / reloads — browsers send these automatically).
+  const cookieHeader = req.headers.cookie;
+  if (typeof cookieHeader === "string") {
+    for (const part of cookieHeader.split(";")) {
+      const [k, ...v] = part.trim().split("=");
+      if (k === "admin_session" && v.length > 0) {
+        return decodeURIComponent(v.join("="));
+      }
+    }
+  }
   return null;
+}
+
+/**
+ * Build a Set-Cookie header value for the session token. HttpOnly prevents JS
+ * access (defense in depth), SameSite=Lax allows top-level navigation, and the
+ * path is scoped to "/" so the cookie is sent on every route. Not Secure
+ * because the service binds to 127.0.0.1 (plain HTTP localhost).
+ */
+function sessionCookie(token: string): string {
+  return `admin_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`;
+}
+
+/** Cookie value that clears the session cookie (logout). */
+function clearSessionCookie(): string {
+  return "admin_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0";
 }
 
 /** Send a JSON response with the given status code. */
