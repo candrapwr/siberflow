@@ -105,14 +105,6 @@ export const botScriptTool: Tool = {
       );
     }
 
-    // Log the script body so the admin can see EXACTLY what the AI ran inside
-    // the sandbox (via pm2/server logs). Truncated to keep the log readable.
-    console.log(
-      `[bot_script run] executing (${script.length} chars): ` +
-        script.slice(0, 300).replace(/\n/g, " ⏎ ") +
-        (script.length > 300 ? " …(truncated)" : ""),
-    );
-
     const logs: string[] = [];
     const sandbox = {
       bot: Object.freeze(ctx.botScript),

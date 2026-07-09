@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { marked } from "marked";
@@ -1275,13 +1275,26 @@ class BotRunner {
   }
 
   private async sendStartMessage(message: TelegramMessage): Promise<void> {
-    await this.api.sendMessage({
+    // Welcome screen — rich-formatted (bold/italic via markdown→HTML) so it
+    // reads well in the chat. Kept short but covers what the bot can do, the
+    // commands, and key capabilities. Split into a hero + a capabilities card.
+    await this.api.sendRichMessage({
       chat_id: message.chat.id,
-      text:
-        "Siberflow Telegram bot aktif.\n\n" +
-        "Kirim pesan untuk mulai chat. Session dan workdir dibuat terpisah per chat/thread.\n" +
-        "Gunakan /reset untuk menghapus session chat/thread ini.",
       message_thread_id: message.message_thread_id,
+      text:
+        "# 🤖 SiberflowBot\n\n" +
+        "Halo! Saya **SiberflowBot** — asisten AI serbaguna untuk produktivitas, " +
+        "coding, dan kreativitas, langsung dari Telegram.\n\n" +
+        "Saya bisa membantu Anda dengan:\n" +
+        "- 🎨 **Buat & edit gambar** — generate atau edit gambar dari deskripsi teks\n" +
+        "- 🎵 **Buat musik** — lagu & jingle dari lirik dan prompt\n" +
+        "- 🌐 **Jelajah web** — cari info, baca halaman, automasi browser\n" +
+        "- 📄 **Kelola dokumen** — Excel, Word, PDF (buat, baca, OCR)\n" +
+        "- 💻 **Bantu coding** — analisa, debug, dan tulis kode\n" +
+        "- 🖼️ **Analisa gambar** — deskripsi, OCR, chart, screenshot\n" +
+        "- 🔍 **Cari web** — riset dan baca konten online\n\n" +
+        "_Setiap chat punya sesi & ruang kerja tersendiri. Kirim gambar, dokumen, " +
+        "atau voice note — saya akan menanganinya._",
     });
   }
 
@@ -1616,145 +1629,92 @@ class BotRunner {
         if (typeof text !== "string" || !text.trim()) {
           throw new Error("sendMessage text must be a non-empty string.");
         }
-        const t0 = Date.now();
-        try {
-          const sent = await this.api.sendMessage({
-            chat_id: target.chatId,
-            text,
-            message_thread_id: target.threadId,
-          });
-          console.log(
-            `[bot_script send] sendMessage chat=${target.chatId} ${Date.now() - t0}ms → ok msg=${sent.message_id} text=${text.slice(0, 60).replace(/\n/g, " ⏎ ")}`,
-          );
-          return { message_id: sent.message_id };
-        } catch (err) {
-          console.error(
-            `[bot_script send] sendMessage chat=${target.chatId} ${Date.now() - t0}ms → FAIL: ${(err as Error).message}`,
-          );
-          throw err;
-        }
+        const sent = await this.api.sendMessage({
+          chat_id: target.chatId,
+          text,
+          message_thread_id: target.threadId,
+        });
+        return { message_id: sent.message_id };
       },
       sendPhoto: async (path: string, caption?: string, chatId?: number) => {
         const state = getActiveBotScriptState();
         const target = resolveTarget(chatId);
         const file = await resolveTelegramWorkdirPath(state.workdir, path);
-        const t0 = Date.now();
-        try {
-          const sent = await this.api.sendPhoto({
-            chat_id: target.chatId,
-            path: file,
-            caption,
-            message_thread_id: target.threadId,
-          });
-          void logBotSend("sendPhoto", target.chatId, file, Date.now() - t0, { ok: true, messageId: sent.message_id });
-          return { message_id: sent.message_id };
-        } catch (err) {
-          void logBotSend("sendPhoto", target.chatId, file, Date.now() - t0, { ok: false, error: (err as Error).message });
-          throw err;
-        }
+        const sent = await this.api.sendPhoto({
+          chat_id: target.chatId,
+          path: file,
+          caption,
+          message_thread_id: target.threadId,
+        });
+        return { message_id: sent.message_id };
       },
       sendDocument: async (path: string, caption?: string, chatId?: number) => {
         const state = getActiveBotScriptState();
         const target = resolveTarget(chatId);
         const file = await resolveTelegramWorkdirPath(state.workdir, path);
-        const t0 = Date.now();
-        try {
-          const sent = await this.api.sendDocument({
-            chat_id: target.chatId,
-            path: file,
-            caption,
-            message_thread_id: target.threadId,
-          });
-          void logBotSend("sendDocument", target.chatId, file, Date.now() - t0, { ok: true, messageId: sent.message_id });
-          return { message_id: sent.message_id };
-        } catch (err) {
-          void logBotSend("sendDocument", target.chatId, file, Date.now() - t0, { ok: false, error: (err as Error).message });
-          throw err;
-        }
+        const sent = await this.api.sendDocument({
+          chat_id: target.chatId,
+          path: file,
+          caption,
+          message_thread_id: target.threadId,
+        });
+        return { message_id: sent.message_id };
       },
       sendVideo: async (path: string, caption?: string, chatId?: number) => {
         const state = getActiveBotScriptState();
         const target = resolveTarget(chatId);
         const file = await resolveTelegramWorkdirPath(state.workdir, path);
-        const t0 = Date.now();
-        try {
-          const sent = await this.api.sendMediaFile({
-            method: "sendVideo",
-            field: "video",
-            chat_id: target.chatId,
-            path: file,
-            caption,
-            message_thread_id: target.threadId,
-          });
-          void logBotSend("sendVideo", target.chatId, file, Date.now() - t0, { ok: true, messageId: sent.message_id });
-          return { message_id: sent.message_id };
-        } catch (err) {
-          void logBotSend("sendVideo", target.chatId, file, Date.now() - t0, { ok: false, error: (err as Error).message });
-          throw err;
-        }
+        const sent = await this.api.sendMediaFile({
+          method: "sendVideo",
+          field: "video",
+          chat_id: target.chatId,
+          path: file,
+          caption,
+          message_thread_id: target.threadId,
+        });
+        return { message_id: sent.message_id };
       },
       sendAudio: async (path: string, caption?: string, chatId?: number) => {
         const state = getActiveBotScriptState();
         const target = resolveTarget(chatId);
         const file = await resolveTelegramWorkdirPath(state.workdir, path);
-        const t0 = Date.now();
-        try {
-          const sent = await this.api.sendMediaFile({
-            method: "sendAudio",
-            field: "audio",
-            chat_id: target.chatId,
-            path: file,
-            caption,
-            message_thread_id: target.threadId,
-          });
-          void logBotSend("sendAudio", target.chatId, file, Date.now() - t0, { ok: true, messageId: sent.message_id });
-          return { message_id: sent.message_id };
-        } catch (err) {
-          void logBotSend("sendAudio", target.chatId, file, Date.now() - t0, { ok: false, error: (err as Error).message });
-          throw err;
-        }
+        const sent = await this.api.sendMediaFile({
+          method: "sendAudio",
+          field: "audio",
+          chat_id: target.chatId,
+          path: file,
+          caption,
+          message_thread_id: target.threadId,
+        });
+        return { message_id: sent.message_id };
       },
       sendAnimation: async (path: string, caption?: string, chatId?: number) => {
         const state = getActiveBotScriptState();
         const target = resolveTarget(chatId);
         const file = await resolveTelegramWorkdirPath(state.workdir, path);
-        const t0 = Date.now();
-        try {
-          const sent = await this.api.sendMediaFile({
-            method: "sendAnimation",
-            field: "animation",
-            chat_id: target.chatId,
-            path: file,
-            caption,
-            message_thread_id: target.threadId,
-          });
-          void logBotSend("sendAnimation", target.chatId, file, Date.now() - t0, { ok: true, messageId: sent.message_id });
-          return { message_id: sent.message_id };
-        } catch (err) {
-          void logBotSend("sendAnimation", target.chatId, file, Date.now() - t0, { ok: false, error: (err as Error).message });
-          throw err;
-        }
+        const sent = await this.api.sendMediaFile({
+          method: "sendAnimation",
+          field: "animation",
+          chat_id: target.chatId,
+          path: file,
+          caption,
+          message_thread_id: target.threadId,
+        });
+        return { message_id: sent.message_id };
       },
       sendVoice: async (path: string, caption?: string, chatId?: number) => {
         const state = getActiveBotScriptState();
         const target = resolveTarget(chatId);
         const file = await resolveTelegramWorkdirPath(state.workdir, path);
-        const t0 = Date.now();
-        try {
-          const sent = await this.api.sendMediaFile({
-            method: "sendVoice",
-            field: "voice",
-            chat_id: target.chatId,
-            path: file,
-            caption,
-            message_thread_id: target.threadId,
-          });
-          void logBotSend("sendVoice", target.chatId, file, Date.now() - t0, { ok: true, messageId: sent.message_id });
-          return { message_id: sent.message_id };
-        } catch (err) {
-          void logBotSend("sendVoice", target.chatId, file, Date.now() - t0, { ok: false, error: (err as Error).message });
-          throw err;
-        }
+        const sent = await this.api.sendMediaFile({
+          method: "sendVoice",
+          field: "voice",
+          chat_id: target.chatId,
+          path: file,
+          caption,
+          message_thread_id: target.threadId,
+        });
+        return { message_id: sent.message_id };
       },
       sendLocation: async (
         latitude: number,
@@ -1808,20 +1768,13 @@ class BotRunner {
         for (const p of paths) {
           resolved.push(await resolveTelegramWorkdirPath(state.workdir, p));
         }
-        const t0 = Date.now();
-        try {
-          const sent = await this.api.sendMediaGroup({
-            chat_id: target.chatId,
-            paths: resolved,
-            caption,
-            message_thread_id: target.threadId,
-          });
-          void logBotSend("sendMediaGroup", target.chatId, resolved.join(","), Date.now() - t0, { ok: true, messageId: sent[0]?.message_id ?? 0 });
-          return { messages: sent.map((m) => m.message_id) };
-        } catch (err) {
-          void logBotSend("sendMediaGroup", target.chatId, resolved.join(","), Date.now() - t0, { ok: false, error: (err as Error).message });
-          throw err;
-        }
+        const sent = await this.api.sendMediaGroup({
+          chat_id: target.chatId,
+          paths: resolved,
+          caption,
+          message_thread_id: target.threadId,
+        });
+        return { messages: sent.map((m) => m.message_id) };
       },
       editMessageText: async (messageId: number, text: string) => {
         if (typeof messageId !== "number") {
@@ -1852,23 +1805,12 @@ class BotRunner {
         // user's current message. We model it via a plain sendMessage because
         // the host's sendMessage doesn't expose reply_parameters; the script-
         // level intent ("answer this user") is still satisfied.
-        const t0 = Date.now();
-        try {
-          const sent = await this.api.sendMessage({
-            chat_id: state.message.chat.id,
-            text,
-            message_thread_id: state.message.message_thread_id,
-          });
-          console.log(
-            `[bot_script send] reply chat=${state.message.chat.id} ${Date.now() - t0}ms → ok msg=${sent.message_id} text=${text.slice(0, 60).replace(/\n/g, " ⏎ ")}`,
-          );
-          return { message_id: sent.message_id };
-        } catch (err) {
-          console.error(
-            `[bot_script send] reply chat=${state.message.chat.id} ${Date.now() - t0}ms → FAIL: ${(err as Error).message}`,
-          );
-          throw err;
-        }
+        const sent = await this.api.sendMessage({
+          chat_id: state.message.chat.id,
+          text,
+          message_thread_id: state.message.message_thread_id,
+        });
+        return { message_id: sent.message_id };
       },
       getChat: async () => {
         const state = getActiveBotScriptState();
@@ -2269,39 +2211,6 @@ function isTransientError(err: unknown): boolean {
   ];
   const haystack = `${message} ${code} ${causeMessage}`.toLowerCase();
   return transientSignals.some((sig) => haystack.includes(sig.toLowerCase()));
-}
-
-/**
- * Log a bot_script media send action with full diagnostics for pm2/server
- * log monitoring. Records the method, target chat, file path, byte size,
- * upload duration, and outcome (ok / error). When a send fails, the error
- * is included so the admin can see exactly why Telegram rejected it.
- *
- * Format: `[bot_script send] <method> chat=<chatId> file=<path> size=<bytes> <duration>ms → <result>`
- */
-async function logBotSend(
-  method: string,
-  chatId: number,
-  filePath: string,
-  durationMs: number,
-  result: { ok: true; messageId: number } | { ok: false; error: string },
-): Promise<void> {
-  let size = -1;
-  try {
-    size = (await stat(filePath)).size;
-  } catch {
-    size = -1;
-  }
-  const sizeStr = size >= 0 ? `${size} bytes` : "(stat failed)";
-  if (result.ok) {
-    console.log(
-      `[bot_script send] ${method} chat=${chatId} file=${filePath} size=${sizeStr} ${durationMs}ms → ok msg=${result.messageId}`,
-    );
-  } else {
-    console.error(
-      `[bot_script send] ${method} chat=${chatId} file=${filePath} size=${sizeStr} ${durationMs}ms → FAIL: ${result.error}`,
-    );
-  }
 }
 
 function sessionIdFor(message: TelegramMessage): string {
