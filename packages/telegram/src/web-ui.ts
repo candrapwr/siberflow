@@ -811,8 +811,8 @@ async function savePresetPrompt() {
   // empty), prompt the user to paste the real key before saving.
   if (!apiKey || apiKey.includes("*")) {
     const input = prompt(
-      "API key belum diisi atau masih ter-masked (****).\n" +
-      "Paste API key asli untuk disimpan di preset ini\n" +
+      "API key belum diisi atau masih ter-masked (****).\\n" +
+      "Paste API key asli untuk disimpan di preset ini\\n" +
       "(atau klik Cancel untuk menyimpan preset TANPA key):",
       "",
     );
@@ -883,8 +883,8 @@ async function saveMainPresetPrompt() {
   // Same masked-key guard as the image-gen preset save (see savePresetPrompt).
   if (!apiKey || apiKey.includes("*")) {
     const input = prompt(
-      "API key belum diisi atau masih ter-masked (****).\n" +
-      "Paste API key asli untuk disimpan di preset ini\n" +
+      "API key belum diisi atau masih ter-masked (****).\\n" +
+      "Paste API key asli untuk disimpan di preset ini\\n" +
       "(atau klik Cancel untuk menyimpan preset TANPA key):",
       "",
     );
