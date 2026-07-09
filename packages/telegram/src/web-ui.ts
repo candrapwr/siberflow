@@ -788,20 +788,19 @@ function loadSelectedPreset() {
   const id = document.getElementById("presetSelect").value;
   if (id) loadPreset(id);
 }
-function loadPreset(id) {
-  const p = igPresetsCache.find(function(x) { return x.id === id; });
-  if (!p) return;
-  // Fill the form fields with the preset values. API key is masked in the
-  // cache, so we only fill it if it's a real value (not masked).
-  document.getElementById("setIgProvider").value = p.provider;
-  document.getElementById("setIgModel").value = p.model;
-  document.getElementById("setIgBaseUrl").value = p.baseUrl;
-  // API key from preset is masked (contains *); keep current field value
-  // unless the preset key is unmasked (shouldn't happen via API, but defensive).
-  if (p.apiKey && !p.apiKey.includes("*")) {
-    document.getElementById("setIgApiKey").value = p.apiKey;
+async function loadPreset(id) {
+  try {
+    // Fetch the FULL preset (unmasked API key) from the single-preset endpoint.
+    // The list endpoint masks keys for safety, so we can't rely on it for loading.
+    const p = await api("/api/image-presets/" + encodeURIComponent(id));
+    document.getElementById("setIgProvider").value = p.provider;
+    document.getElementById("setIgModel").value = p.model;
+    document.getElementById("setIgBaseUrl").value = p.baseUrl;
+    document.getElementById("setIgApiKey").value = p.apiKey || "";
+    toast("Preset '" + p.name + "' dimuat. Klik Simpan untuk menerapkan.", true);
+  } catch (e) {
+    toast("Gagal load preset: " + e.message, false);
   }
-  toast("Preset '" + p.name + "' dimuat. API key: " + (p.apiKey ? p.apiKey + " (kosongkan untuk tetap)" : "(tidak ada)") + ". Klik Simpan untuk menerapkan.", true);
 }
 async function savePresetPrompt() {
   const name = prompt("Nama preset:", document.getElementById("setIgProvider").value);
@@ -852,16 +851,17 @@ function loadMainPresetSelected() {
   const id = document.getElementById("mainPresetSelect").value;
   if (id) loadMainPreset(id);
 }
-function loadMainPreset(id) {
-  const p = mainPresetsCache.find(function(x) { return x.id === id; });
-  if (!p) return;
-  document.getElementById("setName").value = p.customProviderName;
-  document.getElementById("setBaseUrl").value = p.baseUrl;
-  document.getElementById("setModel").value = p.customDefaultModel;
-  if (p.apiKey && !p.apiKey.includes("*")) {
-    document.getElementById("setApiKey").value = p.apiKey;
+async function loadMainPreset(id) {
+  try {
+    const p = await api("/api/main-presets/" + encodeURIComponent(id));
+    document.getElementById("setName").value = p.customProviderName;
+    document.getElementById("setBaseUrl").value = p.baseUrl;
+    document.getElementById("setModel").value = p.customDefaultModel;
+    document.getElementById("setApiKey").value = p.apiKey || "";
+    toast("Preset '" + p.name + "' dimuat. Klik Simpan untuk menerapkan.", true);
+  } catch (e) {
+    toast("Gagal load preset: " + e.message, false);
   }
-  toast("Preset '" + p.name + "' dimuat. API key: " + (p.apiKey ? p.apiKey + " (kosongkan untuk tetap)" : "(tidak ada)") + ". Klik Simpan untuk menerapkan.", true);
 }
 async function saveMainPresetPrompt() {
   const name = prompt("Nama preset:", document.getElementById("setModel").value || "custom-provider");

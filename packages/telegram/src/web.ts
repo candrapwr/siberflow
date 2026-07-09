@@ -294,9 +294,12 @@ async function handleRequest(
   if (path === "/api/image-presets" && req.method === "POST") {
     return handleSaveImagePreset(req, res);
   }
-  const presetDeleteMatch = path.match(/^\/api\/image-presets\/(.+)$/);
-  if (presetDeleteMatch && req.method === "DELETE") {
-    return handleDeleteImagePreset(res, decodeURIComponent(presetDeleteMatch[1]!));
+  const presetItemMatch = path.match(/^\/api\/image-presets\/(.+)$/);
+  if (presetItemMatch && req.method === "GET") {
+    return handleGetImagePreset(res, decodeURIComponent(presetItemMatch[1]!));
+  }
+  if (presetItemMatch && req.method === "DELETE") {
+    return handleDeleteImagePreset(res, decodeURIComponent(presetItemMatch[1]!));
   }
   if (path === "/api/main-presets" && req.method === "GET") {
     return handleListMainPresets(res);
@@ -304,9 +307,12 @@ async function handleRequest(
   if (path === "/api/main-presets" && req.method === "POST") {
     return handleSaveMainPreset(req, res);
   }
-  const mainPresetDeleteMatch = path.match(/^\/api\/main-presets\/(.+)$/);
-  if (mainPresetDeleteMatch && req.method === "DELETE") {
-    return handleDeleteMainPreset(res, decodeURIComponent(mainPresetDeleteMatch[1]!));
+  const mainPresetItemMatch = path.match(/^\/api\/main-presets\/(.+)$/);
+  if (mainPresetItemMatch && req.method === "GET") {
+    return handleGetMainPreset(res, decodeURIComponent(mainPresetItemMatch[1]!));
+  }
+  if (mainPresetItemMatch && req.method === "DELETE") {
+    return handleDeleteMainPreset(res, decodeURIComponent(mainPresetItemMatch[1]!));
   }
 
   sendJson(res, 404, { error: "Not found" });
@@ -352,6 +358,20 @@ async function handleDeleteImagePreset(res: ServerResponse, id: string): Promise
   });
 }
 
+/** GET /api/image-presets/:id — load ONE preset with the FULL (unmasked) API
+ *  key. The list endpoint masks keys for safety, but loading a preset to apply
+ *  it requires the real key. Only reachable by an authenticated admin. */
+async function handleGetImagePreset(res: ServerResponse, id: string): Promise<void> {
+  const presets = await loadImageGenPresets();
+  const preset = presets.find((p) => p.id === id);
+  if (!preset) {
+    sendJson(res, 404, { error: "Preset not found." });
+    return;
+  }
+  // Return the FULL preset including the real API key — no masking here.
+  sendJson(res, 200, preset);
+}
+
 // ── Main provider presets ──────────────────────────────────────────────────
 
 /** GET /api/main-presets — list all saved main-provider presets (keys masked). */
@@ -392,6 +412,18 @@ async function handleDeleteMainPreset(res: ServerResponse, id: string): Promise<
     ok: true,
     presets: presets.map((p) => ({ ...p, apiKey: maskApiKey(p.apiKey) })),
   });
+}
+
+/** GET /api/main-presets/:id — load ONE preset with the FULL (unmasked) API
+ *  key, so loading a preset into the form actually applies the right key. */
+async function handleGetMainPreset(res: ServerResponse, id: string): Promise<void> {
+  const presets = await loadMainPresets();
+  const preset = presets.find((p) => p.id === id);
+  if (!preset) {
+    sendJson(res, 404, { error: "Preset not found." });
+    return;
+  }
+  sendJson(res, 200, preset);
 }
 
 /**
