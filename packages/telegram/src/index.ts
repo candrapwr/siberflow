@@ -1616,12 +1616,23 @@ class BotRunner {
         if (typeof text !== "string" || !text.trim()) {
           throw new Error("sendMessage text must be a non-empty string.");
         }
-        const sent = await this.api.sendMessage({
-          chat_id: target.chatId,
-          text,
-          message_thread_id: target.threadId,
-        });
-        return { message_id: sent.message_id };
+        const t0 = Date.now();
+        try {
+          const sent = await this.api.sendMessage({
+            chat_id: target.chatId,
+            text,
+            message_thread_id: target.threadId,
+          });
+          console.log(
+            `[bot_script send] sendMessage chat=${target.chatId} ${Date.now() - t0}ms → ok msg=${sent.message_id} text=${text.slice(0, 60).replace(/\n/g, " ⏎ ")}`,
+          );
+          return { message_id: sent.message_id };
+        } catch (err) {
+          console.error(
+            `[bot_script send] sendMessage chat=${target.chatId} ${Date.now() - t0}ms → FAIL: ${(err as Error).message}`,
+          );
+          throw err;
+        }
       },
       sendPhoto: async (path: string, caption?: string, chatId?: number) => {
         const state = getActiveBotScriptState();
@@ -1841,12 +1852,23 @@ class BotRunner {
         // user's current message. We model it via a plain sendMessage because
         // the host's sendMessage doesn't expose reply_parameters; the script-
         // level intent ("answer this user") is still satisfied.
-        const sent = await this.api.sendMessage({
-          chat_id: state.message.chat.id,
-          text,
-          message_thread_id: state.message.message_thread_id,
-        });
-        return { message_id: sent.message_id };
+        const t0 = Date.now();
+        try {
+          const sent = await this.api.sendMessage({
+            chat_id: state.message.chat.id,
+            text,
+            message_thread_id: state.message.message_thread_id,
+          });
+          console.log(
+            `[bot_script send] reply chat=${state.message.chat.id} ${Date.now() - t0}ms → ok msg=${sent.message_id} text=${text.slice(0, 60).replace(/\n/g, " ⏎ ")}`,
+          );
+          return { message_id: sent.message_id };
+        } catch (err) {
+          console.error(
+            `[bot_script send] reply chat=${state.message.chat.id} ${Date.now() - t0}ms → FAIL: ${(err as Error).message}`,
+          );
+          throw err;
+        }
       },
       getChat: async () => {
         const state = getActiveBotScriptState();
