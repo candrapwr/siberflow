@@ -26,13 +26,14 @@ import {
   isDebug,
 } from "@siberflow/core";
 import { loadDotEnv } from "./env.js";
-import { generateAdminToken, startWebService } from "./web.js";
+import { startWebService } from "./web.js";
 import {
   defaultAiSettings,
   loadAiSettings,
   saveAiSettings,
   type TelegramAiSettings,
 } from "./settings.js";
+import { approveLogin } from "./auth.js";
 
 type ChatType = "private" | "group" | "supergroup" | "channel";
 
@@ -228,22 +229,19 @@ async function main(): Promise<void> {
   await runner.initAiSettings();
 
   // Start the local-only admin web service (session browser, message log,
-  // workdir viewer, send-message, AI settings). Runs alongside the polling
-  // loop. The token is read from env; if unset, a random one is generated and
-  // logged so the admin can open the UI from the printed URL.
-  const webToken =
-    process.env.SIBERFLOW_TELEGRAM_ADMIN_TOKEN ?? generateAdminToken();
+  // workdir viewer, send-message, AI settings, tools panel). Runs alongside
+  // the polling loop. Authentication is via a login code: the web UI shows a
+  // code, the admin sends `/login <code>` in a private chat to approve it.
   const webPort = Number(process.env.SIBERFLOW_TELEGRAM_ADMIN_PORT ?? 7070);
   await startWebService({
     api,
     workdirRoot: config.workdirRoot,
     port: webPort,
-    token: webToken,
     getAiSettings: () => runner.getAiSettings(),
     applyAiSettings: (s) => runner.applyAiSettings(s),
   });
   console.log(
-    `Admin web service: http://127.0.0.1:${webPort}/?token=${webToken}`,
+    `Admin web service: http://127.0.0.1:${webPort}/ — login with /login <code> in a private chat.`,
   );
 
   await runner.run();
@@ -802,6 +800,11 @@ class BotRunner {
         return;
       }
 
+      if (isCommand(messageText, "login")) {
+        await this.handleLoginCommand(message);
+        return;
+      }
+
       const baseInput = this.normalizeIncomingInput(message);
       if (!baseInput) return;
 
@@ -1089,7 +1092,12 @@ class BotRunner {
       // roster didn't change. The prompt contains "Current user" (who is
       // talking right now) which differs every message in a group chat, plus
       // the roster and chat metadata that must reflect the latest state.
-      const freshPrompt = this.buildSystemPromptFor(message, cached);
+      // Use the ACTIVE registry (which reflects the tools override) so the
+      // prompt's tool list matches the tool schemas the Agent actually carries.
+      const active = this.getActiveProviderModel();
+      const adminPrivate = message.chat.type === "private" && this.isAdmin(message.from);
+      const cachedRegistry = adminPrivate ? this.createAdminRegistry() : active.registry;
+      const freshPrompt = this.buildSystemPromptFor(message, cached, cachedRegistry, adminPrivate);
       cached.agent.loadHistory(
         withSystemPrompt(cached.session.messages, freshPrompt),
       );
@@ -1206,6 +1214,54 @@ class BotRunner {
       text: "Session Telegram ini sudah direset.",
       message_thread_id: message.message_thread_id,
     });
+  }
+
+  /**
+   * Handle `/login <code>` — the admin web auth flow. Only works in a PRIVATE
+   * chat from a configured admin. If the code matches a pending web login, it
+   * is consumed and a session token is issued; the web UI's poller picks it up
+   * and enters the dashboard. Non-admins or group chats get a refusal.
+   */
+  private async handleLoginCommand(message: TelegramMessage): Promise<void> {
+    const text = message.text ?? message.caption ?? "";
+    // Only allowed in private chats, and only for admins.
+    if (message.chat.type !== "private") {
+      await this.api.sendMessage({
+        chat_id: message.chat.id,
+        text: "Login hanya bisa dilakukan di private chat.",
+      });
+      return;
+    }
+    if (!this.isAdmin(message.from)) {
+      await this.api.sendMessage({
+        chat_id: message.chat.id,
+        text: "Anda bukan admin. Hanya admin yang bisa login ke panel web.",
+      });
+      return;
+    }
+    // Extract the code: /login CODE  or  /login@bot CODE
+    const match = text.trim().match(/^\/login(?:@\w+)?\s+([A-Za-z0-9]+)\s*$/);
+    if (!match) {
+      await this.api.sendMessage({
+        chat_id: message.chat.id,
+        text: "Format: /login <kode>\n\nContoh: /login AB3K9M",
+      });
+      return;
+    }
+    const code = match[1]!;
+    const adminUserId = message.from!.id;
+    const result = approveLogin(code, adminUserId);
+    if (result.ok) {
+      await this.api.sendMessage({
+        chat_id: message.chat.id,
+        text: "✅ Login berhasil! Panel web sekarang dapat diakses.",
+      });
+    } else {
+      await this.api.sendMessage({
+        chat_id: message.chat.id,
+        text: "❌ Kode login salah atau sudah kedaluwarsa. Buka ulang halaman web untuk kode baru.",
+      });
+    }
   }
 
   private async clearSessionFiles(message: TelegramMessage): Promise<void> {
