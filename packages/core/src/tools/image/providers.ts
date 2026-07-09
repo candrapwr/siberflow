@@ -106,6 +106,27 @@ function cleanBaseUrl(url: string): string {
   return url.replace(/\/+$/, "");
 }
 
+/**
+ * Guess the image MIME type from a file path's extension. OpenAI's edits
+ * endpoint rejects files sent as the default `application/octet-stream` Blob
+ * type — it requires an explicit `image/jpeg`, `image/png`, or `image/webp`.
+ */
+function mimeFor(filePath: string): string {
+  const ext = filePath.toLowerCase().split(".").pop() ?? "";
+  switch (ext) {
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "webp":
+      return "image/webp";
+    case "png":
+    case "gif":
+    case "bmp":
+    default:
+      return "image/png";
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Provider: openai  (gpt-image)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -135,7 +156,7 @@ export const openaiProvider: ImageGenProvider = {
     const form = new FormData();
     form.set("model", req.model);
     form.set("prompt", req.prompt);
-    form.set("image", new Blob([new Uint8Array(data)]), basename(req.imagePath));
+    form.set("image", new Blob([new Uint8Array(data)], { type: mimeFor(req.imagePath) }), basename(req.imagePath));
     const res = await fetchWithTimeout(url, {
       method: "POST",
       headers: { authorization: authHeader(req.apiKey) },
@@ -177,7 +198,7 @@ export const deepinfraProvider: ImageGenProvider = {
     const form = new FormData();
     form.set("model", req.model);
     form.set("prompt", req.prompt);
-    form.set("image", new Blob([new Uint8Array(data)]), basename(req.imagePath));
+    form.set("image", new Blob([new Uint8Array(data)], { type: mimeFor(req.imagePath) }), basename(req.imagePath));
     const res = await fetchWithTimeout(url, {
       method: "POST",
       headers: { authorization: authHeader(req.apiKey) },
