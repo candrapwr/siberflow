@@ -805,10 +805,23 @@ async function loadPreset(id) {
 async function savePresetPrompt() {
   const name = prompt("Nama preset:", document.getElementById("setIgProvider").value);
   if (!name) return;
-  const apiKey = document.getElementById("setIgApiKey").value;
-  // If the API key field contains a masked value (from loading), warn the user.
-  if (apiKey.includes("*")) {
-    toast("API key masih masked. Ketik key asli sebelum simpan preset, atau preset akan menyimpan key yang masked.", false);
+  let apiKey = document.getElementById("setIgApiKey").value;
+  // The API key field often holds a MASKED value (****XXXX) loaded from the
+  // active settings. Saving a masked key corrupts the preset. If masked (or
+  // empty), prompt the user to paste the real key before saving.
+  if (!apiKey || apiKey.includes("*")) {
+    const input = prompt(
+      "API key belum diisi atau masih ter-masked (****).\n" +
+      "Paste API key asli untuk disimpan di preset ini\n" +
+      "(atau klik Cancel untuk menyimpan preset TANPA key):",
+      "",
+    );
+    if (input === null) {
+      // User cancelled → save preset without a key (they can add it later).
+      apiKey = "";
+    } else {
+      apiKey = input.trim();
+    }
   }
   const body = {
     name: name,
@@ -866,9 +879,20 @@ async function loadMainPreset(id) {
 async function saveMainPresetPrompt() {
   const name = prompt("Nama preset:", document.getElementById("setModel").value || "custom-provider");
   if (!name) return;
-  const apiKey = document.getElementById("setApiKey").value;
-  if (apiKey.includes("*")) {
-    toast("API key masih masked. Ketik key asli sebelum simpan preset.", false);
+  let apiKey = document.getElementById("setApiKey").value;
+  // Same masked-key guard as the image-gen preset save (see savePresetPrompt).
+  if (!apiKey || apiKey.includes("*")) {
+    const input = prompt(
+      "API key belum diisi atau masih ter-masked (****).\n" +
+      "Paste API key asli untuk disimpan di preset ini\n" +
+      "(atau klik Cancel untuk menyimpan preset TANPA key):",
+      "",
+    );
+    if (input === null) {
+      apiKey = "";
+    } else {
+      apiKey = input.trim();
+    }
   }
   const body = {
     name: name,
