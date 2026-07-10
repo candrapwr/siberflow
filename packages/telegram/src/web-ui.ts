@@ -760,6 +760,29 @@ function renderSettings() {
           '<div class="form-field"><label>Base URL</label>' +
             '<input type="text" id="setIgBaseUrl" value="' + esc(s.imageGenBaseUrl) + '" placeholder="(default per provider)" ' + igDisabled + '></div>';
       })() +
+      '<hr style="border:none;border-top:1px solid var(--border);margin:24px 0">' +
+      '<div class="section-title" style="margin-bottom:16px">Multimodal Override (analyze_image)</div>' +
+      (function() {
+        const mmEnabled = s.multimodalEnabled === true;
+        const mmStatus = mmEnabled
+          ? '<span class="status-badge override">OVERRIDE AKTIF</span>'
+          : '<span class="status-badge env">ENV (default)</span>';
+        const mmDisabled = mmEnabled ? '' : 'disabled';
+        const mmKeyPlaceholder = s.hasMultimodalApiKey ? s.multimodalApiKey + ' (kosongkan untuk tetap)' : 'paste multimodal key';
+        return '' +
+          '<div class="toggle-row">' +
+            '<div><div class="label">Aktifkan Override Multimodal</div>' +
+            '<div class="desc">Override config untuk tool analyze_image (OpenAI-compatible multimodal).</div></div>' +
+            '<div class="toggle ' + (mmEnabled ? 'on' : '') + '" id="mmToggle" onclick="toggleMm()"></div>' +
+          '</div>' +
+          '<div style="margin-bottom:20px">Status multimodal: ' + mmStatus + '</div>' +
+          '<div class="form-field"><label>API Key</label>' +
+            '<input type="password" id="setMmApiKey" value="' + esc(mmEnabled ? s.multimodalApiKey : '') + '" placeholder="' + mmKeyPlaceholder + '" ' + mmDisabled + '></div>' +
+          '<div class="form-field"><label>Model</label>' +
+            '<input type="text" id="setMmModel" value="' + esc(s.multimodalModel) + '" placeholder="gpt-4o-mini" ' + mmDisabled + '></div>' +
+          '<div class="form-field"><label>Base URL</label>' +
+            '<input type="text" id="setMmBaseUrl" value="' + esc(s.multimodalBaseUrl) + '" placeholder="https://api.openai.com/v1" ' + mmDisabled + '></div>';
+      })() +
       '<div style="display:flex;gap:8px;margin-top:8px">' +
         '<button class="primary" onclick="saveSettings()">💾 Simpan Semua</button>' +
       '</div>' +
@@ -774,6 +797,11 @@ function toggleAi() {
 function toggleIg() {
   if (!settingsCache) return;
   settingsCache.imageGenEnabled = !settingsCache.imageGenEnabled;
+  renderSettings();
+}
+function toggleMm() {
+  if (!settingsCache) return;
+  settingsCache.multimodalEnabled = !settingsCache.multimodalEnabled;
   renderSettings();
 }
 
@@ -942,11 +970,15 @@ async function saveSettings() {
     imageGenApiKey: document.getElementById("setIgApiKey").value,
     imageGenModel: document.getElementById("setIgModel").value,
     imageGenBaseUrl: document.getElementById("setIgBaseUrl").value,
+    multimodalEnabled: settingsCache.multimodalEnabled === true,
+    multimodalApiKey: document.getElementById("setMmApiKey").value,
+    multimodalModel: document.getElementById("setMmModel").value,
+    multimodalBaseUrl: document.getElementById("setMmBaseUrl").value,
   };
   try {
     const d = await api("/api/ai-settings", { method: "POST", body: JSON.stringify(body) });
     if (d.ok) {
-      settingsCache = { ...settingsCache, ...d.settings, enabled: body.enabled, imageGenEnabled: body.imageGenEnabled };
+      settingsCache = { ...settingsCache, ...d.settings, enabled: body.enabled, imageGenEnabled: body.imageGenEnabled, multimodalEnabled: body.multimodalEnabled };
       toast("Settings tersimpan.", true);
       renderSettings();
     } else {
