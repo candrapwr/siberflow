@@ -90,6 +90,17 @@ export const pdfScriptTool: Tool = {
     "`choco install tesseract`). If anything is missing, the full Python error is returned so you " +
     "can explain the failure to the user. No API key needed — OCR runs entirely locally.\n\n" +
     "CREATING — common patterns:\n" +
+    "═══ LAYOUT RULES (prevent overlapping text — the #1 failure) ═══\n" +
+    "1. FLOW Y: track one `let y` from top (start y=800 on A4). Decrement after each element. " +
+    "NEVER hardcode Y for flowing content — only the first element, header bar (y>810), and " +
+    "footer (y<35) use fixed Y. Everything else chains from the previous element.\n" +
+    "2. USE Layout.textBlock for paragraphs (it wraps + returns nextY): " +
+    "`const r = Layout.textBlock(page, { x:50, y, width:495, text, size:12 }); y = r.nextY - 12;`. " +
+    "After titles subtract more; after boxes subtract boxHeight. MINIMUM gaps: title(size16-20)→-28 " +
+    "then -10; subsection(size12-14)→-22; paragraph→nextY-12; table row→-25; shape/box→-(boxHeight+12).\n" +
+    "3. CONTENT AREA: A4 portrait top y=800, bottom y=50, left x=50, right x=545 (w=495). " +
+    "When y<60: addPage + reset y=800. Draw footer LAST per page (y=0..35 zone) so it doesn't " +
+    "interfere with content Y. For boxes-behind-text: draw box first, text on top with 8pt padding.\n\n" +
     "• COORDINATE SYSTEM (CRITICAL — pdf-lib uses BOTTOM-LEFT origin): x grows RIGHT, y grows UP. " +
     "The TOP edge of an A4 page is y≈842, the BOTTOM edge is y=0. To place a title at the top, " +
     "use y≈800. To place a footer near the bottom, use y≈40. Decrement y as you move DOWN the " +
