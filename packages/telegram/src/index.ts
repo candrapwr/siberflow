@@ -1215,19 +1215,12 @@ class BotRunner {
         cached.session.knownMembers = obj;
         void saveSession(cached.session).catch(() => { /* best-effort */ });
       }
-      // ALWAYS rebuild the system prompt for the current message, even if the
-      // roster didn't change. The prompt contains "Current user" (who is
-      // talking right now) which differs every message in a group chat, plus
-      // the roster and chat metadata that must reflect the latest state.
-      // Use the ACTIVE registry (which reflects the tools override) so the
-      // prompt's tool list matches the tool schemas the Agent actually carries.
-      const active = this.getActiveProviderModel();
-      const adminPrivate = message.chat.type === "private" && this.isAdmin(message.from);
-      const cachedRegistry = adminPrivate ? this.createAdminRegistry() : active.registry;
-      const freshPrompt = this.buildSystemPromptFor(message, cached, cachedRegistry, adminPrivate);
-      cached.agent.loadHistory(
-        withSystemPrompt(cached.session.messages, freshPrompt),
-      );
+      // NOTE: the system-prompt rebuild + loadHistory that used to happen here
+      // was a race condition — it mutated the Agent's internal history from
+      // OUTSIDE the serial turn queue, corrupting an in-flight turn when a
+      // second message arrived mid-processing. That work now happens inside
+      // runTurn (which runs inside the serial queue), so only one turn touches
+      // the Agent's history at a time. We just return the cached session here.
       return cached;
     }
 
@@ -1552,6 +1545,18 @@ class BotRunner {
     // cleanly if this turn throws. Mirrors Desktop/VSCode hosts.
     const abort = new AbortController();
     this.turnAbort = abort;
+
+    // Reload the system prompt + history NOW — inside the serial turn queue,
+    // so only one turn touches the Agent's history at a time. Previously this
+    // ran in getRuntime (outside the queue), which raced with an in-flight
+    // turn when a second message arrived mid-processing, corrupting history.
+    const activePrompt = this.getActiveProviderModel();
+    const adminPrivateCtx = message.chat.type === "private" && this.isAdmin(message.from);
+    const turnRegistry = adminPrivateCtx
+      ? this.createAdminRegistry()
+      : activePrompt.registry;
+    const freshPrompt = this.buildSystemPromptFor(message, runtime, turnRegistry, adminPrivateCtx);
+    runtime.agent.loadHistory(withSystemPrompt(runtime.session.messages, freshPrompt));
 
     try {
       const final = await this.activeTurn.run(

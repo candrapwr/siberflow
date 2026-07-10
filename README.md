@@ -141,10 +141,11 @@ SIBERFLOW_TELEGRAM_TOOLS=run_browser,analyze_image,bot_script
 # real forum topics get their own session. Set "true" if your group is NOT a
 # forum but you still see sessions splitting by thread id.
 SIBERFLOW_TELEGRAM_ONE_SESSION_PER_CHAT=false
-# Admin web service (local-only session management UI). Leave the token empty
-# to auto-generate a random one, printed to the console at startup.
-SIBERFLOW_TELEGRAM_ADMIN_TOKEN=
+# Admin web service port (local-only management UI).
 SIBERFLOW_TELEGRAM_ADMIN_PORT=7070
+# Admins who can use /login and get shell (exec) access in private chats.
+# Comma-separated Telegram user IDs (numeric) or usernames.
+SIBERFLOW_TELEGRAM_ADMINS=123456789,@candrapwr
 ```
 
 #### Session isolation per topic (forum groups)
@@ -176,32 +177,53 @@ Network resilience:
 
 Commands:
 
-- `/start` - short bot introduction
+- `/start` - welcome screen
 - `/reset` - delete the current Telegram chat/thread session
+- `/login <code>` - approve a web admin login (admin private chat only)
 - `/siberflow <message>` - optional explicit prefix in groups
+
+#### Message timestamps
+
+Every user message is prefixed with a compact timestamp `[YYYY-MM-DD HH:MM]` (server local time, from Telegram's `message.date`). This is metadata — the system prompt tells the model to ignore it unless the user references timing. It costs ~4 tokens per message and helps the model understand relative timing ("tadi pagi", gaps between messages, cross-day context).
+
+#### Photo-only messages
+
+A photo sent **without a caption** is now delivered to the model (previously dropped). In private chats this is unconditional; in groups the bot must still be addressed (`@mention` in the caption, or a `/command`). The model is told the file path and type, then decides for itself whether to `analyze_image`, `image_gen` (edit mode), or ignore it — it is no longer forced to analyze every image.
 
 ### Admin Web Service
 
-When the bot starts, a local-only admin web service launches alongside it for managing Telegram sessions. It binds to `127.0.0.1` only (never exposed to the network) and requires a bearer token on every request. If `SIBERFLOW_TELEGRAM_ADMIN_TOKEN` is unset, a random token is generated and the full URL — including the token — is printed to the console at startup, for example:
+When the bot starts, a local-only admin web service launches alongside it for managing the bot. It binds to `127.0.0.1` only (never exposed to the network) and authenticates via **out-of-band OTP login** — there is no long-lived URL token.
 
-```text
-Admin web service: http://127.0.0.1:7070/?token=853e708e88136bc8522a398904b8f4934564e3e7416715f8
-```
+**Login flow:**
 
-Open that URL in a browser to access the management UI. Only Telegram sessions (id prefixed `telegram-`) are exposed.
+1. Open `http://127.0.0.1:<port>/` in a browser — a login page shows a 6-character code (e.g. `ZDZ3D3`).
+2. An admin sends `/login ZDZ3D3` to the bot in a **private chat**.
+3. The bot verifies the admin status and the code, then issues a session token. The web page polls and, on approval, stores the token in a cookie + `localStorage` and loads the dashboard.
+4. Wrong/expired codes show a failure message. Codes expire after 10 minutes.
 
-Features:
+Only users listed in `SIBERFLOW_TELEGRAM_ADMINS` can approve a login. Non-admins and group chats are refused.
 
-- **Session list** — every private chat, group, supergroup, and forum thread, with name, chat type, chat ID, username, message count, known-member count, and last-updated time. Data is read from the raw (non-optimized) session JSON.
-- **Message detail** — opens a structured log table of the session's full history: index, role (color-coded: system/user/assistant/tool), content (click to expand; long system prompts are truncated with a "show all" affordance), and tool columns showing `🔧 tool_name` badges with pretty-printed JSON arguments, plus `← tool_name` markers on tool-result rows.
-- **Workdir browser** — recursive file tree of the session's workspace directory with file sizes.
-- **Delete session** — removes the session JSON (including optimized siblings) and the workdir. Requires confirmation.
-- **Send message** — send a text message to any chat by ID (with optional thread ID) directly from the UI; a per-row "fill chat ID" button pre-fills the form from a session. Telegram errors (e.g. "chat not found", "Forbidden: bot can't initiate conversation") are surfaced back to the UI.
-- **AI Settings override** — override the bot's model provider at runtime without editing `.env`. Toggle on, fill provider name, base URL, API key, and default model (custom OpenAI-compatible). Toggle off to fall back to `SIBERFLOW_TELEGRAM_*` env vars. Changes rebuild all cached Agents immediately and persist to `~/.siberflow/telegram-settings.json`.
-- **Image generator override** — independently override the `image_gen` tool's provider/key/model/base URL from the same panel, without touching the main model provider.
-- **Tools panel** — toggle which opt-in tools the bot exposes via a checkbox grid (File, Shell, Database, SSH, Documents, Browser, Image, Search, Music, Bot, Speech). A "Load from Env" button seeds the checkboxes from `SIBERFLOW_TELEGRAM_TOOLS`. When disabled, tools fall back to env. The `exec` tool is always shown but remains **admin-private-chat-only** regardless of the override — the panel cannot grant shell access to groups or non-admins.
+**Dashboard pages:**
 
-All overrides persist to `~/.siberflow/telegram-settings.json` and survive restarts. The web service uses Node's built-in `http` module — no extra dependencies. Implemented in `packages/telegram/src/web.ts`, `packages/telegram/src/web-ui.ts`, and `packages/telegram/src/settings.ts`.
+- **💬 Sessions** — every private chat, group, supergroup, and forum thread, with name, chat type, chat ID, username, message count, known-member count, and last-updated time. Data is read from the raw (non-optimized) session JSON. Per-row actions: message detail, workdir browser, fill-chat-id (for send), delete.
+- **📊 Overview** — stat cards (total sessions, private/group/thread counts, total messages) + recent sessions.
+- **⚙ AI Settings** — runtime overrides (no restart, no `.env` edit needed). Each override is independent and has its own **preset store** (save/load/delete named configurations; API keys are stored in full locally, masked in the UI list, and loaded via a single-preset endpoint that returns the real key).
+  - **Override Provider** — custom OpenAI-compatible main model (name, base URL, API key, default model). Falls back to `SIBERFLOW_TELEGRAM_*` env when off.
+  - **Image Generator Override** — `image_gen` provider/key/model/base URL (5 providers: openai, deepinfra, novita, qwen, grok). Falls back to `SIBERFLOW_IMAGE_GEN_*` env.
+  - **Image Edit Override** — separate config for `image_gen` **edit mode**. Each field falls back to the image-gen config when empty, so you can override just a key or a whole provider. Falls back to `SIBERFLOW_IMAGE_EDIT_*` env.
+  - **Multimodal Override** — `analyze_image` provider/key/model/base URL (OpenAI-compatible). Falls back to `SIBERFLOW_MULTIMODAL_*` env.
+- **🔧 Tools** — toggle which opt-in tools the bot exposes via a checkbox grid (22 tools across 11 categories). A "Load from Env" button seeds the checkboxes from `SIBERFLOW_TELEGRAM_TOOLS`. Falls back to env when off. The `exec` tool is always shown but remains **admin-private-chat-only** regardless of the override.
+- **📷 Image Log** — a table of every `image_gen` (generate vs. edit, separated) and `analyze_image` call: timestamp, user ID, tool+mode, model, status (OK/ERROR), and error message. In-memory, capped at 500 entries, cleared on restart.
+- **✉ Kirim Pesan** — send a text message to any chat by ID (modal popup).
+
+All overrides persist to `~/.siberflow/telegram-settings.json` and survive restarts. Preset stores persist to separate files (`telegram-{main,image,multimodal,image-edit}-presets.json`). The web service uses Node's built-in `http` module — no extra dependencies.
+
+#### Concurrency & session safety
+
+- **Serial turn queue** — turns on the same session run strictly one at a time. Messages that arrive while a turn is in-flight are **queued** (not dropped) and processed in order. Different sessions run independently.
+- **History-load safety** — the system prompt + history reload happens **inside the serial queue** (at the start of each turn), not when a message arrives. This prevents a second message from corrupting an in-flight turn's history in group chats.
+- **Drop-on-delete** — deleting a session via the web panel also drops it from the in-memory cache, so the user's next message starts fresh.
+- **Workdir safety net** — the workdir is recreated on every `getRuntime` call if missing, so tools (`exec`, `image_gen`, file ops) never crash with `ENOENT` after a delete or `/reset`.
 
 ## VS Code Extension
 
