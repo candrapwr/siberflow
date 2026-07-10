@@ -599,6 +599,7 @@ class BotRunner {
       console.log("AI settings override is ENABLED — using custom provider from settings.");
     }
     this.applyImageGenEnv();
+    this.applyImageEditEnv();
     this.applyMultimodalEnv();
   }
 
@@ -630,6 +631,33 @@ class BotRunner {
         this.injectedImageEnvKeys.push(k);
       }
       console.log(`Image gen override ENABLED — provider: ${s.imageGenProvider}.`);
+    }
+  }
+
+  /**
+   * Push the image-edit override into process.env. Mirrors applyImageGenEnv —
+   * the image_gen tool reads SIBERFLOW_IMAGE_EDIT_* (with fallback to
+   * SIBERFLOW_IMAGE_GEN_*) at execute time when in edit mode.
+   */
+  private injectedImageEditEnvKeys: string[] = [];
+  private applyImageEditEnv(): void {
+    for (const k of this.injectedImageEditEnvKeys) {
+      delete process.env[k];
+    }
+    this.injectedImageEditEnvKeys = [];
+    const s = this.aiSettings;
+    if (s.imageEditEnabled) {
+      const entries: Record<string, string> = {
+        SIBERFLOW_IMAGE_EDIT_PROVIDER: s.imageEditProvider || "openai",
+        SIBERFLOW_IMAGE_EDIT_API_KEY: s.imageEditApiKey,
+        ...(s.imageEditModel ? { SIBERFLOW_IMAGE_EDIT_MODEL: s.imageEditModel } : {}),
+        ...(s.imageEditBaseUrl ? { SIBERFLOW_IMAGE_EDIT_BASE_URL: s.imageEditBaseUrl } : {}),
+      };
+      for (const [k, v] of Object.entries(entries)) {
+        process.env[k] = v;
+        this.injectedImageEditEnvKeys.push(k);
+      }
+      console.log(`Image edit override ENABLED — provider: ${s.imageEditProvider}.`);
     }
   }
 
@@ -702,6 +730,7 @@ class BotRunner {
         `${this.sessions.size} cached session(s) rebuilt.`,
     );
     this.applyImageGenEnv();
+    this.applyImageEditEnv();
     this.applyMultimodalEnv();
   }
 

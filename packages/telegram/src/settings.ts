@@ -59,6 +59,18 @@ export interface TelegramAiSettings {
   multimodalModel: string;
   /** Multimodal API root (e.g. https://api.openai.com/v1). */
   multimodalBaseUrl: string;
+
+  // ── Image EDIT override ──
+  /** false = image edit uses image-gen config; true = use fields below. */
+  imageEditEnabled: boolean;
+  /** Image edit provider: openai | deepinfra | novita | qwen | grok. */
+  imageEditProvider: string;
+  /** Image edit API key. */
+  imageEditApiKey: string;
+  /** Image edit model id. */
+  imageEditModel: string;
+  /** Image edit API root. */
+  imageEditBaseUrl: string;
 }
 
 /** Default settings: disabled, empty fields, provider defaults to "custom". */
@@ -82,6 +94,11 @@ export function defaultAiSettings(): TelegramAiSettings {
     multimodalApiKey: "",
     multimodalModel: "",
     multimodalBaseUrl: "",
+    imageEditEnabled: false,
+    imageEditProvider: "openai",
+    imageEditApiKey: "",
+    imageEditModel: "",
+    imageEditBaseUrl: "",
   };
 }
 
@@ -377,5 +394,81 @@ export async function deleteMultimodalPreset(id: string): Promise<MultimodalPres
   const presets = await loadMultimodalPresets();
   const filtered = presets.filter((p) => p.id !== id);
   await persistMultimodalPresets(filtered);
+  return filtered;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Image edit presets
+// ─────────────────────────────────────────────────────────────────────────────
+
+const IMAGE_EDIT_PRESETS_FILE = join(homedir(), ".siberflow", "telegram-image-edit-presets.json");
+
+/**
+ * A saved image-edit provider configuration. Same shape as the image-gen
+ * preset store; used by the "Image Edit Override" panel.
+ */
+export interface ImageEditPreset {
+  id: string;
+  name: string;
+  provider: string;
+  apiKey: string;
+  model: string;
+  baseUrl: string;
+  updatedAt: string;
+}
+
+/** Load all saved image-edit presets. Returns [] if missing/corrupt. */
+export async function loadImageEditPresets(): Promise<ImageEditPreset[]> {
+  try {
+    const raw = await readFile(IMAGE_EDIT_PRESETS_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as ImageEditPreset[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Persist all image-edit presets to disk. */
+async function persistImageEditPresets(presets: ImageEditPreset[]): Promise<void> {
+  await mkdir(dirname(IMAGE_EDIT_PRESETS_FILE), { recursive: true });
+  await writeFile(IMAGE_EDIT_PRESETS_FILE, JSON.stringify(presets, null, 2), "utf8");
+}
+
+/** Save (create or update by id/name) an image-edit preset. Returns the list. */
+export async function saveImageEditPreset(
+  preset: Omit<ImageEditPreset, "id" | "updatedAt"> & { id?: string },
+): Promise<ImageEditPreset[]> {
+  const presets = await loadImageEditPresets();
+  const now = new Date().toISOString();
+  const existingIdx = preset.id
+    ? presets.findIndex((p) => p.id === preset.id)
+    : presets.findIndex((p) => p.name === preset.name);
+  if (existingIdx !== -1) {
+    presets[existingIdx] = {
+      ...presets[existingIdx]!,
+      ...preset,
+      id: presets[existingIdx]!.id,
+      updatedAt: now,
+    };
+  } else {
+    presets.push({
+      id: presetId(preset.name),
+      name: preset.name,
+      provider: preset.provider,
+      apiKey: preset.apiKey,
+      model: preset.model,
+      baseUrl: preset.baseUrl,
+      updatedAt: now,
+    });
+  }
+  await persistImageEditPresets(presets);
+  return presets;
+}
+
+/** Delete an image-edit preset by id and return the updated list. */
+export async function deleteImageEditPreset(id: string): Promise<ImageEditPreset[]> {
+  const presets = await loadImageEditPresets();
+  const filtered = presets.filter((p) => p.id !== id);
+  await persistImageEditPresets(filtered);
   return filtered;
 }

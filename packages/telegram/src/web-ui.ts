@@ -633,20 +633,23 @@ function goPage(name) {
 let settingsCache = null;
 let mainPresetsCache = [];
 let mmPresetsCache = [];
+let iePresetsCache = [];
 async function loadSettings() {
   const wrap = document.getElementById("settingsWrap");
   wrap.innerHTML = '<div class="empty"><span class="spin"></span> Memuat...</div>';
   try {
-    const [settings, igPresets, mainPresets, mmPresets] = await Promise.all([
+    const [settings, igPresets, mainPresets, mmPresets, iePresets] = await Promise.all([
       api("/api/ai-settings"),
       api("/api/image-presets"),
       api("/api/main-presets"),
       api("/api/multimodal-presets"),
+      api("/api/image-edit-presets"),
     ]);
     settingsCache = settings;
     igPresetsCache = Array.isArray(igPresets) ? igPresets : [];
     mainPresetsCache = Array.isArray(mainPresets) ? mainPresets : [];
     mmPresetsCache = Array.isArray(mmPresets) ? mmPresets : [];
+    iePresetsCache = Array.isArray(iePresets) ? iePresets : [];
     renderSettings();
   } catch (e) {
     wrap.innerHTML = '<div class="empty">Gagal: ' + esc(e.message) + '</div>';
@@ -809,6 +812,60 @@ function renderSettings() {
           '<div class="form-field"><label>Base URL</label>' +
             '<input type="text" id="setMmBaseUrl" value="' + esc(s.multimodalBaseUrl) + '" placeholder="https://api.openai.com/v1" ' + mmDisabled + '></div>';
       })() +
+      '<hr style="border:none;border-top:1px solid var(--border);margin:24px 0">' +
+      '<div class="section-title" style="margin-bottom:16px">Image Edit Override</div>' +
+      (function() {
+        const ieEnabled = s.imageEditEnabled === true;
+        const ieStatus = ieEnabled
+          ? '<span class="status-badge override">OVERRIDE AKTIF</span>'
+          : '<span class="status-badge env">FALLBACK (pakai image gen)</span>';
+        const ieDisabled = ieEnabled ? '' : 'disabled';
+        const ieKeyPlaceholder = s.hasImageEditApiKey ? s.imageEditApiKey + ' (kosongkan untuk tetap)' : 'paste image edit key';
+        const iePresetOpts = (iePresetsCache || []).map(function(p) {
+          return '<option value="' + esc(p.id) + '">' + esc(p.name) + ' (' + esc(p.provider) + ')</option>';
+        }).join('');
+        const iePresetCards = (iePresetsCache || []).map(function(p) {
+          return '<div class="preset-card">' +
+            '<div><span class="pname">' + esc(p.name) + '</span>' +
+              '<span class="pbadge">stored</span><br>' +
+              '<span class="pmeta">' + esc(p.provider) + ' · ' + esc(p.model || 'default') + ' · key ' + esc(p.apiKey || '(none)') + '</span></div>' +
+            '<div style="display:flex;gap:6px">' +
+              '<button class="small" onclick="loadIePreset(\\''+p.id+'\\')">📥 Load</button>' +
+              '<button class="small danger" onclick="deleteIePreset(\\''+p.id+'\\')">🗑</button>' +
+            '</div>' +
+          '</div>';
+        }).join('');
+        return '' +
+          '<div class="toggle-row">' +
+            '<div><div class="label">Aktifkan Override Image Edit</div>' +
+            '<div class="desc">Override provider untuk mode EDIT image_gen. Jika nonaktif, edit memakai config image gen.</div></div>' +
+            '<div class="toggle ' + (ieEnabled ? 'on' : '') + '" id="ieToggle" onclick="toggleIe()"></div>' +
+          '</div>' +
+          '<div style="margin-bottom:20px">Status image edit: ' + ieStatus + '</div>' +
+          '<div class="preset-bar">' +
+            '<select id="iePresetSelect"' + ((iePresetsCache||[]).length ? '' : 'disabled') + '>' +
+              '<option value="">— Pilih preset —</option>' +
+              iePresetOpts +
+            '</select>' +
+            '<button class="small" onclick="loadIePresetSelected()" ' + ((iePresetsCache||[]).length ? '' : 'disabled') + '>📥 Load</button>' +
+            '<button class="small primary" onclick="saveIePresetPrompt()">💾 Simpan Config</button>' +
+          '</div>' +
+          (iePresetCards ? '<div class="preset-list">' + iePresetCards + '</div>' : '<div class="form-help" style="margin-bottom:16px">Belum ada preset tersimpan.</div>') +
+          '<div class="form-field"><label>Provider</label>' +
+            '<select id="setIeProvider" ' + ieDisabled + '>' +
+              '<option value="openai"' + (s.imageEditProvider === 'openai' ? ' selected' : '') + '>openai (gpt-image)</option>' +
+              '<option value="deepinfra"' + (s.imageEditProvider === 'deepinfra' ? ' selected' : '') + '>deepinfra (FLUX)</option>' +
+              '<option value="novita"' + (s.imageEditProvider === 'novita' ? ' selected' : '') + '>novita (Seedream)</option>' +
+              '<option value="qwen"' + (s.imageEditProvider === 'qwen' ? ' selected' : '') + '>qwen (Wanxiang)</option>' +
+              '<option value="grok"' + (s.imageEditProvider === 'grok' ? ' selected' : '') + '>grok (FLUX)</option>' +
+            '</select></div>' +
+          '<div class="form-field"><label>API Key</label>' +
+            '<input type="password" id="setIeApiKey" value="' + esc(ieEnabled ? s.imageEditApiKey : '') + '" placeholder="' + ieKeyPlaceholder + '" ' + ieDisabled + '></div>' +
+          '<div class="form-field"><label>Model</label>' +
+            '<input type="text" id="setIeModel" value="' + esc(s.imageEditModel) + '" placeholder="(default per provider)" ' + ieDisabled + '></div>' +
+          '<div class="form-field"><label>Base URL</label>' +
+            '<input type="text" id="setIeBaseUrl" value="' + esc(s.imageEditBaseUrl) + '" placeholder="(default per provider)" ' + ieDisabled + '></div>';
+      })() +
       '<div style="display:flex;gap:8px;margin-top:8px">' +
         '<button class="primary" onclick="saveSettings()">💾 Simpan Semua</button>' +
       '</div>' +
@@ -828,6 +885,11 @@ function toggleIg() {
 function toggleMm() {
   if (!settingsCache) return;
   settingsCache.multimodalEnabled = !settingsCache.multimodalEnabled;
+  renderSettings();
+}
+function toggleIe() {
+  if (!settingsCache) return;
+  settingsCache.imageEditEnabled = !settingsCache.imageEditEnabled;
   renderSettings();
 }
 
@@ -1051,6 +1113,76 @@ async function deleteMmPreset(id) {
     toast("Gagal: " + e.message, false);
   }
 }
+
+// ── Image edit preset store ──
+function loadIePresetSelected() {
+  const id = document.getElementById("iePresetSelect").value;
+  if (id) loadIePreset(id);
+}
+async function loadIePreset(id) {
+  try {
+    const p = await api("/api/image-edit-presets/" + encodeURIComponent(id));
+    document.getElementById("setIeProvider").value = p.provider;
+    document.getElementById("setIeModel").value = p.model;
+    document.getElementById("setIeBaseUrl").value = p.baseUrl;
+    document.getElementById("setIeApiKey").value = p.apiKey || "";
+    toast("Preset '" + p.name + "' dimuat. Klik Simpan untuk menerapkan.", true);
+  } catch (e) {
+    toast("Gagal load preset: " + e.message, false);
+  }
+}
+async function saveIePresetPrompt() {
+  const name = prompt("Nama preset:", document.getElementById("setIeProvider").value);
+  if (!name) return;
+  let apiKey = document.getElementById("setIeApiKey").value;
+  if (!apiKey || apiKey.includes("*")) {
+    const input = prompt(
+      "API key belum diisi atau masih ter-masked (****).\\n" +
+      "Paste API key asli untuk disimpan di preset ini\\n" +
+      "(atau klik Cancel untuk menyimpan preset TANPA key):",
+      "",
+    );
+    if (input === null) {
+      apiKey = "";
+    } else {
+      apiKey = input.trim();
+    }
+  }
+  const body = {
+    name: name,
+    provider: document.getElementById("setIeProvider").value,
+    apiKey: apiKey,
+    model: document.getElementById("setIeModel").value,
+    baseUrl: document.getElementById("setIeBaseUrl").value,
+  };
+  try {
+    const d = await api("/api/image-edit-presets", { method: "POST", body: JSON.stringify(body) });
+    if (d.ok) {
+      iePresetsCache = d.presets || [];
+      toast("Preset '" + name + "' tersimpan.", true);
+      renderSettings();
+    } else {
+      toast("Gagal: " + (d.error || "unknown"), false);
+    }
+  } catch (e) {
+    toast("Gagal: " + e.message, false);
+  }
+}
+async function deleteIePreset(id) {
+  const p = iePresetsCache.find(function(x) { return x.id === id; });
+  if (!p) return;
+  if (!confirm("Hapus preset '" + p.name + "'?")) return;
+  try {
+    const d = await api("/api/image-edit-presets/" + encodeURIComponent(id), { method: "DELETE" });
+    if (d.ok) {
+      iePresetsCache = d.presets || [];
+      toast("Preset dihapus.", true);
+      renderSettings();
+    }
+  } catch (e) {
+    toast("Gagal: " + e.message, false);
+  }
+}
 async function saveSettings() {
   const body = {
     enabled: settingsCache.enabled === true,
@@ -1068,11 +1200,16 @@ async function saveSettings() {
     multimodalApiKey: document.getElementById("setMmApiKey").value,
     multimodalModel: document.getElementById("setMmModel").value,
     multimodalBaseUrl: document.getElementById("setMmBaseUrl").value,
+    imageEditEnabled: settingsCache.imageEditEnabled === true,
+    imageEditProvider: document.getElementById("setIeProvider").value,
+    imageEditApiKey: document.getElementById("setIeApiKey").value,
+    imageEditModel: document.getElementById("setIeModel").value,
+    imageEditBaseUrl: document.getElementById("setIeBaseUrl").value,
   };
   try {
     const d = await api("/api/ai-settings", { method: "POST", body: JSON.stringify(body) });
     if (d.ok) {
-      settingsCache = { ...settingsCache, ...d.settings, enabled: body.enabled, imageGenEnabled: body.imageGenEnabled, multimodalEnabled: body.multimodalEnabled };
+      settingsCache = { ...settingsCache, ...d.settings, enabled: body.enabled, imageGenEnabled: body.imageGenEnabled, multimodalEnabled: body.multimodalEnabled, imageEditEnabled: body.imageEditEnabled };
       toast("Settings tersimpan.", true);
       renderSettings();
     } else {

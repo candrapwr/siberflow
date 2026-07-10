@@ -26,17 +26,21 @@ import type { TelegramApi } from "./index.js";
 import { ADMIN_HTML } from "./web-ui.js";
 import { LOGIN_HTML } from "./login-page.js";
 import {
+  deleteImageEditPreset,
   deleteImageGenPreset,
   deleteMainPreset,
   deleteMultimodalPreset,
   isMaskedApiKey,
+  loadImageEditPresets,
   loadImageGenPresets,
   loadMainPresets,
   loadMultimodalPresets,
   maskApiKey,
+  saveImageEditPreset,
   saveImageGenPreset,
   saveMainPreset,
   saveMultimodalPreset,
+  type ImageEditPreset,
   type ImageGenPreset,
   type MainProviderPreset,
   type MultimodalPreset,
@@ -335,6 +339,19 @@ async function handleRequest(
   if (mmPresetItemMatch && req.method === "DELETE") {
     return handleDeleteMultimodalPreset(res, decodeURIComponent(mmPresetItemMatch[1]!));
   }
+  if (path === "/api/image-edit-presets" && req.method === "GET") {
+    return handleListImageEditPresets(res);
+  }
+  if (path === "/api/image-edit-presets" && req.method === "POST") {
+    return handleSaveImageEditPreset(req, res);
+  }
+  const editPresetItemMatch = path.match(/^\/api\/image-edit-presets\/(.+)$/);
+  if (editPresetItemMatch && req.method === "GET") {
+    return handleGetImageEditPreset(res, decodeURIComponent(editPresetItemMatch[1]!));
+  }
+  if (editPresetItemMatch && req.method === "DELETE") {
+    return handleDeleteImageEditPreset(res, decodeURIComponent(editPresetItemMatch[1]!));
+  }
 
   sendJson(res, 404, { error: "Not found" });
 }
@@ -499,6 +516,59 @@ async function handleDeleteMultimodalPreset(res: ServerResponse, id: string): Pr
   });
 }
 
+// ── Image edit presets ──────────────────────────────────────────────────────
+
+/** GET /api/image-edit-presets — list all saved image-edit presets (keys masked). */
+async function handleListImageEditPresets(res: ServerResponse): Promise<void> {
+  const presets = await loadImageEditPresets();
+  sendJson(res, 200, presets.map((p) => ({ ...p, apiKey: maskApiKey(p.apiKey) })));
+}
+
+/** POST /api/image-edit-presets — create or update an image-edit preset by name/id. */
+async function handleSaveImageEditPreset(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  const body = await readJsonBody(req);
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  if (!name) {
+    sendJson(res, 200, { ok: false, error: "Nama preset wajib diisi." });
+    return;
+  }
+  const presets = await saveImageEditPreset({
+    id: typeof body.id === "string" ? body.id : undefined,
+    name,
+    provider: typeof body.provider === "string" ? body.provider : "openai",
+    apiKey: typeof body.apiKey === "string" ? body.apiKey : "",
+    model: typeof body.model === "string" ? body.model : "",
+    baseUrl: typeof body.baseUrl === "string" ? body.baseUrl : "",
+  });
+  sendJson(res, 200, {
+    ok: true,
+    presets: presets.map((p) => ({ ...p, apiKey: maskApiKey(p.apiKey) })),
+  });
+}
+
+/** GET /api/image-edit-presets/:id — load ONE preset with the FULL (unmasked) key. */
+async function handleGetImageEditPreset(res: ServerResponse, id: string): Promise<void> {
+  const presets = await loadImageEditPresets();
+  const preset = presets.find((p) => p.id === id);
+  if (!preset) {
+    sendJson(res, 404, { error: "Preset not found." });
+    return;
+  }
+  sendJson(res, 200, preset);
+}
+
+/** DELETE /api/image-edit-presets/:id — remove an image-edit preset. */
+async function handleDeleteImageEditPreset(res: ServerResponse, id: string): Promise<void> {
+  const presets = await deleteImageEditPreset(id);
+  sendJson(res, 200, {
+    ok: true,
+    presets: presets.map((p) => ({ ...p, apiKey: maskApiKey(p.apiKey) })),
+  });
+}
+
 /**
  * The full catalog of opt-in tools the admin panel can toggle, grouped by
  * category. Always-on tools (task_update, ask_user) and factory tools
@@ -626,6 +696,13 @@ function handleGetAiSettings(
     hasMultimodalApiKey: s.multimodalApiKey.length > 0,
     multimodalModel: s.multimodalModel,
     multimodalBaseUrl: s.multimodalBaseUrl,
+    // Image edit override fields.
+    imageEditEnabled: s.imageEditEnabled,
+    imageEditProvider: s.imageEditProvider,
+    imageEditApiKey: maskApiKey(s.imageEditApiKey),
+    hasImageEditApiKey: s.imageEditApiKey.length > 0,
+    imageEditModel: s.imageEditModel,
+    imageEditBaseUrl: s.imageEditBaseUrl,
     updatedAt: s.updatedAt,
   });
 }
@@ -750,6 +827,35 @@ async function handleSaveAiSettings(
     }
   }
 
+  // ── Image edit override fields (preserve current when absent) ──
+  const imageEditEnabled =
+    body.imageEditEnabled === undefined
+      ? current.imageEditEnabled
+      : body.imageEditEnabled === true || body.imageEditEnabled === "true";
+  const imageEditProvider =
+    typeof body.imageEditProvider === "string" ? body.imageEditProvider : current.imageEditProvider;
+  const imageEditModel =
+    typeof body.imageEditModel === "string" ? body.imageEditModel : current.imageEditModel;
+  const imageEditBaseUrl =
+    typeof body.imageEditBaseUrl === "string" ? body.imageEditBaseUrl : current.imageEditBaseUrl;
+  let imageEditApiKey: string;
+  const submittedEditKey =
+    typeof body.imageEditApiKey === "string" ? body.imageEditApiKey : "";
+  if (submittedEditKey && !isMaskedApiKey(submittedEditKey)) {
+    imageEditApiKey = submittedEditKey;
+  } else {
+    imageEditApiKey = current.imageEditApiKey;
+  }
+  if (imageEditEnabled) {
+    if (!imageEditApiKey.trim() || !imageEditModel.trim()) {
+      sendJson(res, 200, {
+        ok: false,
+        error: "Image edit override aktif tapi API key atau model kosong.",
+      });
+      return;
+    }
+  }
+
   const settings: TelegramAiSettings = {
     enabled,
     provider,
@@ -769,6 +875,11 @@ async function handleSaveAiSettings(
     multimodalApiKey,
     multimodalModel: multimodalModel.trim(),
     multimodalBaseUrl: multimodalBaseUrl.trim().replace(/\/+$/, ""),
+    imageEditEnabled,
+    imageEditProvider: imageEditProvider.trim(),
+    imageEditApiKey,
+    imageEditModel: imageEditModel.trim(),
+    imageEditBaseUrl: imageEditBaseUrl.trim().replace(/\/+$/, ""),
   };
 
   try {
@@ -783,6 +894,8 @@ async function handleSaveAiSettings(
         hasImageGenApiKey: settings.imageGenApiKey.length > 0,
         multimodalApiKey: maskApiKey(settings.multimodalApiKey),
         hasMultimodalApiKey: settings.multimodalApiKey.length > 0,
+        imageEditApiKey: maskApiKey(settings.imageEditApiKey),
+        hasImageEditApiKey: settings.imageEditApiKey.length > 0,
       },
     });
   } catch (err) {
