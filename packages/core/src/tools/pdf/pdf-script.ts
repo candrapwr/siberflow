@@ -1076,6 +1076,30 @@ function patchFontEncoding(font: PDFFont): {
     }
   };
 
+  // Also patch widthOfTextAtSize — pdf-lib throws the SAME WinAnsi error here
+  // (called by Layout.textBlock measurement + drawText with maxWidth). Without
+  // this patch, `font.widthOfTextAtSize('▸ ...', size)` aborts the script with
+  // the exact error the encodeText patch was meant to prevent.
+  const originalWidth = font.widthOfTextAtSize.bind(font);
+  (font as PDFFont).widthOfTextAtSize = (text: string, size: number) => {
+    try {
+      return originalWidth(text, size);
+    } catch {
+      // Replace unsupported glyphs with '?' (same width class) and re-measure.
+      const chars = Array.from(text);
+      let anyDropped = false;
+      const safe = chars
+        .map((ch) => {
+          if (canEncode(ch)) return ch;
+          anyDropped = true;
+          droppedChars.add(ch);
+          return "?";
+        })
+        .join("");
+      return originalWidth(anyDropped ? safe : text, size);
+    }
+  };
+
   return { patchedFont: font, droppedChars };
 }
 
