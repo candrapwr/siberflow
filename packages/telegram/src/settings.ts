@@ -49,6 +49,16 @@ export interface TelegramAiSettings {
   toolsOverride: boolean;
   /** Comma-separated tool names to enable when toolsOverride is true. */
   enabledTools: string;
+
+  // ── Multimodal (analyze_image) override ──
+  /** false = analyze_image uses env (SIBERFLOW_MULTIMODAL_*); true = fields below. */
+  multimodalEnabled: boolean;
+  /** Multimodal API key. */
+  multimodalApiKey: string;
+  /** Multimodal model id (e.g. gpt-4o-mini). */
+  multimodalModel: string;
+  /** Multimodal API root (e.g. https://api.openai.com/v1). */
+  multimodalBaseUrl: string;
 }
 
 /** Default settings: disabled, empty fields, provider defaults to "custom". */
@@ -68,6 +78,10 @@ export function defaultAiSettings(): TelegramAiSettings {
     imageGenBaseUrl: "",
     toolsOverride: false,
     enabledTools: "",
+    multimodalEnabled: false,
+    multimodalApiKey: "",
+    multimodalModel: "",
+    multimodalBaseUrl: "",
   };
 }
 

@@ -239,6 +239,7 @@ async function main(): Promise<void> {
     port: webPort,
     getAiSettings: () => runner.getAiSettings(),
     applyAiSettings: (s) => runner.applyAiSettings(s),
+    dropSession: (id) => runner.dropSession(id),
   });
   console.log(
     `Admin web service: http://127.0.0.1:${webPort}/ — login with /login <code> in a private chat.`,
@@ -571,6 +572,26 @@ class BotRunner {
     return { ...this.aiSettings };
   }
 
+  /**
+   * Drop a session from the in-memory cache. Called by the admin web delete
+   * endpoint so the user's next message starts a fresh session (new Agent,
+   * empty history) instead of reusing the cached one. Without this, deleting
+   * the session JSON + workdir on disk has no effect while the bot is running
+   * — getRuntime finds the cached Agent and returns the old history.
+   */
+  dropSession(id: string): void {
+    const existed = this.sessions.delete(id);
+    if (existed) {
+      // Also cancel any in-flight turn for this session so it doesn't write
+      // back to the now-deleted session file after it finishes.
+      const queue = this.turnQueues.get(id);
+      if (queue) {
+        this.turnQueues.delete(id);
+      }
+      console.log(`[admin] Dropped in-memory session ${id}.`);
+    }
+  }
+
   /** Load persisted AI settings from disk at startup. Called once from main(). */
   async initAiSettings(): Promise<void> {
     this.aiSettings = await loadAiSettings();
@@ -578,6 +599,7 @@ class BotRunner {
       console.log("AI settings override is ENABLED — using custom provider from settings.");
     }
     this.applyImageGenEnv();
+    this.applyMultimodalEnv();
   }
 
   /**
@@ -608,6 +630,32 @@ class BotRunner {
         this.injectedImageEnvKeys.push(k);
       }
       console.log(`Image gen override ENABLED — provider: ${s.imageGenProvider}.`);
+    }
+  }
+
+  /**
+   * Push the multimodal (analyze_image) override into process.env. Mirrors
+   * applyImageGenEnv — analyze_image reads SIBERFLOW_MULTIMODAL_* at execute
+   * time, so we inject/delete the keys to apply or revert the override.
+   */
+  private injectedMultimodalEnvKeys: string[] = [];
+  private applyMultimodalEnv(): void {
+    for (const k of this.injectedMultimodalEnvKeys) {
+      delete process.env[k];
+    }
+    this.injectedMultimodalEnvKeys = [];
+    const s = this.aiSettings;
+    if (s.multimodalEnabled) {
+      const entries: Record<string, string> = {
+        SIBERFLOW_MULTIMODAL_API_KEY: s.multimodalApiKey,
+        SIBERFLOW_MULTIMODAL_MODEL: s.multimodalModel,
+        ...(s.multimodalBaseUrl ? { SIBERFLOW_MULTIMODAL_BASE_URL: s.multimodalBaseUrl } : {}),
+      };
+      for (const [k, v] of Object.entries(entries)) {
+        process.env[k] = v;
+        this.injectedMultimodalEnvKeys.push(k);
+      }
+      console.log(`Multimodal override ENABLED — model: ${s.multimodalModel}.`);
     }
   }
 
@@ -654,6 +702,7 @@ class BotRunner {
         `${this.sessions.size} cached session(s) rebuilt.`,
     );
     this.applyImageGenEnv();
+    this.applyMultimodalEnv();
   }
 
   /**
@@ -1077,6 +1126,16 @@ class BotRunner {
 
   private async getRuntime(message: TelegramMessage): Promise<RuntimeSession> {
     const id = sessionIdFor(message);
+
+    // ── Workdir safety net ──
+    // Ensure the workdir exists on EVERY getRuntime call — for cached sessions
+    // AND new ones. It can be missing if an admin deleted it via the web panel,
+    // a /reset ran, or external cleanup touched the folder. Recreating it here
+    // (recursive mkdir is a no-op if it already exists) prevents ENOENT crashes
+    // in tools (exec spawn, image_gen realpath, file ops) that use ctx.projectDir.
+    const workdir = join(this.config.workdirRoot, id);
+    await mkdir(workdir, { recursive: true });
+
     const cached = this.sessions.get(id);
     if (cached) {
       // Record the current sender into the roster (deduped by id).
@@ -1106,8 +1165,6 @@ class BotRunner {
 
     const loaded = await loadSession(id);
     const now = new Date().toISOString();
-    const workdir = join(this.config.workdirRoot, id);
-    await mkdir(workdir, { recursive: true });
 
     // Resolve the active provider/model — may be overridden by runtime AI
     // settings (admin web panel) instead of the env-based startup config.

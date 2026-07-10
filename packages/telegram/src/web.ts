@@ -55,6 +55,9 @@ export interface WebServiceOptions {
   getAiSettings: () => TelegramAiSettings;
   /** Applies new AI settings (persist + rebuild agents). May throw on invalid. */
   applyAiSettings: (s: TelegramAiSettings) => Promise<void>;
+  /** Drop a session from the in-memory cache (called on delete so a user's
+   *  next message starts fresh instead of reusing the cached Agent/history). */
+  dropSession: (id: string) => void;
 }
 
 /** Parsed components of a Telegram session id. */
@@ -165,9 +168,9 @@ function buildMessageRows(session: Session): MessageRow[] {
  * listen() is non-blocking.
  */
 export async function startWebService(opts: WebServiceOptions): Promise<Server> {
-  const { api, workdirRoot, port, getAiSettings, applyAiSettings } = opts;
+  const { api, workdirRoot, port, getAiSettings, applyAiSettings, dropSession } = opts;
   const server = createServer((req, res) => {
-    void handleRequest(req, res, { api, workdirRoot, getAiSettings, applyAiSettings }).catch((err) => {
+    void handleRequest(req, res, { api, workdirRoot, getAiSettings, applyAiSettings, dropSession }).catch((err) => {
       console.error(`Admin web error: ${(err as Error).message}`);
       sendJson(res, 500, { error: "Internal server error" });
     });
@@ -187,6 +190,7 @@ async function handleRequest(
     workdirRoot: string;
     getAiSettings: () => TelegramAiSettings;
     applyAiSettings: (s: TelegramAiSettings) => Promise<void>;
+    dropSession: (id: string) => void;
   },
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -274,7 +278,7 @@ async function handleRequest(
   }
   const deleteMatch = path.match(/^\/api\/delete\/(.+)$/);
   if (deleteMatch && req.method === "POST") {
-    return handleDeleteSession(res, ctx.workdirRoot, decodeURIComponent(deleteMatch[1]!));
+    return handleDeleteSession(res, ctx.workdirRoot, decodeURIComponent(deleteMatch[1]!), ctx.dropSession);
   }
   if (path === "/api/send" && req.method === "POST") {
     return handleSendMessage(req, res, ctx.api);
@@ -547,6 +551,12 @@ function handleGetAiSettings(
     // Enabled-tools override fields.
     toolsOverride: s.toolsOverride,
     enabledTools: s.enabledTools,
+    // Multimodal (analyze_image) override fields.
+    multimodalEnabled: s.multimodalEnabled,
+    multimodalApiKey: maskApiKey(s.multimodalApiKey),
+    hasMultimodalApiKey: s.multimodalApiKey.length > 0,
+    multimodalModel: s.multimodalModel,
+    multimodalBaseUrl: s.multimodalBaseUrl,
     updatedAt: s.updatedAt,
   });
 }
@@ -642,6 +652,35 @@ async function handleSaveAiSettings(
     enabledTools = current.enabledTools;
   }
 
+  // ── Multimodal (analyze_image) override fields (preserve current when absent) ──
+  const multimodalEnabled =
+    body.multimodalEnabled === undefined
+      ? current.multimodalEnabled
+      : body.multimodalEnabled === true || body.multimodalEnabled === "true";
+  const multimodalModel =
+    typeof body.multimodalModel === "string" ? body.multimodalModel : current.multimodalModel;
+  const multimodalBaseUrl =
+    typeof body.multimodalBaseUrl === "string" ? body.multimodalBaseUrl : current.multimodalBaseUrl;
+  // Multimodal API key — same preserve-if-masked logic.
+  let multimodalApiKey: string;
+  const submittedMultimodalKey =
+    typeof body.multimodalApiKey === "string" ? body.multimodalApiKey : "";
+  if (submittedMultimodalKey && !isMaskedApiKey(submittedMultimodalKey)) {
+    multimodalApiKey = submittedMultimodalKey;
+  } else {
+    multimodalApiKey = current.multimodalApiKey;
+  }
+  // Validate multimodal fields when enabling.
+  if (multimodalEnabled) {
+    if (!multimodalApiKey.trim() || !multimodalModel.trim()) {
+      sendJson(res, 200, {
+        ok: false,
+        error: "Multimodal override aktif tapi API key atau model kosong.",
+      });
+      return;
+    }
+  }
+
   const settings: TelegramAiSettings = {
     enabled,
     provider,
@@ -657,6 +696,10 @@ async function handleSaveAiSettings(
     imageGenBaseUrl: imageGenBaseUrl.trim().replace(/\/+$/, ""),
     toolsOverride,
     enabledTools,
+    multimodalEnabled,
+    multimodalApiKey,
+    multimodalModel: multimodalModel.trim(),
+    multimodalBaseUrl: multimodalBaseUrl.trim().replace(/\/+$/, ""),
   };
 
   try {
@@ -669,6 +712,8 @@ async function handleSaveAiSettings(
         hasApiKey: settings.apiKey.length > 0,
         imageGenApiKey: maskApiKey(settings.imageGenApiKey),
         hasImageGenApiKey: settings.imageGenApiKey.length > 0,
+        multimodalApiKey: maskApiKey(settings.multimodalApiKey),
+        hasMultimodalApiKey: settings.multimodalApiKey.length > 0,
       },
     });
   } catch (err) {
@@ -822,11 +867,16 @@ async function handleDeleteSession(
   res: ServerResponse,
   workdirRoot: string,
   id: string,
+  dropSession: (id: string) => void,
 ): Promise<void> {
   if (!id.startsWith("telegram-")) {
     sendJson(res, 400, { error: "Only telegram sessions are accessible." });
     return;
   }
+  // Drop the session from the in-memory cache FIRST. If we only delete the
+  // files but leave the cached Agent, the user's next message would reuse the
+  // cached history — defeating the "delete" action while the bot is running.
+  dropSession(id);
   // deleteSession removes <id>.json + optimized siblings + tmp uploads.
   const removed = await deleteSession(id);
   // Best-effort workdir removal. force:true so a missing dir is not an error.
