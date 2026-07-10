@@ -114,6 +114,10 @@ export interface AgentOptions {
   askUser?: ToolContext["askUser"];
   /** Optional bot host injected for bot_script. */
   botScript?: ToolContext["botScript"];
+  /** Identity of the user who triggered this turn (forwarded to ToolContext). */
+  userId?: ToolContext["userId"];
+  /** Optional image-tool access logger (forwarded to ToolContext). */
+  imageAccessLogger?: ToolContext["imageAccessLogger"];
   /** Optional context optimization (default: disabled). */
   contextOptimize?: ContextOptimizeConfig;
   /**
@@ -276,6 +280,8 @@ export class Agent {
       ...(opts.uploadDir ? { uploadDir: opts.uploadDir } : {}),
       ...(opts.askUser ? { askUser: opts.askUser } : {}),
       ...(opts.botScript ? { botScript: opts.botScript } : {}),
+      ...(opts.userId !== undefined ? { userId: opts.userId } : {}),
+      ...(opts.imageAccessLogger ? { imageAccessLogger: opts.imageAccessLogger } : {}),
       ...(opts.preTruncate !== undefined ? { preTruncate: opts.preTruncate } : {}),
       // Forward subagent progress to the host UI. The closure captures `this`
       // so it can read the current turn's events at call time.

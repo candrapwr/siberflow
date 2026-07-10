@@ -66,6 +66,8 @@ export interface WebServiceOptions {
   /** Drop a session from the in-memory cache (called on delete so a user's
    *  next message starts fresh instead of reusing the cached Agent/history). */
   dropSession: (id: string) => void;
+  /** Returns the image-tool access log (newest first). */
+  getImageAccessLog: () => Array<{ userId: number | string; tool: string; mode?: string; model: string; status: string; error?: string; timestamp: string }>;
 }
 
 /** Parsed components of a Telegram session id. */
@@ -176,9 +178,9 @@ function buildMessageRows(session: Session): MessageRow[] {
  * listen() is non-blocking.
  */
 export async function startWebService(opts: WebServiceOptions): Promise<Server> {
-  const { api, workdirRoot, port, getAiSettings, applyAiSettings, dropSession } = opts;
+  const { api, workdirRoot, port, getAiSettings, applyAiSettings, dropSession, getImageAccessLog } = opts;
   const server = createServer((req, res) => {
-    void handleRequest(req, res, { api, workdirRoot, getAiSettings, applyAiSettings, dropSession }).catch((err) => {
+    void handleRequest(req, res, { api, workdirRoot, getAiSettings, applyAiSettings, dropSession, getImageAccessLog }).catch((err) => {
       console.error(`Admin web error: ${(err as Error).message}`);
       sendJson(res, 500, { error: "Internal server error" });
     });
@@ -199,6 +201,7 @@ async function handleRequest(
     getAiSettings: () => TelegramAiSettings;
     applyAiSettings: (s: TelegramAiSettings) => Promise<void>;
     dropSession: (id: string) => void;
+    getImageAccessLog: () => Array<{ userId: number | string; tool: string; mode?: string; model: string; status: string; error?: string; timestamp: string }>;
   },
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -351,6 +354,9 @@ async function handleRequest(
   }
   if (editPresetItemMatch && req.method === "DELETE") {
     return handleDeleteImageEditPreset(res, decodeURIComponent(editPresetItemMatch[1]!));
+  }
+  if (path === "/api/image-access-log" && req.method === "GET") {
+    return sendJson(res, 200, ctx.getImageAccessLog());
   }
 
   sendJson(res, 404, { error: "Not found" });

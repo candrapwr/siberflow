@@ -117,10 +117,27 @@ export const imageGenTool: Tool = {
     }
 
     const provider = IMAGE_GEN_PROVIDERS[providerName];
+    const mode: "generate" | "edit" = args.image ? "edit" : "generate";
     if (!provider) {
+      ctx.imageAccessLogger?.({
+        userId: ctx.userId ?? "unknown",
+        tool: "image_gen",
+        mode,
+        model,
+        status: "error",
+        error: `Unknown provider "${providerName}"`,
+      });
       return `Error: Unknown image provider "${providerName}". Supported: ${Object.keys(IMAGE_GEN_PROVIDERS).join(", ")}.`;
     }
     if (!apiKey) {
+      ctx.imageAccessLogger?.({
+        userId: ctx.userId ?? "unknown",
+        tool: "image_gen",
+        mode,
+        model,
+        status: "error",
+        error: "API key not set",
+      });
       return "Error: SIBERFLOW_IMAGE_GEN_API_KEY is not set.";
     }
 
@@ -134,22 +151,35 @@ export const imageGenTool: Tool = {
 
     // ── Run generation or edit ──
     let result;
-    let mode: "generate" | "edit" = "generate";
     try {
       if (args.image) {
         if (!provider.edit) {
+          ctx.imageAccessLogger?.({
+            userId: ctx.userId ?? "unknown",
+            tool: "image_gen",
+            mode,
+            model,
+            status: "error",
+            error: `Provider "${providerName}" does not support editing`,
+          });
           return `Error: Provider "${providerName}" does not support image editing. Use one without the \`image\` param, or switch provider.`;
         }
         // Resolve the source image path inside the workdir sandbox.
         const resolvedImage = await resolveWithin(ctx.projectDir, args.image);
         result = await provider.edit({ ...baseReq, imagePath: resolvedImage });
-        mode = "edit";
       } else {
         result = await provider.generate(baseReq);
-        mode = "generate";
       }
     } catch (err) {
-      return `Error: ${mode ?? "image"} failed: ${(err as Error).message}`;
+      ctx.imageAccessLogger?.({
+        userId: ctx.userId ?? "unknown",
+        tool: "image_gen",
+        mode,
+        model,
+        status: "error",
+        error: (err as Error).message,
+      });
+      return `Error: ${mode} failed: ${(err as Error).message}`;
     }
 
     // ── Resolve output path & write file ──
@@ -157,6 +187,13 @@ export const imageGenTool: Tool = {
     await mkdir(dirname(outputPath), { recursive: true });
     await writeFile(outputPath, result.buffer);
 
+    ctx.imageAccessLogger?.({
+      userId: ctx.userId ?? "unknown",
+      tool: "image_gen",
+      mode,
+      model,
+      status: "success",
+    });
     return summarizeResult(outputPath, result.buffer.byteLength, mode, providerName, model);
   },
 };

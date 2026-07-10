@@ -63,10 +63,12 @@ export const analyzeImageTool: Tool = {
     const args = parseArgs(rawArgs);
     const apiKey = process.env.SIBERFLOW_MULTIMODAL_API_KEY;
     if (!apiKey) {
+      ctx.imageAccessLogger?.({ userId: ctx.userId ?? "unknown", tool: "analyze_image", model: "", status: "error", error: "API key not set" });
       return "Error: SIBERFLOW_MULTIMODAL_API_KEY is not set.";
     }
     const model = process.env.SIBERFLOW_MULTIMODAL_MODEL;
     if (!model) {
+      ctx.imageAccessLogger?.({ userId: ctx.userId ?? "unknown", tool: "analyze_image", model: "", status: "error", error: "Model not set" });
       return "Error: SIBERFLOW_MULTIMODAL_MODEL is not set.";
     }
 
@@ -114,6 +116,7 @@ export const analyzeImageTool: Tool = {
         aborted
           ? `image analysis timed out after ${REQUEST_TIMEOUT_MS / 1000}s`
           : (err as Error).message;
+      ctx.imageAccessLogger?.({ userId: ctx.userId ?? "unknown", tool: "analyze_image", model, status: "error", error: reason });
       return `Error: ${reason}`;
     } finally {
       clearTimeout(timer);
@@ -121,11 +124,18 @@ export const analyzeImageTool: Tool = {
 
     const json = (await res.json().catch(() => ({}))) as ChatCompletionResponse;
     if (!res.ok) {
-      return `Error: multimodal provider returned HTTP ${res.status}: ${json.error?.message ?? res.statusText}`;
+      const errMsg = `HTTP ${res.status}: ${json.error?.message ?? res.statusText}`;
+      ctx.imageAccessLogger?.({ userId: ctx.userId ?? "unknown", tool: "analyze_image", model, status: "error", error: errMsg });
+      return `Error: multimodal provider returned ${errMsg}`;
     }
 
     const content = json.choices?.[0]?.message?.content?.trim();
-    return content || "Error: multimodal provider returned no text content.";
+    if (!content) {
+      ctx.imageAccessLogger?.({ userId: ctx.userId ?? "unknown", tool: "analyze_image", model, status: "error", error: "No text content returned" });
+      return "Error: multimodal provider returned no text content.";
+    }
+    ctx.imageAccessLogger?.({ userId: ctx.userId ?? "unknown", tool: "analyze_image", model, status: "success" });
+    return content;
   },
 };
 
