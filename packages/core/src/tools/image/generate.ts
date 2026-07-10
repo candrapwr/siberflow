@@ -87,19 +87,42 @@ export const imageGenTool: Tool = {
     const args = parseArgs(rawArgs);
 
     // ── Resolve provider config from env ──
-    const providerName = (process.env.SIBERFLOW_IMAGE_GEN_PROVIDER ?? "openai").trim() || "openai";
+    // Base: image-gen config (SIBERFLOW_IMAGE_GEN_*).
+    let providerName = (process.env.SIBERFLOW_IMAGE_GEN_PROVIDER ?? "openai").trim() || "openai";
+    let apiKey = process.env.SIBERFLOW_IMAGE_GEN_API_KEY;
+    let defaults = PROVIDER_DEFAULTS[providerName] ?? PROVIDER_DEFAULTS.openai!;
+    let baseUrl =
+      (process.env.SIBERFLOW_IMAGE_GEN_BASE_URL ?? defaults.baseUrl).trim() || defaults.baseUrl;
+    let model = (process.env.SIBERFLOW_IMAGE_GEN_MODEL ?? defaults.model).trim() || defaults.model;
+
+    // ── Edit-mode override (SIBERFLOW_IMAGE_EDIT_*) with per-field fallback ──
+    // When editing (args.image present), each EDIT field overrides the GEN
+    // field ONLY when non-empty. Empty/absent EDIT fields fall back to the GEN
+    // value above, so a user can set just a different key (everything else
+    // inherited) OR a fully different provider.
+    if (args.image) {
+      const editProvider = (process.env.SIBERFLOW_IMAGE_EDIT_PROVIDER ?? "").trim();
+      const editApiKey = (process.env.SIBERFLOW_IMAGE_EDIT_API_KEY ?? "").trim();
+      const editModel = (process.env.SIBERFLOW_IMAGE_EDIT_MODEL ?? "").trim();
+      const editBaseUrl = (process.env.SIBERFLOW_IMAGE_EDIT_BASE_URL ?? "").trim();
+      if (editProvider) {
+        providerName = editProvider;
+        // Re-resolve defaults for the (possibly different) edit provider.
+        defaults = PROVIDER_DEFAULTS[providerName] ?? PROVIDER_DEFAULTS.openai!;
+      }
+      if (editApiKey) apiKey = editApiKey;
+      if (editModel) model = editModel.trim() || defaults.model;
+      if (editBaseUrl) baseUrl = editBaseUrl.trim().replace(/\/+$/, "") || defaults.baseUrl;
+      else if (editProvider) baseUrl = defaults.baseUrl; // provider changed → use its default base
+    }
+
     const provider = IMAGE_GEN_PROVIDERS[providerName];
     if (!provider) {
-      return `Error: Unknown image_gen provider "${providerName}". Supported: ${Object.keys(IMAGE_GEN_PROVIDERS).join(", ")}.`;
+      return `Error: Unknown image provider "${providerName}". Supported: ${Object.keys(IMAGE_GEN_PROVIDERS).join(", ")}.`;
     }
-    const apiKey = process.env.SIBERFLOW_IMAGE_GEN_API_KEY;
     if (!apiKey) {
       return "Error: SIBERFLOW_IMAGE_GEN_API_KEY is not set.";
     }
-    const defaults = PROVIDER_DEFAULTS[providerName] ?? PROVIDER_DEFAULTS.openai!;
-    const baseUrl =
-      (process.env.SIBERFLOW_IMAGE_GEN_BASE_URL ?? defaults.baseUrl).trim() || defaults.baseUrl;
-    const model = (process.env.SIBERFLOW_IMAGE_GEN_MODEL ?? defaults.model).trim() || defaults.model;
 
     const baseReq: ImageGenRequest = {
       prompt: args.prompt,
