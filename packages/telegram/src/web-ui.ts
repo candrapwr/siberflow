@@ -468,6 +468,9 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     <button class="nav-item" data-page="tools" onclick="goPage('tools')">
       <span class="icon">🔧</span> Tools
     </button>
+    <button class="nav-item" data-page="imagelog" onclick="goPage('imagelog')">
+      <span class="icon">📷</span> Image Log
+    </button>
   </nav>
   <div class="sidebar-foot">
     <div>v0.1.0</div>
@@ -508,6 +511,13 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     <!-- Page: Tools -->
     <div class="page" id="page-tools">
       <div id="toolsWrap">
+        <div class="empty"><span class="spin"></span> Memuat...</div>
+      </div>
+    </div>
+
+    <!-- Page: Image Log -->
+    <div class="page" id="page-imagelog">
+      <div id="imagelogWrap">
         <div class="empty"><span class="spin"></span> Memuat...</div>
       </div>
     </div>
@@ -610,7 +620,7 @@ function goPage(name) {
   document.querySelectorAll(".nav-item").forEach(n => n.classList.remove("active"));
   document.getElementById("page-" + name).classList.add("active");
   document.querySelector('.nav-item[data-page="' + name + '"]').classList.add("active");
-  const titles = { sessions: "Sessions", overview: "Overview", settings: "AI Settings", tools: "Tools" };
+  const titles = { sessions: "Sessions", overview: "Overview", settings: "AI Settings", tools: "Tools", imagelog: "Image Log" };
   document.getElementById("pageTitle").textContent = titles[name] || name;
   const topActions = document.getElementById("topActions");
   if (name === "sessions") {
@@ -624,6 +634,9 @@ function goPage(name) {
   } else if (name === "tools") {
     topActions.innerHTML = '';
     loadTools();
+  } else if (name === "imagelog") {
+    topActions.innerHTML = '<button class="primary" onclick="loadImageLog()">⟳ Refresh</button>';
+    loadImageLog();
   } else {
     topActions.innerHTML = '';
   }
@@ -1326,6 +1339,49 @@ async function persistTools() {
   } catch (e) {
     toast("Gagal: " + e.message, false);
   }
+}
+
+// ── Image Log ──
+let imageLogCache = [];
+async function loadImageLog() {
+  const wrap = document.getElementById("imagelogWrap");
+  wrap.innerHTML = '<div class="empty"><span class="spin"></span> Memuat...</div>';
+  try {
+    imageLogCache = await api("/api/image-access-log");
+    renderImageLog();
+  } catch (e) {
+    wrap.innerHTML = '<div class="empty">Gagal: ' + esc(e.message) + '</div>';
+  }
+}
+function renderImageLog() {
+  const wrap = document.getElementById("imagelogWrap");
+  if (!imageLogCache.length) {
+    wrap.innerHTML = '<div class="empty">Belum ada log akses image tool.</div>';
+    return;
+  }
+  let rows = '';
+  for (const e of imageLogCache) {
+    const statusBadge = e.status === "success"
+      ? '<span class="badge" style="background:#1e3d2f;color:#4ade80">OK</span>'
+      : '<span class="badge" style="background:#3d1e1e;color:#f87171">ERROR</span>';
+    const toolLabel = e.tool === "image_gen"
+      ? "image_gen (" + esc(e.mode || "?") + ")"
+      : esc(e.tool || "-");
+    const errorCell = e.error ? '<span style="color:#f87171;font-size:11px">' + esc(e.error.slice(0, 200)) + '</span>' : '<span class="muted">-</span>';
+    rows += '<tr>' +
+      '<td class="muted" style="font-size:12px;white-space:nowrap">' + fmtDate(e.timestamp) + '</td>' +
+      '<td class="mono">' + esc(e.userId ?? "-") + '</td>' +
+      '<td class="mono">' + toolLabel + '</td>' +
+      '<td class="mono" style="font-size:12px">' + esc(e.model || "-") + '</td>' +
+      '<td style="text-align:center">' + statusBadge + '</td>' +
+      '<td style="max-width:400px">' + errorCell + '</td>' +
+    '</tr>';
+  }
+  wrap.innerHTML =
+    '<div class="form-help" style="margin-bottom:12px">' + imageLogCache.length + ' entri (maks 500, in-memory, reset saat bot restart). Klik Refresh untuk update.</div>' +
+    '<table><thead><tr>' +
+      '<th>Waktu</th><th>User ID</th><th>Tool (Mode)</th><th>Model</th><th style="text-align:center">Status</th><th>Error</th>' +
+    '</tr></thead><tbody>' + rows + '</tbody></table>';
 }
 
 // ── Sessions ──

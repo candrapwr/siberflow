@@ -71,6 +71,9 @@ export interface BotScriptHost {
 export interface ToolContext {
   /** Sandbox root — all file operations must resolve inside this directory. */
   projectDir: string;
+  /** Identity of the user who triggered this turn (injected by hosts that
+   *  know it, e.g. Telegram message.from.id). Absent in non-user contexts. */
+  userId?: number | string;
   /** Present when task tracking is enabled; used by the task_update tool. */
   taskStore?: TaskStore;
   /**
@@ -105,6 +108,29 @@ export interface ToolContext {
   preTruncate?: boolean;
   /** Progress callback for the subagent/explore tools (phase + detail for UI indicators). */
   subagentProgress?: (phase: string, detail?: string) => void;
+  /**
+   * Optional image-tool access logger. When injected (by the Telegram host),
+   * the image_gen and analyze_image tools call it after each execution so the
+   * host can record who used which image tool, with which model, and whether
+   * it succeeded. Absent in CLI/Desktop/VS Code.
+   */
+  imageAccessLogger?: (entry: ImageAccessLogEntry) => void;
+}
+
+/** A single image-tool access log entry. See ToolContext.imageAccessLogger. */
+export interface ImageAccessLogEntry {
+  /** Who triggered the call (Telegram user id, or "unknown"). */
+  userId: number | string;
+  /** Tool name: "image_gen" | "analyze_image". */
+  tool: string;
+  /** Operation mode for image_gen: "generate" | "edit". Absent for analyze_image. */
+  mode?: string;
+  /** Model id used for the call. */
+  model: string;
+  /** Outcome. */
+  status: "success" | "error";
+  /** Error message when status is "error". */
+  error?: string;
 }
 
 export interface Tool {

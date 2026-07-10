@@ -18,6 +18,7 @@ import {
   saveSession,
   SESSION_FORMAT_VERSION,
   type BotScriptHost,
+  type ImageAccessLogEntry,
   type Provider,
   type Session,
   type ToolRegistry,
@@ -100,6 +101,8 @@ interface TelegramExternalReplyInfo {
 
 interface TelegramMessage {
   message_id: number;
+  /** Unix timestamp (seconds) when the message was sent, from Telegram. */
+  date?: number;
   message_thread_id?: number;
   /**
    * True when the message belongs to an actual forum topic (the group has
@@ -240,6 +243,7 @@ async function main(): Promise<void> {
     getAiSettings: () => runner.getAiSettings(),
     applyAiSettings: (s) => runner.applyAiSettings(s),
     dropSession: (id) => runner.dropSession(id),
+    getImageAccessLog: () => runner.getImageAccessLog(),
   });
   console.log(
     `Admin web service: http://127.0.0.1:${webPort}/ — login with /login <code> in a private chat.`,
@@ -438,6 +442,15 @@ class BotRunner {
    */
   private aiSettings: TelegramAiSettings = defaultAiSettings();
 
+  /**
+   * In-memory log of image-tool access (analyze_image, image_gen generate,
+   * image_gen edit). Capped at 500 entries (FIFO) — enough for real-time
+   * monitoring via the admin web panel without unbounded growth. Not persisted
+   * to disk (entries are ephemeral; restart clears the log).
+   */
+  private readonly imageAccessLog: Array<ImageAccessLogEntry & { timestamp: string }> = [];
+  private static readonly IMAGE_LOG_MAX = 500;
+
   constructor(
     private readonly api: TelegramApi,
     private readonly config: AppConfig,
@@ -592,6 +605,23 @@ class BotRunner {
     }
   }
 
+  /**
+   * Record an image-tool access (called by the image_gen / analyze_image tools
+   * via the ToolContext.imageAccessLogger callback). Stamps the entry with the
+   * current time and caps the log at IMAGE_LOG_MAX entries (FIFO).
+   */
+  logImageAccess(entry: ImageAccessLogEntry): void {
+    this.imageAccessLog.push({ ...entry, timestamp: new Date().toISOString() });
+    if (this.imageAccessLog.length > BotRunner.IMAGE_LOG_MAX) {
+      this.imageAccessLog.splice(0, this.imageAccessLog.length - BotRunner.IMAGE_LOG_MAX);
+    }
+  }
+
+  /** Return the image-access log, newest first (for the admin web panel). */
+  getImageAccessLog(): Array<ImageAccessLogEntry & { timestamp: string }> {
+    return [...this.imageAccessLog].reverse();
+  }
+
   /** Load persisted AI settings from disk at startup. Called once from main(). */
   async initAiSettings(): Promise<void> {
     this.aiSettings = await loadAiSettings();
@@ -713,6 +743,7 @@ class BotRunner {
         registry: active.registry,
         model: active.model,
         projectDir: runtime.session.projectDir,
+        imageAccessLogger: (e) => this.logImageAccess(e),
         systemPrompt: oldHistory[0]?.role === "system" ? oldHistory[0].content : "",
         contextOptimize: this.config.contextOptimize,
         tasksEnabled: false,
@@ -914,6 +945,14 @@ class BotRunner {
         if (fullName) senderParts.push(fullName);
         input = `[Sender: ${senderParts.join(" ")}]\n${input}`;
       }
+
+      // Prepend a compact timestamp so the AI understands message timing
+      // (e.g. "tadi pagi", gaps between messages, cross-day context). Uses
+      // message.date — the actual send time from Telegram — in the server's
+      // local timezone, formatted YYYY-MM-DD HH:MM. This is METADATA only
+      // (explained once in the system prompt); the AI should treat it like the
+      // [Sender:] prefix, not as part of the user's input.
+      input = `[${formatTimestamp(message.date)}]\n${input}`;
 
       // Serial execution per session: never run two turns in parallel on the
       // same Agent/session. Messages sent while a turn is in-flight are queued
@@ -1264,6 +1303,8 @@ class BotRunner {
           ? { lastPromptTokens: session.usage.last.promptTokens }
           : {}),
       botScript: this.createBotScriptHost(),
+      userId: message.from?.id,
+      imageAccessLogger: (e) => this.logImageAccess(e),
     });
     agent.loadHistory(withSystemPrompt(session.messages, systemPrompt));
     // Restore the LLM compact summary (if any) so "compact" mode keeps rolling
@@ -2299,6 +2340,20 @@ function isTransientError(err: unknown): boolean {
   return transientSignals.some((sig) => haystack.includes(sig.toLowerCase()));
 }
 
+/**
+ * Format a Telegram message timestamp (unix seconds, from `message.date`) as
+ * `YYYY-MM-DD HH:MM` in the server's local timezone. Used as a compact prefix
+ * on every user message so the AI can understand message timing. This is a
+ * server-local time — if the server runs in UTC but serves WIB users, the
+ * hours reflect UTC (acceptable for relative-timing context; switch to a fixed
+ * offset if exact wall-clock display matters).
+ */
+function formatTimestamp(unixSeconds: number | undefined): string {
+  const d = unixSeconds ? new Date(unixSeconds * 1000) : new Date();
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 function sessionIdFor(message: TelegramMessage): string {
   // Decide whether this message gets its own per-topic session or shares the
   // chat-wide "main" session.
@@ -2474,6 +2529,10 @@ function telegramSystemContext(
       .join(", ");
     lines.push(`Known members (${knownMembers.size}): ${roster}`);
   }
+  lines.push(
+    "",
+    "Each user message is prefixed with a timestamp like [2026-07-10 14:32] showing when it was sent. That timestamp is metadata — ignore it unless the user references timing.",
+  );
   lines.push(
     "",
     "# Telegram hard tool safety rules",
