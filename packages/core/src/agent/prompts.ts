@@ -50,8 +50,8 @@ function buildToolClause(enabledToolNames: string[]): string {
   }
   if (has("pdf_script")) {
     parts.push(
-      "PDF document manipulation (pdf_script — create/read .pdf via the pdf-lib/pdfjs libraries in a " +
-        "sandboxed JS function: pages, text, shapes, colors, text extraction)",
+      "PDF document manipulation (pdf_script — create/read .pdf via Python reportlab/pdfplumber: " +
+        "pages, text, shapes, colors, full Unicode support, text extraction, OCR for scanned PDFs)",
     );
   }
   if (has("run_browser")) {

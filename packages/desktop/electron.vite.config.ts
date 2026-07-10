@@ -13,7 +13,7 @@ export default defineConfig({
         // esbuild's CJS interop (TDZ on the `require2` helper) when bundled into
         // the Electron main's CJS output. Both ship CJS builds, so keep them
         // external and let Node resolve them at runtime — same as the native deps.
-        external: ["ssh2", "sqlite3", "pg", "mysql2", "cpu-features", "puppeteer-core", "docx", "mammoth", "pdf-lib", "pdfjs-dist"],
+        external: ["ssh2", "sqlite3", "pg", "mysql2", "cpu-features", "puppeteer-core", "docx", "mammoth"],
       },
     },
     resolve: {
