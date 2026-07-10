@@ -2567,6 +2567,8 @@ function toolStatusText(name: string): string {
       return "❓ Menunggu jawaban Anda...";
     case "task_update":
       return "✅ Memperbarui daftar tugas...";
+    case "image_gen":
+      return "🖼️ Membuat gambar...";
     default:
       return "⏳ Memproses...";
   }

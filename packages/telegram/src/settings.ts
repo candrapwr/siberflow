@@ -305,3 +305,77 @@ export async function deleteMainPreset(id: string): Promise<MainProviderPreset[]
   await persistMainPresets(filtered);
   return filtered;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Multimodal (analyze_image) presets
+// ─────────────────────────────────────────────────────────────────────────────
+
+const MULTIMODAL_PRESETS_FILE = join(homedir(), ".siberflow", "telegram-multimodal-presets.json");
+
+/**
+ * A saved multimodal (analyze_image) provider configuration. OpenAI-compatible
+ * (base URL + API key + model), same shape as the other preset stores.
+ */
+export interface MultimodalPreset {
+  id: string;
+  name: string;
+  apiKey: string;
+  model: string;
+  baseUrl: string;
+  updatedAt: string;
+}
+
+/** Load all saved multimodal presets. Returns [] if missing/corrupt. */
+export async function loadMultimodalPresets(): Promise<MultimodalPreset[]> {
+  try {
+    const raw = await readFile(MULTIMODAL_PRESETS_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as MultimodalPreset[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Persist all multimodal presets to disk. */
+async function persistMultimodalPresets(presets: MultimodalPreset[]): Promise<void> {
+  await mkdir(dirname(MULTIMODAL_PRESETS_FILE), { recursive: true });
+  await writeFile(MULTIMODAL_PRESETS_FILE, JSON.stringify(presets, null, 2), "utf8");
+}
+
+/** Save (create or update by id/name) a multimodal preset. Returns the list. */
+export async function saveMultimodalPreset(
+  preset: Omit<MultimodalPreset, "id" | "updatedAt"> & { id?: string },
+): Promise<MultimodalPreset[]> {
+  const presets = await loadMultimodalPresets();
+  const now = new Date().toISOString();
+  const existingIdx = preset.id
+    ? presets.findIndex((p) => p.id === preset.id)
+    : presets.findIndex((p) => p.name === preset.name);
+  if (existingIdx !== -1) {
+    presets[existingIdx] = {
+      ...presets[existingIdx]!,
+      ...preset,
+      id: presets[existingIdx]!.id,
+      updatedAt: now,
+    };
+  } else {
+    presets.push({
+      id: presetId(preset.name),
+      name: preset.name,
+      apiKey: preset.apiKey,
+      model: preset.model,
+      baseUrl: preset.baseUrl,
+      updatedAt: now,
+    });
+  }
+  await persistMultimodalPresets(presets);
+  return presets;
+}
+
+/** Delete a multimodal preset by id and return the updated list. */
+export async function deleteMultimodalPreset(id: string): Promise<MultimodalPreset[]> {
+  const presets = await loadMultimodalPresets();
+  const filtered = presets.filter((p) => p.id !== id);
+  await persistMultimodalPresets(filtered);
+  return filtered;
+}
