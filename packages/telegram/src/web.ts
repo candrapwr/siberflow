@@ -28,14 +28,18 @@ import { LOGIN_HTML } from "./login-page.js";
 import {
   deleteImageGenPreset,
   deleteMainPreset,
+  deleteMultimodalPreset,
   isMaskedApiKey,
   loadImageGenPresets,
   loadMainPresets,
+  loadMultimodalPresets,
   maskApiKey,
   saveImageGenPreset,
   saveMainPreset,
+  saveMultimodalPreset,
   type ImageGenPreset,
   type MainProviderPreset,
+  type MultimodalPreset,
   type TelegramAiSettings,
 } from "./settings.js";
 import {
@@ -318,6 +322,19 @@ async function handleRequest(
   if (mainPresetItemMatch && req.method === "DELETE") {
     return handleDeleteMainPreset(res, decodeURIComponent(mainPresetItemMatch[1]!));
   }
+  if (path === "/api/multimodal-presets" && req.method === "GET") {
+    return handleListMultimodalPresets(res);
+  }
+  if (path === "/api/multimodal-presets" && req.method === "POST") {
+    return handleSaveMultimodalPreset(req, res);
+  }
+  const mmPresetItemMatch = path.match(/^\/api\/multimodal-presets\/(.+)$/);
+  if (mmPresetItemMatch && req.method === "GET") {
+    return handleGetMultimodalPreset(res, decodeURIComponent(mmPresetItemMatch[1]!));
+  }
+  if (mmPresetItemMatch && req.method === "DELETE") {
+    return handleDeleteMultimodalPreset(res, decodeURIComponent(mmPresetItemMatch[1]!));
+  }
 
   sendJson(res, 404, { error: "Not found" });
 }
@@ -428,6 +445,58 @@ async function handleGetMainPreset(res: ServerResponse, id: string): Promise<voi
     return;
   }
   sendJson(res, 200, preset);
+}
+
+// ── Multimodal (analyze_image) presets ──────────────────────────────────────
+
+/** GET /api/multimodal-presets — list all saved multimodal presets (keys masked). */
+async function handleListMultimodalPresets(res: ServerResponse): Promise<void> {
+  const presets = await loadMultimodalPresets();
+  sendJson(res, 200, presets.map((p) => ({ ...p, apiKey: maskApiKey(p.apiKey) })));
+}
+
+/** POST /api/multimodal-presets — create or update a multimodal preset by name/id. */
+async function handleSaveMultimodalPreset(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  const body = await readJsonBody(req);
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  if (!name) {
+    sendJson(res, 200, { ok: false, error: "Nama preset wajib diisi." });
+    return;
+  }
+  const presets = await saveMultimodalPreset({
+    id: typeof body.id === "string" ? body.id : undefined,
+    name,
+    apiKey: typeof body.apiKey === "string" ? body.apiKey : "",
+    model: typeof body.model === "string" ? body.model : "",
+    baseUrl: typeof body.baseUrl === "string" ? body.baseUrl : "",
+  });
+  sendJson(res, 200, {
+    ok: true,
+    presets: presets.map((p) => ({ ...p, apiKey: maskApiKey(p.apiKey) })),
+  });
+}
+
+/** GET /api/multimodal-presets/:id — load ONE preset with the FULL (unmasked) key. */
+async function handleGetMultimodalPreset(res: ServerResponse, id: string): Promise<void> {
+  const presets = await loadMultimodalPresets();
+  const preset = presets.find((p) => p.id === id);
+  if (!preset) {
+    sendJson(res, 404, { error: "Preset not found." });
+    return;
+  }
+  sendJson(res, 200, preset);
+}
+
+/** DELETE /api/multimodal-presets/:id — remove a multimodal preset. */
+async function handleDeleteMultimodalPreset(res: ServerResponse, id: string): Promise<void> {
+  const presets = await deleteMultimodalPreset(id);
+  sendJson(res, 200, {
+    ok: true,
+    presets: presets.map((p) => ({ ...p, apiKey: maskApiKey(p.apiKey) })),
+  });
 }
 
 /**

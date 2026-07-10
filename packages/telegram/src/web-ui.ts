@@ -632,18 +632,21 @@ function goPage(name) {
 // ── AI Settings ──
 let settingsCache = null;
 let mainPresetsCache = [];
+let mmPresetsCache = [];
 async function loadSettings() {
   const wrap = document.getElementById("settingsWrap");
   wrap.innerHTML = '<div class="empty"><span class="spin"></span> Memuat...</div>';
   try {
-    const [settings, igPresets, mainPresets] = await Promise.all([
+    const [settings, igPresets, mainPresets, mmPresets] = await Promise.all([
       api("/api/ai-settings"),
       api("/api/image-presets"),
       api("/api/main-presets"),
+      api("/api/multimodal-presets"),
     ]);
     settingsCache = settings;
     igPresetsCache = Array.isArray(igPresets) ? igPresets : [];
     mainPresetsCache = Array.isArray(mainPresets) ? mainPresets : [];
+    mmPresetsCache = Array.isArray(mmPresets) ? mmPresets : [];
     renderSettings();
   } catch (e) {
     wrap.innerHTML = '<div class="empty">Gagal: ' + esc(e.message) + '</div>';
@@ -769,6 +772,20 @@ function renderSettings() {
           : '<span class="status-badge env">ENV (default)</span>';
         const mmDisabled = mmEnabled ? '' : 'disabled';
         const mmKeyPlaceholder = s.hasMultimodalApiKey ? s.multimodalApiKey + ' (kosongkan untuk tetap)' : 'paste multimodal key';
+        const mmPresetOpts = (mmPresetsCache || []).map(function(p) {
+          return '<option value="' + esc(p.id) + '">' + esc(p.name) + (p.model ? ' (' + esc(p.model) + ')' : '') + '</option>';
+        }).join('');
+        const mmPresetCards = (mmPresetsCache || []).map(function(p) {
+          return '<div class="preset-card">' +
+            '<div><span class="pname">' + esc(p.name) + '</span>' +
+              '<span class="pbadge">stored</span><br>' +
+              '<span class="pmeta">' + esc(p.model || 'default') + ' · key ' + esc(p.apiKey || '(none)') + '</span></div>' +
+            '<div style="display:flex;gap:6px">' +
+              '<button class="small" onclick="loadMmPreset(\\''+p.id+'\\')">📥 Load</button>' +
+              '<button class="small danger" onclick="deleteMmPreset(\\''+p.id+'\\')">🗑</button>' +
+            '</div>' +
+          '</div>';
+        }).join('');
         return '' +
           '<div class="toggle-row">' +
             '<div><div class="label">Aktifkan Override Multimodal</div>' +
@@ -776,6 +793,15 @@ function renderSettings() {
             '<div class="toggle ' + (mmEnabled ? 'on' : '') + '" id="mmToggle" onclick="toggleMm()"></div>' +
           '</div>' +
           '<div style="margin-bottom:20px">Status multimodal: ' + mmStatus + '</div>' +
+          '<div class="preset-bar">' +
+            '<select id="mmPresetSelect"' + ((mmPresetsCache||[]).length ? '' : 'disabled') + '>' +
+              '<option value="">— Pilih preset —</option>' +
+              mmPresetOpts +
+            '</select>' +
+            '<button class="small" onclick="loadMmPresetSelected()" ' + ((mmPresetsCache||[]).length ? '' : 'disabled') + '>📥 Load</button>' +
+            '<button class="small primary" onclick="saveMmPresetPrompt()">💾 Simpan Config</button>' +
+          '</div>' +
+          (mmPresetCards ? '<div class="preset-list">' + mmPresetCards + '</div>' : '<div class="form-help" style="margin-bottom:16px">Belum ada preset tersimpan.</div>') +
           '<div class="form-field"><label>API Key</label>' +
             '<input type="password" id="setMmApiKey" value="' + esc(mmEnabled ? s.multimodalApiKey : '') + '" placeholder="' + mmKeyPlaceholder + '" ' + mmDisabled + '></div>' +
           '<div class="form-field"><label>Model</label>' +
@@ -950,6 +976,74 @@ async function deleteMainPreset(id) {
     const d = await api("/api/main-presets/" + encodeURIComponent(id), { method: "DELETE" });
     if (d.ok) {
       mainPresetsCache = d.presets || [];
+      toast("Preset dihapus.", true);
+      renderSettings();
+    }
+  } catch (e) {
+    toast("Gagal: " + e.message, false);
+  }
+}
+
+// ── Multimodal preset store ──
+function loadMmPresetSelected() {
+  const id = document.getElementById("mmPresetSelect").value;
+  if (id) loadMmPreset(id);
+}
+async function loadMmPreset(id) {
+  try {
+    const p = await api("/api/multimodal-presets/" + encodeURIComponent(id));
+    document.getElementById("setMmModel").value = p.model;
+    document.getElementById("setMmBaseUrl").value = p.baseUrl;
+    document.getElementById("setMmApiKey").value = p.apiKey || "";
+    toast("Preset '" + p.name + "' dimuat. Klik Simpan untuk menerapkan.", true);
+  } catch (e) {
+    toast("Gagal load preset: " + e.message, false);
+  }
+}
+async function saveMmPresetPrompt() {
+  const name = prompt("Nama preset:", document.getElementById("setMmModel").value || "multimodal");
+  if (!name) return;
+  let apiKey = document.getElementById("setMmApiKey").value;
+  if (!apiKey || apiKey.includes("*")) {
+    const input = prompt(
+      "API key belum diisi atau masih ter-masked (****).\\n" +
+      "Paste API key asli untuk disimpan di preset ini\\n" +
+      "(atau klik Cancel untuk menyimpan preset TANPA key):",
+      "",
+    );
+    if (input === null) {
+      apiKey = "";
+    } else {
+      apiKey = input.trim();
+    }
+  }
+  const body = {
+    name: name,
+    apiKey: apiKey,
+    model: document.getElementById("setMmModel").value,
+    baseUrl: document.getElementById("setMmBaseUrl").value,
+  };
+  try {
+    const d = await api("/api/multimodal-presets", { method: "POST", body: JSON.stringify(body) });
+    if (d.ok) {
+      mmPresetsCache = d.presets || [];
+      toast("Preset '" + name + "' tersimpan.", true);
+      renderSettings();
+    } else {
+      toast("Gagal: " + (d.error || "unknown"), false);
+    }
+  } catch (e) {
+    toast("Gagal: " + e.message, false);
+  }
+}
+async function deleteMmPreset(id) {
+  const p = mmPresetsCache.find(function(x) { return x.id === id; });
+  if (!p) return;
+  if (!confirm("Hapus preset '" + p.name + "'?")) return;
+  try {
+    const d = await api("/api/multimodal-presets/" + encodeURIComponent(id), { method: "DELETE" });
+    if (d.ok) {
+      mmPresetsCache = d.presets || [];
       toast("Preset dihapus.", true);
       renderSettings();
     }
