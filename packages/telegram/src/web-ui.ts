@@ -1378,7 +1378,7 @@ function renderImageLog() {
     '</tr>';
   }
   wrap.innerHTML =
-    '<div class="form-help" style="margin-bottom:12px">' + imageLogCache.length + ' entri (maks 500, in-memory, reset saat bot restart). Klik Refresh untuk update.</div>' +
+    '<div class="form-help" style="margin-bottom:12px">' + imageLogCache.length + ' entri (maks 500, tersimpan di disk — bertahan saat restart). Klik Refresh untuk update.</div>' +
     '<table><thead><tr>' +
       '<th>Waktu</th><th>User ID</th><th>Tool (Mode)</th><th>Model</th><th style="text-align:center">Status</th><th>Error</th>' +
     '</tr></thead><tbody>' + rows + '</tbody></table>';

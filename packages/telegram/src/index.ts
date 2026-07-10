@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, extname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { marked } from "marked";
 import {
   Agent,
@@ -230,6 +230,7 @@ async function main(): Promise<void> {
   const runner = new BotRunner(api, config);
   // Load persisted AI provider override settings (disabled by default → env).
   await runner.initAiSettings();
+  await runner.initImageAccessLog();
 
   // Start the local-only admin web service (session browser, message log,
   // workdir viewer, send-message, AI settings, tools panel). Runs alongside
@@ -443,13 +444,13 @@ class BotRunner {
   private aiSettings: TelegramAiSettings = defaultAiSettings();
 
   /**
-   * In-memory log of image-tool access (analyze_image, image_gen generate,
-   * image_gen edit). Capped at 500 entries (FIFO) — enough for real-time
-   * monitoring via the admin web panel without unbounded growth. Not persisted
-   * to disk (entries are ephemeral; restart clears the log).
+   * Image-tool access log (analyze_image, image_gen generate, image_gen edit).
+   * Capped at 500 entries (FIFO). Persisted to ~/.siberflow/telegram-image-access-log.json
+   * so the log survives bot restarts. Loaded at startup via initImageAccessLog().
    */
   private readonly imageAccessLog: Array<ImageAccessLogEntry & { timestamp: string }> = [];
   private static readonly IMAGE_LOG_MAX = 500;
+  private static readonly IMAGE_LOG_FILE = join(homedir(), ".siberflow", "telegram-image-access-log.json");
 
   constructor(
     private readonly api: TelegramApi,
@@ -608,18 +609,48 @@ class BotRunner {
   /**
    * Record an image-tool access (called by the image_gen / analyze_image tools
    * via the ToolContext.imageAccessLogger callback). Stamps the entry with the
-   * current time and caps the log at IMAGE_LOG_MAX entries (FIFO).
+   * current time, caps the log at IMAGE_LOG_MAX entries (FIFO), and persists
+   * to disk (fire-and-forget) so the log survives bot restarts.
    */
   logImageAccess(entry: ImageAccessLogEntry): void {
     this.imageAccessLog.push({ ...entry, timestamp: new Date().toISOString() });
     if (this.imageAccessLog.length > BotRunner.IMAGE_LOG_MAX) {
       this.imageAccessLog.splice(0, this.imageAccessLog.length - BotRunner.IMAGE_LOG_MAX);
     }
+    // Persist to disk (fire-and-forget; a write failure is non-fatal).
+    void this.persistImageAccessLog();
   }
 
   /** Return the image-access log, newest first (for the admin web panel). */
   getImageAccessLog(): Array<ImageAccessLogEntry & { timestamp: string }> {
     return [...this.imageAccessLog].reverse();
+  }
+
+  /** Persist the in-memory image-access log to disk. Best-effort, never throws. */
+  private async persistImageAccessLog(): Promise<void> {
+    try {
+      await mkdir(dirname(BotRunner.IMAGE_LOG_FILE), { recursive: true });
+      await writeFile(BotRunner.IMAGE_LOG_FILE, JSON.stringify(this.imageAccessLog), "utf8");
+    } catch (err) {
+      console.error(`Failed to persist image access log: ${(err as Error).message}`);
+    }
+  }
+
+  /** Load the persisted image-access log at startup. Called once from main(). */
+  async initImageAccessLog(): Promise<void> {
+    try {
+      const raw = await readFile(BotRunner.IMAGE_LOG_FILE, "utf8");
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        // Keep only the last IMAGE_LOG_MAX entries and validate basic shape.
+        const entries = parsed
+          .filter((e) => e && typeof e.tool === "string" && typeof e.timestamp === "string")
+          .slice(-BotRunner.IMAGE_LOG_MAX);
+        this.imageAccessLog.push(...entries);
+      }
+    } catch {
+      // File missing or corrupt — start with an empty log.
+    }
   }
 
   /** Load persisted AI settings from disk at startup. Called once from main(). */
