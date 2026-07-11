@@ -11,74 +11,25 @@
 export type AgentInterface = "terminal" | "vscode" | "telegram";
 
 /**
- * Build the tool-availability sentence for the base prompt, mentioning ONLY
- * the tool categories whose tools are actually registered. The base prompt
- * used to hardcode every tool name; that misled the model when a tool was
- * toggled off (the schema wouldn't include it, yet the prompt claimed it
- * existed). Now the prompt is derived from the registered tool set so the
- * prose and the schema can never drift.
- *
- * Returns the full "You have tools for ..." clause plus the sandbox note.
+ * Build the tool-availability sentence for the base prompt — a flat list of
+ * the registered tool NAMES only. Per-tool capabilities, modes, and
+ * constraints live in each tool's `description` (sent as the JSON schema), so
+ * repeating them here would only bloat the prompt and risk drifting from the
+ * schema. The model sees the full descriptions via the tool list; this
+ * clause just frames that tools exist and notes the cross-cutting sandbox
+ * scope that no single tool description conveys on its own.
  */
 function buildToolClause(enabledToolNames: string[]): string {
   const has = (name: string): boolean => enabledToolNames.includes(name);
   const any = (...names: string[]): boolean => names.some(has);
 
-  const parts: string[] = [];
-
-  if (any("read_file", "write_file", "edit_file", "copy_file", "list_dir", "delete_file", "grep")) {
-    const fileTools = ["read_file", "write_file", "edit_file", "copy_file", "list_dir", "delete_file", "grep"].filter(has);
-    parts.push(`file management (${fileTools.join(", ")})`);
-  }
-  if (has("exec")) parts.push("shell execution (exec)");
-  if (has("db_query")) parts.push("database access (db_query)");
-  if (any("ssh_exec", "sftp")) {
-    const sshTools = ["ssh_exec", "sftp"].filter(has);
-    parts.push(`remote SSH commands (${sshTools.join(", ")})`);
-  }
-  if (has("excel_script")) {
-    parts.push(
-      "Excel spreadsheet manipulation (excel_script — read/modify/create .xlsx workbooks via the full " +
-        "exceljs API in a sandboxed JS function: cells, formulas, images, charts, merge cells, styling)",
-    );
-  }
-  if (has("docx_script")) {
-    parts.push(
-      "Word document manipulation (docx_script — create/read .docx via the docx/mammoth libraries in a " +
-        "sandboxed JS function: headings, paragraphs, tables, images, bullets, styling)",
-    );
-  }
-  if (has("pdf_script")) {
-    parts.push(
-      "PDF document manipulation (pdf_script — create/read .pdf via Python reportlab/pdfplumber: " +
-        "pages, text, shapes, colors, full Unicode support, text extraction, OCR for scanned PDFs)",
-    );
-  }
-  if (has("run_browser")) {
-    parts.push("headless browser automation (run_browser via Puppeteer; when searching the web, use Bing/DuckDuckGo/Brave — NOT Google Search)");
-  }
-  if (has("analyze_image")) {
-    parts.push("image analysis (analyze_image for describing images, OCR, screenshots, charts/tables, and visual reasoning using the configured multimodal OpenAI-compatible provider)");
-  }
-  if (has("music_generate")) {
-    parts.push("music generation (music_generate for creating a 30-180 second audio track from a prompt and lyrics, saved inside the project directory; match duration to lyric length and keep short lyrics at 30 seconds)");
-  }
-  if (has("bot_script")) {
-    parts.push("bot automation (bot_script for host-provided bot actions such as sending messages/photos/documents to the active bot chat; file manipulation is not included, use file tools when enabled)");
-  }
-  if (has("ask_user")) {
-    parts.push("user interaction (ask_user to ask the user a question when you need confirmation, a choice, or free-form input)");
-  }
-
-  // task_update is intentionally NOT listed here: it's always present when
-  // tasks are enabled, but its usage is explained in TASKS_GUIDANCE (appended
-  // separately), not in the tool-availability sentence.
-
-  const toolsClause = parts.length > 0
-    ? `You have tools for ${parts.join(", ")}.`
+  const toolsClause = enabledToolNames.length > 0
+    ? `You have tools available: ${enabledToolNames.join(", ")}.`
     : "You currently have no tools registered.";
 
-  // Sandbox-scope note — only mention what's relevant to the active set.
+  // Cross-cutting sandbox scope — only mention what's relevant to the active
+  // set. Per-tool sandbox details live in each tool's description; this is the
+  // one fact that spans multiple tools and isn't obvious from any single one.
   const hasLocalFs = any("read_file", "write_file", "edit_file", "copy_file", "list_dir", "delete_file", "grep", "exec") ||
     has("excel_script") || has("docx_script") || has("pdf_script") || has("music_generate");
   const hasRemoteSsh = any("ssh_exec", "sftp");
@@ -143,6 +94,21 @@ For a brief but ambiguous request (e.g. "optimize it", "fix the app"), don't gue
 changes. State your interpretation in one line; if still ambiguous, ask ONE clarifying question. Proceed \
 only once the intent is clear. For concrete, well-scoped requests, just do the work without preamble.`;
 
+/**
+ * Agent-tool delegation guidance — Telegram only, appended when agent_explorer
+ * or agent_general is registered. Telegram runs on a tighter context budget
+ * than the desktop/CLI hosts, so nudge the model to offload research/exploration
+ * to the read-only Agent Explorer (keeps the main context clean) and to lean on
+ * the Agent General for multi-step work.
+ */
+export const AGENT_GUIDANCE = `\n\n# Use your agent helpers aggressively
+You have an \`agent_explorer\` and/or \`agent_general\` tool — USE THEM to keep your own context lean:
+- For ANY research or information lookup (web search, reading docs, exploring the codebase, "how does X work", \
+"find all Y"), delegate to \`agent_explorer\` FIRST instead of calling web_search/run_browser/grep yourself. \
+It runs read-only and returns a concise summary.
+- For multi-step execution work that would fill your context with many tool calls, delegate to \`agent_general\`.
+Only call web_search/run_browser/grep directly for a quick single lookup.`;
+
 export interface BuildPromptOptions {
   interface: AgentInterface;
   tasksEnabled?: boolean;
@@ -162,9 +128,15 @@ export interface BuildPromptOptions {
  * is always included (it governs response shape, not an optional feature).
  */
 export function buildSystemPrompt(opts: BuildPromptOptions): string {
-  let prompt = BASE_PROMPT(opts.interface, opts.enabledToolNames ?? []);
+  const tools = opts.enabledToolNames ?? [];
+  let prompt = BASE_PROMPT(opts.interface, tools);
   prompt += INTENT_GUIDANCE;
   if (opts.tasksEnabled) prompt += TASKS_GUIDANCE;
   if (opts.summaryMode) prompt += SUMMARY_GUIDANCE;
+  // Telegram-only nudge: prefer the agent helpers for research/multi-step work
+  // to keep the tighter Telegram context budget clean.
+  if (opts.interface === "telegram" && (tools.includes("agent_explorer") || tools.includes("agent_general"))) {
+    prompt += AGENT_GUIDANCE;
+  }
   return prompt;
 }
