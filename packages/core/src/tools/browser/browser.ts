@@ -343,29 +343,16 @@ function ensureWorkerFile(): void {
 export const runBrowserTool: Tool = {
   name: "run_browser",
   description:
-    "Launch a real headless Chrome/Edge browser and run any Puppeteer code you write. " +
-    "You get full control — navigate, click, type, wait, evaluate, screenshot, intercept " +
-    "network, manage cookies, open multiple tabs, download files, fill & submit forms, " +
-    "log in, test flows, extract data, etc. Essentially anything a human " +
-    "can do in a browser, you can automate here.\n\n" +
-    "You receive `{ page, browser }`: `page` is a Puppeteer Page already navigated to `url` " +
-    "(if you provided one); `browser` is the Browser instance so you can open more pages. " +
-    "Write Puppeteer API calls freely. Return a string or any JSON-serializable value — " +
-    "that becomes the tool result shown to you.\n\n" +
-    "TIPS:\n" +
-    "- The browser is the user's installed Chrome or Edge (no separate download).\n" +
-    "- If a site needs login, you can fill the form and submit it within the script.\n" +
-    "- Use page.waitForSelector() for content that appears after JS/AJAX runs.\n" +
-    "- Use page.$$eval() to extract arrays of data from matched elements.\n" +
-    "- IMPORTANT: `page.waitForTimeout(ms)` was REMOVED in Puppeteer v22+. To " +
-    "sleep, use `await new Promise(r => setTimeout(r, ms))` instead.\n" +
-    "- Prefer waiting for a specific selector over a fixed sleep whenever possible.\n" +
-    "- You are free to use any Puppeteer method — the sandbox is isolated per call.\n" +
-    "- Do not use shell/process access in scripts: child_process, execSync, spawn, require, " +
-    "dynamic import, process, eval, and Function are blocked.\n" +
-    "- File paths in your script (page.screenshot({ path }), downloads, setInputFiles) resolve " +
-    "relative to the PROJECT directory — use relative paths like 'out.png' or 'screenshots/page.png' " +
-    "and the file lands in the project folder. Do NOT use absolute paths unless necessary.",
+    "Run Puppeteer code in a headless Chrome/Edge (the user's installed browser). You receive " +
+    "`{ page, browser }` — `page` is navigated to `url` if provided; `browser` lets you open more pages. " +
+    "Write any Puppeteer calls; return a string or JSON-serializable value.\n\n" +
+    "Gotchas:\n" +
+    "- `page.waitForTimeout(ms)` was REMOVED in Puppeteer v22+ — sleep with " +
+    "`await new Promise(r => setTimeout(r, ms))` instead.\n" +
+    "- Prefer `page.waitForSelector()` / `page.$$eval()` over fixed sleeps for AJAX/SPA content.\n" +
+    "- File paths (screenshot, downloads, setInputFiles) resolve relative to the PROJECT dir — use " +
+    "relative paths, not absolute.\n" +
+    "- Shell/process access is blocked (child_process, require, eval, etc.).",
   parameters: {
     type: "object",
     properties: {

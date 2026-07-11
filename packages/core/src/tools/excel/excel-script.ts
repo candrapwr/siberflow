@@ -34,76 +34,37 @@ const MAX_RETURN_CHARS = 200_000;
 export const excelScriptTool: Tool = {
   name: "excel_script",
   description:
-    "Read, modify, or create an Excel (.xlsx) workbook by running a JavaScript function you supply, " +
-    "with full access to the exceljs API: read/write cells, formulas, multiple sheets, merge cells, " +
-    "multi-level headers, conditional formatting, charts, images (addImage/getImages), autofilter, data " +
-    "validation, frozen panes, column/row grouping, number formats, and styling. This is the single " +
-    "tool for ALL Excel work — both reading existing files and creating new ones.\n\n" +
-    "MODES:\n" +
-    "• Read an existing file: pass `path` + a script that reads from `wb` and RETURNS the data you " +
-    "extracted (e.g. `(wb, ExcelJS) => { const ws = wb.getWorksheet('Sheet1'); return ws.getSheetValues(); }`). " +
-    "Set `readOnly: true` so the file isn't rewritten. The return value (string|number|object|array) is " +
-    "serialized to JSON and sent back to you as the tool result, so you can see what you read.\n" +
-    "• Modify an existing file: pass `path` (the workbook is loaded and passed in as `wb`), mutate it " +
-    "in the script, omit `readOnly`. The workbook is written back to `path` (or `saveAs`) after the " +
-    "script finishes — you never touch the filesystem yourself.\n" +
-    "• Create a new file: OMIT `path`, build the workbook from scratch via `wb.addWorksheet(...)`, " +
-    "and pass `saveAs` (or `path`) as the destination. The fresh empty `wb` is passed in.\n\n" +
-    "SIGNATURE: `(wb, ExcelJS) => { ... return <optional data> }` where `wb` is a Workbook (either " +
-    "loaded from `path` or a fresh empty one) and `ExcelJS` is the exceljs module. The function MUST be " +
-    "synchronous — return a plain value, not a Promise (the host does all file I/O for you).\n\n" +
-    "READING TIPS:\n" +
-    "• Formulas: a cell whose value is a formula exposes `{ formula, result }` — read " +
-    "`cell.value.formula` for the expression, `cell.value.result` for the cached result.\n" +
-    "• Images: `ws.getImages()` returns `[{ type:'image', imageId, range }]`; the backing buffer is " +
-    "`wb.getImage(imageId).buffer`.\n" +
-    "• Row values: `ws.getSheetValues()` (index 0 is a gap in exceljs — slice(1) to drop it) or " +
-    "iterate `ws.eachRow((row) => row.values)`.\n\n" +
-    "WRITING TIPS:\n" +
-    "• Formula cell: `ws.getCell('C2').value = { formula: 'SUM(A2:A10)' }`.\n" +
-    "• Image: `const id = wb.addImage({ buffer, extension:'png' }); ws.addImage(id, 'D2:F8');` — " +
-    "`buffer` must be a Buffer/Uint8Array of the image bytes. The sandbox blocks `fs`, so to embed an " +
-    "image you must first read its bytes OUTSIDE this tool (e.g. via read_file) and inline the decoded " +
-    "Buffer literal in the script source, or build it from data you already have.\n\n" +
-    "The script runs in a locked-down sandbox: it receives `(wb, ExcelJS)`. The sandbox blocks `require`, " +
-    "`process`, `fs`, network, `eval`, the `Function` constructor, and async/Promise; execution is capped " +
-    "at 5 seconds. The host loads the source file (if `path` is given and exists) and writes the result " +
-    "back to disk after the script runs — the script itself never touches the filesystem, so file access " +
-    "stays sandboxed to the project directory (uploaded files in the session upload dir are also readable). " +
-    "On error, the message is returned so you can fix the script and retry.",
+    "Read, modify, or create an Excel (.xlsx) workbook via a JavaScript function with full exceljs API " +
+    "access (cells, formulas, sheets, merge, formatting, charts, images, autofilter, validation).\n\n" +
+    "Signature: `(wb, ExcelJS) => { ... return <optional data> }`. `wb` is a Workbook (loaded from `path`, " +
+    "or fresh if omitted); `ExcelJS` is the module. MUST be synchronous (no Promise); the host does all file I/O.\n\n" +
+    "Modes: (1) read — pass `path` + `readOnly:true`, return extracted data as JSON; (2) modify — pass `path`, " +
+    "mutate `wb`, auto-written back; (3) create — omit `path`, build via `wb.addWorksheet(...)`, pass `saveAs`.\n\n" +
+    "Formula cells expose `{ formula, result }`. Image bytes must be inlined as a Buffer (fs is blocked). " +
+    "Sandbox blocks require/process/fs/network/eval; capped at 5s. Errors are returned for retry.",
   parameters: {
     type: "object",
     properties: {
       path: {
         type: "string",
         description:
-          "Workbook to load (read/modify mode) OR the destination to write (create mode, when no " +
-          "existing file). If the file exists it is loaded into `wb`; if not, `wb` starts empty and " +
-          "is written here. Absolute or relative to project dir. Inside the project sandbox; uploaded " +
-          "files (session upload dir) are also readable.",
+          "Workbook to load (read/modify) or destination to write (create). Loaded into `wb` if it exists. " +
+          "Relative to project dir; session upload dir also readable.",
       },
       saveAs: {
         type: "string",
         description:
-          "Optional explicit destination path (overrides `path` for the write). Use when loading " +
-          "from `path` but saving elsewhere. Must be inside the project sandbox.",
+          "Optional write destination (overrides `path`). Use to save elsewhere than the loaded file.",
       },
       script: {
         type: "string",
         description:
-          "A synchronous JavaScript function expression taking (wb, ExcelJS). Read mode: return the " +
-          "extracted data (it comes back to you as the tool result). Write/modify mode: mutate `wb` " +
-          "and optionally return a summary. Examples —\n" +
-          "Read: \"(wb, ExcelJS) => { const ws = wb.worksheets[0]; const rows = []; " +
-          "ws.eachRow((r) => rows.push(r.values.slice(1))); return { headers: rows[0], data: rows.slice(1) }; }\"\n" +
-          "Create: \"(wb, ExcelJS) => { const ws = wb.addWorksheet('Sales'); " +
-          "ws.getCell('A1').value = 'Total'; ws.getCell('B1').value = { formula: 'SUM(B2:B10)' }; }\"",
+          "Synchronous function `(wb, ExcelJS) => { ... }`. Read mode: return extracted data. " +
+          "Write/create mode: mutate `wb`, optionally return a summary.",
       },
       readOnly: {
         type: "boolean",
-        description:
-          "If true, never write the workbook back to disk (pure read/inspect). Default false. Set " +
-          "this when you only want to extract data from an existing file without modifying it.",
+        description: "If true, never write back (pure read). Default false.",
       },
     },
     required: ["script"],

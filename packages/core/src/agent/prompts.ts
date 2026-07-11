@@ -55,7 +55,7 @@ function buildToolClause(enabledToolNames: string[]): string {
     );
   }
   if (has("run_browser")) {
-    parts.push("headless browser automation (run_browser for navigating/scraping/interacting with pages via the user's installed Chrome/Edge using the Puppeteer API — supports AJAX/SPA content, form fill, login, screenshots; when searching the web, do not use Google Search, use Bing, DuckDuckGo, Brave Search, or another non-Google search engine instead)");
+    parts.push("headless browser automation (run_browser via Puppeteer; when searching the web, use Bing/DuckDuckGo/Brave — NOT Google Search)");
   }
   if (has("analyze_image")) {
     parts.push("image analysis (analyze_image for describing images, OCR, screenshots, charts/tables, and visual reasoning using the configured multimodal OpenAI-compatible provider)");
@@ -113,19 +113,12 @@ When verification was not possible, say so plainly.`;
  * (Unified richer version: previously the CLI and VSCode copies had drifted
  * apart; this is the merged form.)
  */
-export const TASKS_GUIDANCE = `\n\n# Task checklist — IMPORTANT, use it aggressively
-You have a \`task_update\` tool that shows the user a live checklist. Rules:
-- If a request needs 2 OR MORE distinct steps, your VERY FIRST action MUST be a \`task_update\` \
-call that lays out the entire plan up front (every item "pending", except set the first to "in_progress"). \
-Do this before any other tool call.
-- After EACH step finishes, immediately call \`task_update\` again with updated statuses: mark the \
-just-finished item "completed" and set the next one to "in_progress". Keep EXACTLY ONE item \
-"in_progress" at a time. Do not batch updates or wait until the end.
-- Always send the COMPLETE list on every call (full replacement), not just the changed item.
-- If you discover new sub-steps mid-task, add them to the list via task_update.
-- Only skip the checklist for a genuinely single-step request (e.g. "read foo.ts", "what does X do?").
-When in doubt, make a checklist — the user prefers seeing progress.
-- The checklist is for execution work. For a simple explanation, quick inspection, or a single factual answer, skip it.`;
+export const TASKS_GUIDANCE = `\n\n# Task checklist — use it aggressively
+You have a \`task_update\` tool that shows the user a live checklist. For any request with 2+ distinct \
+steps, your FIRST action is a \`task_update\` call laying out the full plan (first item "in_progress", \
+rest "pending"). After each step, call it again: mark the completed item "completed" and the next \
+"in_progress" (exactly one in_progress at a time). Always send the COMPLETE list (full replacement). \
+Skip it for genuinely single-step requests (quick inspection, explanation, or factual answer).`;
 
 /**
  * Summary-mode context optimization breadcrumb explanation — appended when
@@ -135,16 +128,10 @@ When in doubt, make a checklist — the user prefers seeing progress.
  * Callers set `summaryMode = true` for either of those modes.
  */
 export const SUMMARY_GUIDANCE = `\n\n# [SUMMARY] tags in user messages
-Some user messages carry a trailing \`[SUMMARY]\` block (e.g. \`[SUMMARY]\\nexec("df -h")\\nwrite_file("src/foo.ts")\`). \
-This is a provenance marker injected by the context optimizer: it records WHICH tools ran in that past turn — as a \
-compact signature of tool name plus short identifier args (path, command, query, line range). The full arguments \
-and the tool results were removed to save context. \
-Rules:
-- A signature tells you WHAT was touched (e.g. "write_file touched src/foo.ts") but NOT what was written or what the \
-tool returned. Those values may be stale, so do NOT treat them as fact.
-- It tells you tool work happened in that turn, so the assistant's answer that followed was grounded in execution, not a guess.
-- If you need the actual content/result of one of those past tool calls, re-run the tool — do not infer or fabricate it.
-- Never output or mimic the [SUMMARY] format yourself; it is read-only metadata from the optimizer.`;
+A trailing \`[SUMMARY]\` block (e.g. \`[SUMMARY]\\nexec("df -h")\\nwrite_file("src/foo.ts")\`) marks what tools ran \
+in a past turn — a compact signature (tool + short arg). The full args and results were removed to save context. \
+These signatures show WHAT was touched but NOT the values (which may be stale). If you need actual content/results, \
+re-run the tool. Never output [SUMMARY] tags yourself — they're read-only optimizer metadata.`;
 
 /**
  * Intent-handling guidance — always appended. Keeps responses fast and
@@ -152,13 +139,9 @@ tool returned. Those values may be stale, so do NOT treat them as fact.
  * requests, without slowing down concrete well-scoped requests.
  */
 export const INTENT_GUIDANCE = `\n\n# Short but ambiguous requests
-When a request is brief but its goal or scope is unclear (e.g. "optimize it", "improve this", \
-"make it better", "fix the app"), do NOT guess and then produce a large analysis or sweeping change. \
-Instead: state your interpretation of the intent in one line; if it still seems ambiguous after that, \
-ask ONE focused clarifying question. Only proceed with the work once the intent is clear, or clearly \
-state the narrow interpretation you chose and proceed with that. This avoids wasted output on a wrong \
-guess and keeps responses fast. For concrete, well-scoped requests, just do the work end-to-end without \
-preamble.`;
+For a brief but ambiguous request (e.g. "optimize it", "fix the app"), don't guess and then make sweeping \
+changes. State your interpretation in one line; if still ambiguous, ask ONE clarifying question. Proceed \
+only once the intent is clear. For concrete, well-scoped requests, just do the work without preamble.`;
 
 export interface BuildPromptOptions {
   interface: AgentInterface;

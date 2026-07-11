@@ -11,17 +11,8 @@ export const askUserTool: Tool = {
   name: "ask_user",
   description:
     "Ask the user a question when you need confirmation, a decision, or free-form input before proceeding. " +
-    "Use this for: destructive-action confirmation (e.g. 'Delete 10 files?'), choosing between approaches " +
-    "(e.g. 'TypeScript or JavaScript?'), disambiguating ambiguous requests, or requesting a value you can't " +
-    "infer (e.g. a function name). The tool blocks until the user responds. " +
-    "\n\nPARAMETERS:\n" +
-    "- `question` (required): the question text shown to the user.\n" +
-    "- `choices` (optional): predefined options rendered as buttons. Omit for free-text-only prompts.\n" +
-    "- `allowFreeText` (optional, default false): also show a free-text input alongside choices.\n" +
-    "- `defaultChoice` (optional): pre-selected option or input placeholder.\n\n" +
-    "If the user cancels, the tool returns a cancellation message — stop the current task and await " +
-    "further instructions. If interaction is unavailable (e.g. CLI without a UI), the tool returns a " +
-    "fallback message — proceed with a safe default rather than asking again.",
+    "Blocks until the user responds. On cancel, returns a cancellation message — stop and await instructions. " +
+    "If interaction is unavailable (e.g. no UI), returns a fallback message — proceed with a safe default.",
   parameters: {
     type: "object",
     properties: {
