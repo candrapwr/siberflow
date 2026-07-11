@@ -102,13 +102,14 @@ export abstract class OpenAICompatibleProvider implements Provider {
       `msgs=${req.messages.length} tools=${req.tools?.length ?? 0}`,
     );
 
+    const requestBody = JSON.stringify(body);
     const res = await fetch(`${this.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${this.apiKey}`,
       },
-      body: JSON.stringify(body),
+      body: requestBody,
       signal: req.signal,
     });
 
@@ -117,10 +118,14 @@ export abstract class OpenAICompatibleProvider implements Provider {
     if (!res.ok) {
       const text = await res.text();
       debug(`✗ ${this.name} error body:`, text);
-      throw new Error(`${this.name} API error ${res.status}: ${text}`);
+      const err = new Error(`${this.name} API error ${res.status}: ${text}`);
+      (err as { requestBody?: string }).requestBody = requestBody;
+      throw err;
     }
     if (!res.body) {
-      throw new Error(`${this.name} returned empty response body`);
+      const err = new Error(`${this.name} returned empty response body`);
+      (err as { requestBody?: string }).requestBody = requestBody;
+      throw err;
     }
 
     let content = "";

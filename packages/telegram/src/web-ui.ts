@@ -471,6 +471,9 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     <button class="nav-item" data-page="imagelog" onclick="goPage('imagelog')">
       <span class="icon">📷</span> Image Log
     </button>
+    <button class="nav-item" data-page="agentlog" onclick="goPage('agentlog')">
+      <span class="icon">🤖</span> Agent Log
+    </button>
   </nav>
   <div class="sidebar-foot">
     <div>v0.1.0</div>
@@ -518,6 +521,13 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     <!-- Page: Image Log -->
     <div class="page" id="page-imagelog">
       <div id="imagelogWrap">
+        <div class="empty"><span class="spin"></span> Memuat...</div>
+      </div>
+    </div>
+
+    <!-- Page: Agent Log -->
+    <div class="page" id="page-agentlog">
+      <div id="agentlogWrap">
         <div class="empty"><span class="spin"></span> Memuat...</div>
       </div>
     </div>
@@ -620,7 +630,7 @@ function goPage(name) {
   document.querySelectorAll(".nav-item").forEach(n => n.classList.remove("active"));
   document.getElementById("page-" + name).classList.add("active");
   document.querySelector('.nav-item[data-page="' + name + '"]').classList.add("active");
-  const titles = { sessions: "Sessions", overview: "Overview", settings: "AI Settings", tools: "Tools", imagelog: "Image Log" };
+  const titles = { sessions: "Sessions", overview: "Overview", settings: "AI Settings", tools: "Tools", imagelog: "Image Log", agentlog: "Agent Log" };
   document.getElementById("pageTitle").textContent = titles[name] || name;
   const topActions = document.getElementById("topActions");
   if (name === "sessions") {
@@ -637,6 +647,9 @@ function goPage(name) {
   } else if (name === "imagelog") {
     topActions.innerHTML = '<button class="primary" onclick="loadImageLog()">⟳ Refresh</button>';
     loadImageLog();
+  } else if (name === "agentlog") {
+    topActions.innerHTML = '<button class="primary" onclick="loadAgentLog()">⟳ Refresh</button> <button onclick="clearAgentLog()" style="background:#3d1e1e;color:#f87171">🗑 Hapus Semua</button>';
+    loadAgentLog();
   } else {
     topActions.innerHTML = '';
   }
@@ -1382,6 +1395,98 @@ function renderImageLog() {
     '<table><thead><tr>' +
       '<th>Waktu</th><th>User ID</th><th>Tool (Mode)</th><th>Model</th><th style="text-align:center">Status</th><th>Error</th>' +
     '</tr></thead><tbody>' + rows + '</tbody></table>';
+}
+
+// ── Agent Log ──
+let agentLogCache = [];
+async function loadAgentLog() {
+  const wrap = document.getElementById("agentlogWrap");
+  wrap.innerHTML = '<div class="empty"><span class="spin"></span> Memuat...</div>';
+  try {
+    agentLogCache = await api("/api/agent-access-log");
+    renderAgentLog();
+  } catch (e) {
+    wrap.innerHTML = '<div class="empty">Gagal: ' + esc(e.message) + '</div>';
+  }
+}
+function renderAgentLog() {
+  const wrap = document.getElementById("agentlogWrap");
+  if (!agentLogCache.length) {
+    wrap.innerHTML = '<div class="empty">Belum ada log akses agent tool.</div>';
+    return;
+  }
+  let rows = '';
+  for (const e of agentLogCache) {
+    const statusBadge = e.status === "success"
+      ? '<span class="badge" style="background:#1e3d2f;color:#4ade80">OK</span>'
+      : '<span class="badge" style="background:#3d1e1e;color:#f87171">ERROR</span>';
+    const taskCell = e.task
+      ? '<span style="font-size:12px">' + esc(e.task.length > 200 ? e.task.slice(0, 197) + '…' : e.task) + '</span>'
+      : '<span class="muted">-</span>';
+    const firstLine = e.error ? (e.error.split('\n')[0] || e.error) : '';
+    const errorCell = e.error
+      ? '<a href="javascript:void(0)" onclick="showAgentDetail(\'' + esc(e.id) + '\')" style="color:#f87171;font-size:11px" title="Klik untuk lihat detail & request body">' + esc(firstLine.slice(0, 100)) + (firstLine.length > 100 ? '…' : '') + '</a>'
+      : '<span class="muted">-</span>';
+    rows += '<tr>' +
+      '<td class="muted" style="font-size:12px;white-space:nowrap">' + fmtDate(e.timestamp) + '</td>' +
+      '<td class="mono">' + esc(e.userId ?? "-") + '</td>' +
+      '<td class="mono">' + esc(e.tool || "-") + '</td>' +
+      '<td class="mono" style="font-size:12px">' + esc(e.model || "-") + '</td>' +
+      '<td style="max-width:320px">' + taskCell + '</td>' +
+      '<td style="text-align:center">' + statusBadge + '</td>' +
+      '<td style="max-width:260px">' + errorCell + '</td>' +
+    '</tr>';
+  }
+  wrap.innerHTML =
+    '<div class="form-help" style="margin-bottom:12px">' + agentLogCache.length + ' entri (maks 500, tersimpan di disk — bertahan saat restart). Klik error untuk lihat detail & request body.</div>' +
+    '<table><thead><tr>' +
+      '<th>Waktu</th><th>User ID</th><th>Tool</th><th>Model</th><th>Task</th><th style="text-align:center">Status</th><th>Error</th>' +
+    '</tr></thead><tbody>' + rows + '</tbody></table>';
+}
+async function clearAgentLog() {
+  if (!confirm('Hapus SEMUA log agent? Tidak bisa diundo.')) return;
+  try {
+    const d = await api("/api/agent-access-log", { method: "DELETE" });
+    if (d.ok) {
+      agentLogCache = [];
+      renderAgentLog();
+      toast('Log agent dihapus.', true);
+    } else {
+      toast("Gagal: " + (d.error || "unknown"), false);
+    }
+  } catch (e) {
+    toast("Gagal: " + e.message, false);
+  }
+}
+async function showAgentDetail(id) {
+  openModal('Agent Log Detail', '<div class="empty"><span class="spin"></span> Memuat detail...</div>');
+  try {
+    const e = await api("/api/agent-access-log/" + encodeURIComponent(id));
+    if (!e || e.error === "Log entry not found") {
+      openModal('Agent Log Detail', '<div class="empty">Entri tidak ditemukan.</div>');
+      return;
+    }
+    const statusBadge = e.status === "success"
+      ? '<span class="badge" style="background:#1e3d2f;color:#4ade80">OK</span>'
+      : '<span class="badge" style="background:#3d1e1e;color:#f87171">ERROR</span>';
+    let body = '<table class="kv">' +
+      '<tr><th>Waktu</th><td>' + esc(fmtDate(e.timestamp)) + '</td></tr>' +
+      '<tr><th>User ID</th><td class="mono">' + esc(e.userId ?? "-") + '</td></tr>' +
+      '<tr><th>Tool</th><td class="mono">' + esc(e.tool || "-") + '</td></tr>' +
+      '<tr><th>Model</th><td class="mono">' + esc(e.model || "-") + '</td></tr>' +
+      '<tr><th>Status</th><td>' + statusBadge + '</td></tr>' +
+      '<tr><th>Task</th><td style="font-size:12px;white-space:pre-wrap;word-break:break-word">' + esc(e.task || "-") + '</td></tr>';
+    if (e.error) {
+      body += '<tr><th style="vertical-align:top">Error</th><td><pre style="white-space:pre-wrap;word-break:break-word;color:#f87171;font-size:11px;background:#2a1414;padding:8px;border-radius:4px;max-height:300px;overflow:auto">' + esc(e.error) + '</pre></td></tr>';
+    }
+    if (e.requestBody) {
+      body += '<tr><th style="vertical-align:top">Request Body</th><td><details><summary style="cursor:pointer;font-size:12px;color:#60a5fa">Tampilkan JSON (' + e.requestBody.length + ' chars)</summary><pre style="margin-top:6px;white-space:pre-wrap;word-break:break-word;font-size:11px;background:#161e2a;padding:8px;border-radius:4px;max-height:400px;overflow:auto">' + esc(e.requestBody) + '</pre></details></td></tr>';
+    }
+    body += '</table>';
+    openModal('Agent Log Detail', body);
+  } catch (e) {
+    openModal('Agent Log Detail', '<div class="empty">Gagal: ' + esc(e.message) + '</div>');
+  }
 }
 
 // ── Sessions ──
