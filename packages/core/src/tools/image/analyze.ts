@@ -29,7 +29,7 @@ const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
  * string (the project convention for tool failures) so the model can react,
  * rather than throwing and aborting the turn.
  */
-const REQUEST_TIMEOUT_MS = 60_000;
+const REQUEST_TIMEOUT_MS = 180_000;
 
 export const analyzeImageTool: Tool = {
   name: "analyze_image",
