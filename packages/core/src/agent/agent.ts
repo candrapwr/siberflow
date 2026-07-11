@@ -118,6 +118,8 @@ export interface AgentOptions {
   userId?: ToolContext["userId"];
   /** Optional image-tool access logger (forwarded to ToolContext). */
   imageAccessLogger?: ToolContext["imageAccessLogger"];
+  /** Optional agent-tool access logger (forwarded to ToolContext). */
+  agentAccessLogger?: ToolContext["agentAccessLogger"];
   /** Optional context optimization (default: disabled). */
   contextOptimize?: ContextOptimizeConfig;
   /**
@@ -282,6 +284,7 @@ export class Agent {
       ...(opts.botScript ? { botScript: opts.botScript } : {}),
       ...(opts.userId !== undefined ? { userId: opts.userId } : {}),
       ...(opts.imageAccessLogger ? { imageAccessLogger: opts.imageAccessLogger } : {}),
+      ...(opts.agentAccessLogger ? { agentAccessLogger: opts.agentAccessLogger } : {}),
       ...(opts.preTruncate !== undefined ? { preTruncate: opts.preTruncate } : {}),
       // Forward subagent progress to the host UI. The closure captures `this`
       // so it can read the current turn's events at call time.

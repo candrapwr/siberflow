@@ -60,13 +60,14 @@ export class OpenAIResponsesProvider implements Provider {
       `input=${input.length} tools=${req.tools?.length ?? 0}`,
     );
 
+    const requestBody = JSON.stringify(body);
     const res = await fetch(`${this.baseUrl}/responses`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${this.apiKey}`,
       },
-      body: JSON.stringify(body),
+      body: requestBody,
       signal: req.signal,
     });
 
@@ -75,10 +76,14 @@ export class OpenAIResponsesProvider implements Provider {
     if (!res.ok) {
       const text = await res.text();
       debug(`✗ openai-responses error body:`, text);
-      throw new Error(`openai-responses API error ${res.status}: ${text}`);
+      const err = new Error(`openai-responses API error ${res.status}: ${text}`);
+      (err as { requestBody?: string }).requestBody = requestBody;
+      throw err;
     }
     if (!res.body) {
-      throw new Error("openai-responses returned empty response body");
+      const err = new Error("openai-responses returned empty response body");
+      (err as { requestBody?: string }).requestBody = requestBody;
+      throw err;
     }
 
     interface PendingCall {

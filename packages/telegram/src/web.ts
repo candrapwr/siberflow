@@ -68,6 +68,12 @@ export interface WebServiceOptions {
   dropSession: (id: string) => void;
   /** Returns the image-tool access log (newest first). */
   getImageAccessLog: () => Array<{ userId: number | string; tool: string; mode?: string; model: string; status: string; error?: string; timestamp: string }>;
+  /** Returns the agent-tool access log (newest first), without requestBody. */
+  getAgentAccessLog: () => Array<{ id: string; userId: number | string; tool: string; task: string; model: string; status: string; error?: string; timestamp: string }>;
+  /** Returns one full agent-log entry (including requestBody) by id, or undefined. */
+  getAgentAccessLogDetail: (id: string) => { id: string; userId: number | string; tool: string; task: string; model: string; status: string; error?: string; requestBody?: string; timestamp: string } | undefined;
+  /** Clear the entire agent-access log. */
+  clearAgentAccessLog: () => void;
 }
 
 /** Parsed components of a Telegram session id. */
@@ -178,9 +184,9 @@ function buildMessageRows(session: Session): MessageRow[] {
  * listen() is non-blocking.
  */
 export async function startWebService(opts: WebServiceOptions): Promise<Server> {
-  const { api, workdirRoot, port, getAiSettings, applyAiSettings, dropSession, getImageAccessLog } = opts;
+  const { api, workdirRoot, port, getAiSettings, applyAiSettings, dropSession, getImageAccessLog, getAgentAccessLog, getAgentAccessLogDetail, clearAgentAccessLog } = opts;
   const server = createServer((req, res) => {
-    void handleRequest(req, res, { api, workdirRoot, getAiSettings, applyAiSettings, dropSession, getImageAccessLog }).catch((err) => {
+    void handleRequest(req, res, { api, workdirRoot, getAiSettings, applyAiSettings, dropSession, getImageAccessLog, getAgentAccessLog, getAgentAccessLogDetail, clearAgentAccessLog }).catch((err) => {
       console.error(`Admin web error: ${(err as Error).message}`);
       sendJson(res, 500, { error: "Internal server error" });
     });
@@ -202,6 +208,9 @@ async function handleRequest(
     applyAiSettings: (s: TelegramAiSettings) => Promise<void>;
     dropSession: (id: string) => void;
     getImageAccessLog: () => Array<{ userId: number | string; tool: string; mode?: string; model: string; status: string; error?: string; timestamp: string }>;
+    getAgentAccessLog: () => Array<{ id: string; userId: number | string; tool: string; task: string; model: string; status: string; error?: string; timestamp: string }>;
+    getAgentAccessLogDetail: (id: string) => { id: string; userId: number | string; tool: string; task: string; model: string; status: string; error?: string; requestBody?: string; timestamp: string } | undefined;
+    clearAgentAccessLog: () => void;
   },
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -357,6 +366,21 @@ async function handleRequest(
   }
   if (path === "/api/image-access-log" && req.method === "GET") {
     return sendJson(res, 200, ctx.getImageAccessLog());
+  }
+  if (path === "/api/agent-access-log" && req.method === "GET") {
+    return sendJson(res, 200, ctx.getAgentAccessLog());
+  }
+  // Full single entry (includes requestBody) — loaded on demand by the detail view.
+  const agentLogDetailMatch = path.match(/^\/api\/agent-access-log\/([^/]+)$/);
+  if (agentLogDetailMatch && req.method === "GET") {
+    const entry = ctx.getAgentAccessLogDetail(decodeURIComponent(agentLogDetailMatch[1]!));
+    if (!entry) return sendJson(res, 404, { error: "Log entry not found" });
+    return sendJson(res, 200, entry);
+  }
+  // Clear the entire agent-access log.
+  if (path === "/api/agent-access-log" && req.method === "DELETE") {
+    ctx.clearAgentAccessLog();
+    return sendJson(res, 200, { ok: true });
   }
 
   sendJson(res, 404, { error: "Not found" });

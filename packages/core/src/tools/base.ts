@@ -115,6 +115,13 @@ export interface ToolContext {
    * it succeeded. Absent in CLI/Desktop/VS Code.
    */
   imageAccessLogger?: (entry: ImageAccessLogEntry) => void;
+  /**
+   * Optional agent-tool access logger. When injected (by the Telegram host),
+   * the agent_general and agent_explorer tools call it after each execution so
+   * the host can record who delegated which task and whether it succeeded.
+   * Absent in CLI/Desktop/VS Code.
+   */
+  agentAccessLogger?: (entry: AgentAccessLogEntry) => void;
 }
 
 /** A single image-tool access log entry. See ToolContext.imageAccessLogger. */
@@ -131,6 +138,26 @@ export interface ImageAccessLogEntry {
   status: "success" | "error";
   /** Error message when status is "error". */
   error?: string;
+}
+
+/** A single agent-tool access log entry. See ToolContext.agentAccessLogger. */
+export interface AgentAccessLogEntry {
+  /** Who triggered the delegation (Telegram user id, or "unknown"). */
+  userId: number | string;
+  /** Tool name: "agent_general" | "agent_explorer". */
+  tool: string;
+  /** The task description passed to the sub-agent. */
+  task: string;
+  /** Model id used for the sub-agent. */
+  model: string;
+  /** Outcome. */
+  status: "success" | "error";
+  /** Error message when status is "error". */
+  error?: string;
+  /** The raw LLM request body (JSON string) captured when a provider call
+   *  failed. Absent on success or when no request was sent. Large — load on
+   *  demand via the detail endpoint rather than in the list view. */
+  requestBody?: string;
 }
 
 export interface Tool {

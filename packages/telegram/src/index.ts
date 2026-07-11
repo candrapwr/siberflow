@@ -19,6 +19,7 @@ import {
   SESSION_FORMAT_VERSION,
   type BotScriptHost,
   type ImageAccessLogEntry,
+  type AgentAccessLogEntry,
   type Provider,
   type Session,
   type ToolRegistry,
@@ -203,6 +204,7 @@ async function main(): Promise<void> {
   // Load persisted AI provider override settings (disabled by default → env).
   await runner.initAiSettings();
   await runner.initImageAccessLog();
+  await runner.initAgentAccessLog();
 
   // Start the local-only admin web service (session browser, message log, workdir viewer, send-message, AI settings, tools panel).
   const webPort = Number(process.env.SIBERFLOW_TELEGRAM_ADMIN_PORT ?? 7070);
@@ -214,6 +216,9 @@ async function main(): Promise<void> {
     applyAiSettings: (s) => runner.applyAiSettings(s),
     dropSession: (id) => runner.dropSession(id),
     getImageAccessLog: () => runner.getImageAccessLog(),
+    getAgentAccessLog: () => runner.getAgentAccessLog(),
+    getAgentAccessLogDetail: (id) => runner.getAgentAccessLogDetail(id),
+    clearAgentAccessLog: () => runner.clearAgentAccessLog(),
   });
   console.log(
     `Admin web service: http://127.0.0.1:${webPort}/ — login with /login <code> in a private chat.`,
@@ -390,6 +395,11 @@ class BotRunner {
   private static readonly IMAGE_LOG_MAX = 500;
   private static readonly IMAGE_LOG_FILE = join(homedir(), ".siberflow", "telegram-image-access-log.json");
 
+  /** Agent-tool access log (agent_general, agent_explorer). */
+  private readonly agentAccessLog: Array<AgentAccessLogEntry & { id: string; timestamp: string }> = [];
+  private static readonly AGENT_LOG_MAX = 500;
+  private static readonly AGENT_LOG_FILE = join(homedir(), ".siberflow", "telegram-agent-access-log.json");
+
   constructor(
     private readonly api: TelegramApi,
     private readonly config: AppConfig,
@@ -551,6 +561,67 @@ class BotRunner {
     }
   }
 
+  /** Record an agent-tool delegation (called by agent_general / agent_explorer via ToolContext.agentAccessLogger). */
+  logAgentAccess(entry: AgentAccessLogEntry): void {
+    this.agentAccessLog.push({
+      ...entry,
+      id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      timestamp: new Date().toISOString(),
+    });
+    if (this.agentAccessLog.length > BotRunner.AGENT_LOG_MAX) {
+      this.agentAccessLog.splice(0, this.agentAccessLog.length - BotRunner.AGENT_LOG_MAX);
+    }
+    void this.persistAgentAccessLog();
+  }
+
+  /**
+   * Return the agent-access log, newest first, WITHOUT the (potentially large)
+   * requestBody field. The list view loads this; the full entry (with body) is
+   * fetched on demand via getAgentAccessLogDetail(id).
+   */
+  getAgentAccessLog(): Array<Omit<AgentAccessLogEntry & { id: string; timestamp: string }, "requestBody">> {
+    return [...this.agentAccessLog]
+      .reverse()
+      .map(({ requestBody: _requestBody, ...rest }) => rest);
+  }
+
+  /** Return one full log entry (including requestBody) by id, or undefined. */
+  getAgentAccessLogDetail(id: string): (AgentAccessLogEntry & { id: string; timestamp: string }) | undefined {
+    return [...this.agentAccessLog].reverse().find((e) => e.id === id);
+  }
+
+  /** Clear the entire agent-access log (in-memory + on disk). */
+  clearAgentAccessLog(): void {
+    this.agentAccessLog.length = 0;
+    void this.persistAgentAccessLog();
+  }
+
+  /** Persist the in-memory agent-access log to disk. */
+  private async persistAgentAccessLog(): Promise<void> {
+    try {
+      await mkdir(dirname(BotRunner.AGENT_LOG_FILE), { recursive: true });
+      await writeFile(BotRunner.AGENT_LOG_FILE, JSON.stringify(this.agentAccessLog), "utf8");
+    } catch (err) {
+      console.error(`Failed to persist agent access log: ${(err as Error).message}`);
+    }
+  }
+
+  /** Load the persisted agent-access log at startup. */
+  async initAgentAccessLog(): Promise<void> {
+    try {
+      const raw = await readFile(BotRunner.AGENT_LOG_FILE, "utf8");
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        const entries = parsed
+          .filter((e) => e && typeof e.tool === "string" && typeof e.timestamp === "string")
+          .slice(-BotRunner.AGENT_LOG_MAX);
+        this.agentAccessLog.push(...entries);
+      }
+    } catch {
+      // File missing or corrupt — start with an empty log.
+    }
+  }
+
   /** Load persisted AI settings from disk at startup. */
   async initAiSettings(): Promise<void> {
     this.aiSettings = await loadAiSettings();
@@ -645,6 +716,7 @@ class BotRunner {
         model: active.model,
         projectDir: runtime.session.projectDir,
         imageAccessLogger: (e) => this.logImageAccess(e),
+        agentAccessLogger: (e) => this.logAgentAccess(e),
         systemPrompt: oldHistory[0]?.role === "system" ? oldHistory[0].content : "",
         contextOptimize: this.config.contextOptimize,
         tasksEnabled: false,
@@ -1089,6 +1161,7 @@ class BotRunner {
       botScript: this.createBotScriptHost(),
       userId: message.from?.id,
       imageAccessLogger: (e) => this.logImageAccess(e),
+      agentAccessLogger: (e) => this.logAgentAccess(e),
     });
     agent.loadHistory(withSystemPrompt(session.messages, systemPrompt));
     // Restore the LLM compact summary (if any) so "compact" mode keeps rolling it forward instead of restarting from scratch on bot restart.

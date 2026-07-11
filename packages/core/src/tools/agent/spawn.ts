@@ -15,8 +15,49 @@ Rules:
 const AGENT_EXPLORER_SYSTEM_PROMPT = `You are a read-only Agent Explorer. Your sole job: search, read, and summarize — NEVER modify, write, or delete anything. Use grep/list_dir/read_file to explore the codebase, web_search to look up information online, and run_browser to read pages web_search can't fetch. Fan out broadly, then synthesize. Return a concise, factual summary under ~1000 words.`;
 
 const MAX_RESULT_CHARS = 8000;
+/** Cap on the error detail recorded in the access log (keeps the log file lean). */
+const MAX_ERROR_CHARS = 8000;
 /** Default maxIterations — same as Agent class default. */
 const DEFAULT_MAX_ITERATIONS = 100;
+
+/**
+ * Format an error for the access log. Captures as much diagnostic detail as
+ * possible: the message + stack, and (for native fetch failures) the undici
+ * `cause` chain which carries the real socket/DNS error code (ECONNRESET,
+ * ENOTFOUND, etc.) that the thin "fetch failed" message hides. Capped at
+ * MAX_ERROR_CHARS so a runaway error can't bloat the log file.
+ */
+function formatError(err: unknown): string {
+  const e = err as Error;
+  const parts: string[] = [];
+  const msg = e?.message ?? String(err);
+  parts.push(msg);
+  // Walk the cause chain (Node/undici sets Error.cause on fetch rejections).
+  let cause = e?.cause as unknown;
+  let depth = 0;
+  while (cause && depth < 3) {
+    const ce = cause as { message?: string; code?: string; cause?: unknown };
+    if (ce?.message) parts.push(`  Caused by: ${ce.message}`);
+    if (ce?.code) parts.push(`  Code: ${ce.code}`);
+    cause = ce?.cause;
+    depth++;
+  }
+  if (e?.stack) parts.push(e.stack);
+  const text = parts.join("\n").trim();
+  return text.length > MAX_ERROR_CHARS
+    ? `${text.slice(0, MAX_ERROR_CHARS)}\n\n[truncated — ${text.length - MAX_ERROR_CHARS} chars]`
+    : text;
+}
+
+/**
+ * Extract the raw LLM request body a provider attached to its thrown Error
+ * (see openai-compatible.ts / openai-responses.ts). Returns undefined when the
+ * error carries no body (network failure before request, success path, etc.).
+ */
+function extractRequestBody(err: unknown): string | undefined {
+  const body = (err as { requestBody?: string })?.requestBody;
+  return body && body.length > 0 ? body : undefined;
+}
 
 /**
  * Tool allow-list for the Agent Explorer preset. Read-only filesystem tools
@@ -96,17 +137,40 @@ export function createAgentGeneralTool(
     },
     async execute(args, ctx) {
       const { task, tools } = args as AgentGeneralToolArgs;
-      if (!task?.trim()) return "Error: task is required.";
+      const log = (status: "success" | "error", error?: string, requestBody?: string) =>
+        ctx.agentAccessLogger?.({
+          userId: ctx.userId ?? "unknown",
+          tool: "agent_general",
+          task,
+          model: parentProvider.defaultModel,
+          status,
+          ...(error ? { error } : {}),
+          ...(requestBody ? { requestBody } : {}),
+        });
+      if (!task?.trim()) {
+        log("error", "task is required");
+        return "Error: task is required.";
+      }
       const progress = ctx.subagentProgress;
       const requested = tools?.length ? new Set(tools) : null;
       const subRegistry = buildSubRegistry(parentRegistry, requested);
       if (subRegistry.list().length === 0) {
         progress?.("error", "no tools delegated");
+        log("error", "no tools delegated");
         return "Error: no tools delegated to Agent General.";
       }
       progress?.("thinking", `${subRegistry.list().length} tools`);
-      const result = await runAgent(task, parentProvider, subRegistry, AGENT_GENERAL_SYSTEM_PROMPT, ctx, maxIter);
+      let result: string;
+      try {
+        result = await runAgent(task, parentProvider, subRegistry, AGENT_GENERAL_SYSTEM_PROMPT, ctx, maxIter);
+      } catch (err) {
+        const detail = formatError(err);
+        progress?.("error", (err as Error).message);
+        log("error", detail, extractRequestBody(err));
+        return `Error: Agent General failed — ${(err as Error).message}`;
+      }
       progress?.("done");
+      log("success");
       if (result.length > MAX_RESULT_CHARS) return `${result.slice(0, MAX_RESULT_CHARS)}\n\n[truncated — ${result.length - MAX_RESULT_CHARS} chars]`;
       return result || "(Agent General returned no final answer)";
     },
@@ -137,16 +201,39 @@ export function createAgentExplorerTool(
     },
     async execute(args, ctx) {
       const { task } = args as { task: string };
-      if (!task?.trim()) return "Error: task is required.";
+      const log = (status: "success" | "error", error?: string, requestBody?: string) =>
+        ctx.agentAccessLogger?.({
+          userId: ctx.userId ?? "unknown",
+          tool: "agent_explorer",
+          task,
+          model: parentProvider.defaultModel,
+          status,
+          ...(error ? { error } : {}),
+          ...(requestBody ? { requestBody } : {}),
+        });
+      if (!task?.trim()) {
+        log("error", "task is required");
+        return "Error: task is required.";
+      }
       const progress = ctx.subagentProgress;
       const subRegistry = buildSubRegistry(parentRegistry, AGENT_EXPLORER_TOOLS);
       if (subRegistry.list().length === 0) {
         progress?.("error", "no read-only tools available");
+        log("error", "no read-only tools available");
         return "Error: no read-only tools available for Agent Explorer.";
       }
       progress?.("thinking", "read-only exploration");
-      const result = await runAgent(task, parentProvider, subRegistry, AGENT_EXPLORER_SYSTEM_PROMPT, ctx, maxIter);
+      let result: string;
+      try {
+        result = await runAgent(task, parentProvider, subRegistry, AGENT_EXPLORER_SYSTEM_PROMPT, ctx, maxIter);
+      } catch (err) {
+        const detail = formatError(err);
+        progress?.("error", (err as Error).message);
+        log("error", detail, extractRequestBody(err));
+        return `Error: Agent Explorer failed — ${(err as Error).message}`;
+      }
       progress?.("done");
+      log("success");
       if (result.length > MAX_RESULT_CHARS) return `${result.slice(0, MAX_RESULT_CHARS)}\n\n[truncated — ${result.length - MAX_RESULT_CHARS} chars]`;
       return result || "(Agent Explorer returned no results)";
     },
