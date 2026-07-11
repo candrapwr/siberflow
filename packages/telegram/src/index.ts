@@ -104,13 +104,7 @@ interface TelegramMessage {
   /** Unix timestamp (seconds) when the message was sent, from Telegram. */
   date?: number;
   message_thread_id?: number;
-  /**
-   * True when the message belongs to an actual forum topic (the group has
-   * Topics enabled AND this message was sent inside a topic). Telegram sets
-   * this ONLY for real forum topics. In non-forum groups, message_thread_id
-   * may still appear (e.g. on replies / general-topic artifacts) but
-   * is_topic_message is absent/false — those must NOT spawn separate sessions.
-   */
+  /** True when the message belongs to an actual forum topic (the group has Topics enabled AND this message was sent inside a topic). */
   is_topic_message?: boolean;
   chat: TelegramChat;
   from?: TelegramUser;
@@ -119,14 +113,7 @@ interface TelegramMessage {
   quote?: TelegramTextQuote;
   text?: string;
   caption?: string;
-  /**
-   * Rich message content. When the bot sends a message via sendRichMessage,
-   * Telegram stores the content here as structured blocks — and `text` comes
-   * back EMPTY when a user later replies to that message (confirmed via raw
-   * dump). So for replies to rich messages we read the text out of blocks[].
-   * The schema is intentionally loose (unknown) because Telegram's RichText /
-   * RichBlocks union is large; we only need to flatten text from it.
-   */
+  /** Rich message content. */
   rich_message?: { blocks?: unknown[] };
   photo?: TelegramPhotoSize[];
   document?: TelegramDocument;
@@ -159,13 +146,7 @@ interface RuntimeSession {
   agent: Agent;
   session: Session;
   pendingUsage?: UsageStats;
-  /**
-   * Map of Telegram user id → member record (username + display name) for
-   * users who have chatted in this group session. Used to populate the system
-   * prompt with the known member roster so the model can address/mention
-   * people by name. In private chats this is effectively just the one user.
-   * Deduped by user id — a re-seen id just refreshes its record.
-   */
+  /** Map of Telegram user id → member record (username + display name) for users who have chatted in this group session. */
   knownMembers: Map<number, { username?: string; name?: string }>;
 }
 
@@ -195,16 +176,11 @@ interface AppConfig {
 const DRAFT_MIN_INTERVAL_MS = 900;
 const FINAL_MAX_CHARS = 3900;
 
-/** Hard timeout for a single Telegram API fetch, so a stalled network
- * connection can never hang a turn indefinitely. Telegram's long-poll getUpdates
- * uses its own longer timeout via getUpdates(). */
+/** Hard timeout for a single Telegram API fetch, so a stalled network connection can never hang a turn indefinitely. */
 const API_TIMEOUT_MS = 30_000;
-/** Max retry attempts for transient network errors (ETIMEDOUT, fetch failed,
- * HTTP 5xx, 429). Delays: 1s, 2s, 4s. */
+/** Max retry attempts for transient network errors (ETIMEDOUT, fetch failed, HTTP 5xx, 429). */
 const API_MAX_RETRIES = 3;
-/** Group/supergroup typing indicator lasts ~5s; refresh every 4s to keep it
- * visible while the assistant streams content (which otherwise has no UI
- * feedback in non-private chats). */
+/** Refresh group/supergroup typing before Telegram's ~5s indicator expires. */
 const GROUP_TYPING_INTERVAL_MS = 4_000;
 
 async function main(): Promise<void> {
@@ -212,11 +188,7 @@ async function main(): Promise<void> {
   const config = loadAppConfig();
   await mkdir(config.workdirRoot, { recursive: true });
 
-  // Global backstop: a single rejected promise (e.g. a fire-and-forget Telegram
-  // API call failing when the network to api.telegram.org drops) must NEVER kill
-  // the whole bot process. Default Node behavior is to crash on unhandled
-  // rejections; we override that here so the bot stays alive and the per-update
-  // try/catch + retry logic handles the recovery.
+  // Keep unhandled async failures from killing the bot process.
   process.on("unhandledRejection", (reason) => {
     console.error("Unhandled promise rejection (suppressed, bot continues):");
     console.error(reason instanceof Error ? reason.stack ?? reason.message : reason);
@@ -232,10 +204,7 @@ async function main(): Promise<void> {
   await runner.initAiSettings();
   await runner.initImageAccessLog();
 
-  // Start the local-only admin web service (session browser, message log,
-  // workdir viewer, send-message, AI settings, tools panel). Runs alongside
-  // the polling loop. Authentication is via a login code: the web UI shows a
-  // code, the admin sends `/login <code>` in a private chat to approve it.
+  // Start the local-only admin web service (session browser, message log, workdir viewer, send-message, AI settings, tools panel).
   const webPort = Number(process.env.SIBERFLOW_TELEGRAM_ADMIN_PORT ?? 7070);
   await startWebService({
     api,
@@ -305,14 +274,7 @@ function loadAppConfig(): AppConfig {
   };
 }
 
-/**
- * Parse SIBERFLOW_TELEGRAM_ADMINS into two sets: numeric user IDs and
- * usernames (lowercase, without @). Both formats are accepted in a single
- * comma-separated list, e.g. "123456789,@candrapwr,arievengeance". User IDs
- * are the most reliable identifier (usernames can change or be freed); we keep
- * usernames too as a convenience. An admin gets shell (exec) access in private
- * chats only — see BotRunner.isAdmin / getRuntime.
- */
+/** Parse SIBERFLOW_TELEGRAM_ADMINS into two sets: numeric user IDs and usernames (lowercase, without @). */
 function resolveTelegramAdmins(
   env: NodeJS.ProcessEnv = process.env,
 ): { adminUserIds: Set<number>; adminUsernames: Set<string> } {
@@ -413,41 +375,15 @@ class BotRunner {
   private readonly activeTurn = new AsyncLocalStorage<BotScriptState>();
   private botId = 0;
   private botUsername = "";
-  /**
-   * Per-session serial turn queue. Each session ID maps to the tail Promise of
-   * an in-flight (or already-resolved) turn chain. New turns for the SAME
-   * session `.then()` onto that tail, so they execute strictly one after
-   * another — never two in parallel on the same Agent/session. This prevents:
-   *   - history/message array races on a shared Agent instance,
-   *   - concurrent saveSession() writes corrupting the session file,
-   *   - two tool-call loops fighting over the same workdir.
-   * Turns on DIFFERENT sessions still run in parallel (independent chains).
-   * Replaces the old `busy` flag + "masih memproses" rejection: messages sent
-   * while a turn runs are now QUEUED and processed in order instead of dropped.
-   */
+  /** Per-session serial turn queue. */
   private readonly turnQueues = new Map<string, Promise<void>>();
-  /**
-   * AbortController for the currently running turn. Passed into agent.send() so
-   * that if a turn fails or needs to be cancelled, any in-flight LLM request
-   * can be aborted cleanly instead of hanging. Mirrors the per-turn abort
-   * pattern used by the Desktop (agent-host.ts) and VS Code (chat-panel.ts)
-   * hosts. Telegram has no user "Stop" button, so abort is currently only
-   * triggered implicitly on turn teardown; the field is here for resilience.
-   */
+  /** AbortController for the currently running turn. */
   private turnAbort: AbortController | null = null;
 
-  /**
-   * Runtime AI provider override settings. When `enabled`, new Agents use the
-   * provider/model built from these settings instead of the env-based config.
-   * Loaded from disk at startup; updated at runtime via the admin web service.
-   */
+  /** Runtime AI provider override settings. */
   private aiSettings: TelegramAiSettings = defaultAiSettings();
 
-  /**
-   * Image-tool access log (analyze_image, image_gen generate, image_gen edit).
-   * Capped at 500 entries (FIFO). Persisted to ~/.siberflow/telegram-image-access-log.json
-   * so the log survives bot restarts. Loaded at startup via initImageAccessLog().
-   */
+  /** Image-tool access log (analyze_image, image_gen generate, image_gen edit). */
   private readonly imageAccessLog: Array<ImageAccessLogEntry & { timestamp: string }> = [];
   private static readonly IMAGE_LOG_MAX = 500;
   private static readonly IMAGE_LOG_FILE = join(homedir(), ".siberflow", "telegram-image-access-log.json");
@@ -457,13 +393,7 @@ class BotRunner {
     private readonly config: AppConfig,
   ) {}
 
-  /**
-   * Whether a Telegram user is a configured bot admin (by numeric user id or
-   * by username). Admins get shell (exec) access in PRIVATE chats only — see
-   * getRuntime, which builds a separate registry with exec enabled for a
-   * private admin session. Username matching is case-insensitive and ignores a
-   * leading @. User IDs are preferred since usernames can change.
-   */
+  /** Whether a Telegram user is a configured bot admin (by numeric user id or by username). */
   private isAdmin(user: TelegramUser | undefined): boolean {
     if (!user) return false;
     if (this.config.adminUserIds.has(user.id)) return true;
@@ -473,20 +403,7 @@ class BotRunner {
     return false;
   }
 
-  /**
-   * Build a per-session registry for an admin private chat: same tools as the
-   * default registry PLUS the shell (exec) tool. This is created once per
-   * admin private session and cached alongside the Agent in the sessions map.
-   * Exec runs with the host shell (full server access) — appropriate for a
-   * trusted admin managing the server, and only reachable in private chat.
-   */
-  /**
-   * Resolve the active enabled-tools set — the single source of truth for which
-   * opt-in tools the bot exposes. When the tools override is ENABLED, the set
-   * comes from the persisted settings; otherwise it falls back to the env-based
-   * resolver (SIBERFLOW_TELEGRAM_TOOLS). Both getRuntime() and
-   * createAdminRegistry() route through here so admin and non-admin chats agree.
-   */
+  /** Resolve the active enabled-tools set — the single source of truth for which opt-in tools the bot exposes. */
   private getActiveEnabledTools(): Set<string> {
     if (this.aiSettings.toolsOverride && this.aiSettings.enabledTools) {
       return new Set(
@@ -505,29 +422,14 @@ class BotRunner {
       tasks: false,
       interaction: false,
     });
-    // Register every CLI tool (currently just execTool). These names never
-    // collide with the default registry because Telegram strips exec by default.
-    // exec is ALWAYS available to admins here regardless of the override set —
-    // admin status is the real gate (checked in getRuntime), not the tool list.
+    // Register every CLI tool (currently just execTool).
     for (const tool of cliTools) {
       if (!registry.get(tool.name)) registry.register(tool);
     }
     return registry;
   }
 
-  /**
-   * Resolve the active provider, model, and registry for new Agents.
-   *
-   * When the runtime AI settings override is ENABLED, a fresh provider is built
-   * from the settings (custom OpenAI-compatible provider) and a fresh registry
-   * is built around it — so new sessions immediately use the override.
-   *
-   * When DISABLED (or settings incomplete), the env-based config captured at
-   * startup (this.config) is used as-is.
-   *
-   * The registry always reflects getActiveEnabledTools() so the tools override
-   * applies whether or not the provider override is active.
-   */
+  /** Resolve the active provider, model, and registry for new Agents. */
   private getActiveProviderModel(): {
     provider: Provider;
     model: string;
@@ -548,8 +450,7 @@ class BotRunner {
       });
       return { provider, model: this.aiSettings.customDefaultModel, registry };
     }
-    // Provider/model from env, but the registry must still reflect the active
-    // tool set when only the tools override is on (provider override off).
+    // Provider/model from env, but the registry must still reflect the active tool set when only the tools override is on (provider override off).
     const needsFreshRegistry =
       this.aiSettings.toolsOverride || this.config.registry === undefined;
     if (needsFreshRegistry) {
@@ -586,18 +487,11 @@ class BotRunner {
     return { ...this.aiSettings };
   }
 
-  /**
-   * Drop a session from the in-memory cache. Called by the admin web delete
-   * endpoint so the user's next message starts a fresh session (new Agent,
-   * empty history) instead of reusing the cached one. Without this, deleting
-   * the session JSON + workdir on disk has no effect while the bot is running
-   * — getRuntime finds the cached Agent and returns the old history.
-   */
+  /** Drop a session from the in-memory cache. */
   dropSession(id: string): void {
     const existed = this.sessions.delete(id);
     if (existed) {
-      // Also cancel any in-flight turn for this session so it doesn't write
-      // back to the now-deleted session file after it finishes.
+      // Also cancel any in-flight turn for this session so it doesn't write back to the now-deleted session file after it finishes.
       const queue = this.turnQueues.get(id);
       if (queue) {
         this.turnQueues.delete(id);
@@ -606,12 +500,7 @@ class BotRunner {
     }
   }
 
-  /**
-   * Record an image-tool access (called by the image_gen / analyze_image tools
-   * via the ToolContext.imageAccessLogger callback). Stamps the entry with the
-   * current time, caps the log at IMAGE_LOG_MAX entries (FIFO), and persists
-   * to disk (fire-and-forget) so the log survives bot restarts.
-   */
+  /** Record an image-tool access (called by the image_gen / analyze_image tools via the ToolContext.imageAccessLogger callback). */
   logImageAccess(entry: ImageAccessLogEntry): void {
     this.imageAccessLog.push({ ...entry, timestamp: new Date().toISOString() });
     if (this.imageAccessLog.length > BotRunner.IMAGE_LOG_MAX) {
@@ -626,7 +515,7 @@ class BotRunner {
     return [...this.imageAccessLog].reverse();
   }
 
-  /** Persist the in-memory image-access log to disk. Best-effort, never throws. */
+  /** Persist the in-memory image-access log to disk. */
   private async persistImageAccessLog(): Promise<void> {
     try {
       await mkdir(dirname(BotRunner.IMAGE_LOG_FILE), { recursive: true });
@@ -636,7 +525,7 @@ class BotRunner {
     }
   }
 
-  /** Load the persisted image-access log at startup. Called once from main(). */
+  /** Load the persisted image-access log at startup. */
   async initImageAccessLog(): Promise<void> {
     try {
       const raw = await readFile(BotRunner.IMAGE_LOG_FILE, "utf8");
@@ -653,7 +542,7 @@ class BotRunner {
     }
   }
 
-  /** Load persisted AI settings from disk at startup. Called once from main(). */
+  /** Load persisted AI settings from disk at startup. */
   async initAiSettings(): Promise<void> {
     this.aiSettings = await loadAiSettings();
     if (this.aiSettings.enabled) {
@@ -664,14 +553,7 @@ class BotRunner {
     this.applyMultimodalEnv();
   }
 
-  /**
-   * Push the image-gen override (when enabled) into process.env so the
-   * image_gen tool — which reads SIBERFLOW_IMAGE_GEN_* at execute time — picks
-   * up the web-configured provider/key/model/baseUrl. When disabled, delete the
-   * keys we injected so the tool falls back to the original env values. We
-   * track injected keys to avoid clobbering values the user set in their real
-   * .env.
-   */
+  /** Push the image-gen override into process.env for the image_gen tool. */
   private injectedImageEnvKeys: string[] = [];
   private applyImageGenEnv(): void {
     // Clear any previously-injected keys first (restore original env state).
@@ -695,11 +577,7 @@ class BotRunner {
     }
   }
 
-  /**
-   * Push the image-edit override into process.env. Mirrors applyImageGenEnv —
-   * the image_gen tool reads SIBERFLOW_IMAGE_EDIT_* (with fallback to
-   * SIBERFLOW_IMAGE_GEN_*) at execute time when in edit mode.
-   */
+  /** Push the image-edit override into process.env. */
   private injectedImageEditEnvKeys: string[] = [];
   private applyImageEditEnv(): void {
     for (const k of this.injectedImageEditEnvKeys) {
@@ -722,11 +600,7 @@ class BotRunner {
     }
   }
 
-  /**
-   * Push the multimodal (analyze_image) override into process.env. Mirrors
-   * applyImageGenEnv — analyze_image reads SIBERFLOW_MULTIMODAL_* at execute
-   * time, so we inject/delete the keys to apply or revert the override.
-   */
+  /** Push the multimodal (analyze_image) override into process.env. */
   private injectedMultimodalEnvKeys: string[] = [];
   private applyMultimodalEnv(): void {
     for (const k of this.injectedMultimodalEnvKeys) {
@@ -748,24 +622,11 @@ class BotRunner {
     }
   }
 
-  /**
-   * Apply new AI settings from the admin web service: persist to disk, update
-   * the in-memory settings, and rebuild every cached Agent so existing chats
-   * pick up the new provider/model on their next turn.
-   *
-   * If the new settings are disabled (or incomplete), cached Agents are still
-   * rebuilt so they fall back to the env-based config. The system prompt is
-   * rebuilt lazily on the next incoming message (getRuntime refreshes it for
-   * cached sessions), so here we just re-seed the Agent with the existing
-   * history — the first message's system prompt carries over as-is.
-   */
+  /** Apply new AI settings and rebuild cached Agents. */
   async applyAiSettings(s: TelegramAiSettings): Promise<void> {
     await saveAiSettings(s);
     this.aiSettings = s;
-    // Rebuild every cached session's Agent with the new provider/model. The
-    // history is preserved via agent.history() → new Agent → loadHistory().
-    // The registry is the shared default; admin private sessions get their
-    // per-session registry rebuilt on the next turn in getRuntime.
+    // Rebuild every cached session's Agent with the new provider/model.
     const active = this.getActiveProviderModel();
     for (const [, runtime] of this.sessions) {
       const oldHistory = runtime.agent.history();
@@ -796,13 +657,7 @@ class BotRunner {
     this.applyMultimodalEnv();
   }
 
-  /**
-   * Record a group member (id → username) into the session's knownMembers map.
-   * Deduped by id: re-seeing the same id just refreshes the stored username.
-   * Returns true if the roster CHANGED (new member or updated username), so the
-   * caller can decide whether to re-inject the system prompt with the new roster.
-   * In private chats this is a no-op (roster isn't useful — it's just the one user).
-   */
+  /** Record a group member (id → username) into the session's knownMembers map. */
   private rememberMember(
     runtime: RuntimeSession,
     user: TelegramUser | undefined,
@@ -867,10 +722,6 @@ class BotRunner {
     const messageText = message.text ?? message.caption ?? "";
 
     // Record this user into the group's member roster BEFORE any routing gates.
-    // We want every user who chats in the group to appear in the knownMembers
-    // roster — even if their message doesn't address the bot (no mention). This
-    // means we must load the session early just to update the roster, but only
-    // for group/supergroup chats (private chats don't need a roster).
     if (
       (message.chat.type === "group" || message.chat.type === "supergroup") &&
       message.from &&
@@ -885,19 +736,14 @@ class BotRunner {
           cached.agent.loadHistory(
             withSystemPrompt(cached.session.messages, this.buildSystemPromptFor(message, cached)),
           );
-          // Persist roster IMMEDIATELY to disk — don't wait for the turn to
-          // finish. A member seen must be recorded even if the turn later
-          // errors or the bot restarts mid-turn.
+          // Persist roster IMMEDIATELY to disk — don't wait for the turn to finish.
           const obj: Record<string, { username?: string; name?: string }> = {};
           for (const [uid, rec] of cached.knownMembers) obj[String(uid)] = rec;
           cached.session.knownMembers = obj;
           void saveSession(cached.session).catch(() => { /* best-effort */ });
         }
       } else {
-        // Session not yet loaded — load it just to record the member, then
-        // re-cache. This runs for every group message even when the bot isn't
-        // addressed, so the roster fills up naturally. getRuntime() later will
-        // find it cached and skip the heavy init.
+        // Session not yet loaded — load it just to record the member, then re-cache.
         try {
           await this.getRuntime(message);
         } catch {
@@ -906,23 +752,14 @@ class BotRunner {
       }
     }
 
-    // Voice/audio messages are ALWAYS processed — in private chats, in groups,
-    // and even without a caption or mention. They can't carry a @mention, and a
-    // user recording a voice note clearly intends it for the bot.
-    // Photo/document/other media are also processed when sent without any
-    // caption — in private chats unconditionally, and in groups when the bot is
-    // addressed (the mention lives in the caption; if there's no caption at
-    // all, the group gate below still requires a mention somewhere).
+    // Voice/audio messages are ALWAYS processed — in private chats, in groups, and even without a caption or mention.
     const hasVoice = !!(message.voice || message.audio);
     const hasMedia = !hasVoice && !!resolveMediaFile(message);
     if (!messageText && !hasVoice && !hasMedia) return;
     if (
       message.chat.type !== "private" &&
       !hasVoice &&
-      // In groups: require a mention/command. The mention may be in the text OR
-      // the caption (messageText is text ?? caption). A photo with no caption
-      // and no mention is NOT addressed to the bot — leave it for the roster
-      // pass above only.
+      // In groups: require a mention/command.
       !isAddressedToBot(messageText, this.botUsername)
     ) {
       return;
@@ -948,12 +785,7 @@ class BotRunner {
       const baseInput = this.normalizeIncomingInput(message);
       if (!baseInput) return;
 
-      // Acknowledge the message IMMEDIATELY with a typing indicator, before
-      // any session load, image download, or queue wait. This closes the gap
-      // where the chat showed no feedback while getRuntime() / withReplyContext()
-      // ran, or while the turn waited behind another queued turn in the serial
-      // per-session queue. Fire-and-forget: a failure here must never block
-      // message handling.
+      // Acknowledge the message IMMEDIATELY with a typing indicator, before any session load, image download, or queue wait.
       void this.api
         .sendChatAction(message.chat.id, "typing", message.message_thread_id)
         .catch((err) =>
@@ -964,11 +796,7 @@ class BotRunner {
       let input = await this.withReplyContext(message, baseInput, runtime.session.projectDir);
       if (!input) return;
 
-      // Prepend sender metadata so the AI always knows WHO is talking in a
-      // group chat. Without this, every message looks anonymous (just text) and
-      // the AI can't address people or understand conversational context like
-      // "I asked that earlier". In private chats the sender is obvious, so we
-      // skip the prefix there to keep the prompt clean.
+      // Prepend sender metadata so the AI always knows WHO is talking in a group chat.
       if (message.chat.type !== "private" && message.from && !message.from.is_bot) {
         const senderParts: string[] = [`id:${message.from.id}`];
         if (message.from.username) senderParts.push(`@${message.from.username}`);
@@ -977,26 +805,13 @@ class BotRunner {
         input = `[Sender: ${senderParts.join(" ")}]\n${input}`;
       }
 
-      // Prepend a compact timestamp so the AI understands message timing
-      // (e.g. "tadi pagi", gaps between messages, cross-day context). Uses
-      // message.date — the actual send time from Telegram — in the server's
-      // local timezone, formatted YYYY-MM-DD HH:MM. This is METADATA only
-      // (explained once in the system prompt); the AI should treat it like the
-      // [Sender:] prefix, not as part of the user's input.
+      // Prepend a compact Telegram send-time timestamp for timing context.
       input = `[${formatTimestamp(message.date)}]\n${input}`;
 
-      // Serial execution per session: never run two turns in parallel on the
-      // same Agent/session. Messages sent while a turn is in-flight are queued
-      // and processed in order once the previous turn completes — they are NOT
-      // dropped. Different sessions run independently (separate queue tails).
-      // This replaces the old `busy` flag + "masih memproses" rejection, which
-      // both dropped the queued message AND had a race when two messages
-      // arrived in the same getUpdates batch.
+      // Serial execution per session: never run two turns in parallel on the same Agent/session.
       this.enqueueTurn(runtime, message, input);
     } catch (err) {
-      // Surface pre-turn errors (session load failure, image context, etc.) to
-      // the user instead of silently swallowing them. runTurn has its own
-      // try/catch and never reaches here; this only covers the paths above it.
+      // Surface pre-turn errors (session load failure, image context, etc.) to the user instead of silently swallowing them.
       console.error(`Telegram handleUpdate error: ${(err as Error).message}`);
       await this.notifyError(message, err).catch(() => {
         // notifyError itself can fail (network down) — best-effort, never throw.
@@ -1004,14 +819,7 @@ class BotRunner {
     }
   }
 
-  /**
-   * Chain a turn onto this session's serial queue. Each call returns
-   * immediately after appending; the actual runTurn executes only after the
-   * previous turn for the same session settles (resolve OR reject). The chain
-   * promise never rejects — runTurn's own try/catch turns failures into chat
-   * messages, and we swallow any residual rejection so a single bad turn can't
-   * poison the whole queue.
-   */
+  /** Chain a turn onto this session's serial queue. */
   private enqueueTurn(
     runtime: RuntimeSession,
     message: TelegramMessage,
@@ -1021,30 +829,22 @@ class BotRunner {
     const prev = this.turnQueues.get(sessionId) ?? Promise.resolve();
     const next = prev
       .catch(() => {
-        // Swallow the previous turn's rejection so the chain keeps going. A
-        // failure in one turn must not skip or abort subsequent queued turns.
+        // Swallow the previous turn's rejection so the chain keeps going.
       })
       .then(() => this.runTurn(runtime, message, input))
       .catch((err) => {
-        // Defensive: runTurn is expected to catch its own errors, but if
-        // something escapes, log it so the queue stays healthy.
+        // Defensive: runTurn is expected to catch its own errors, but if something escapes, log it so the queue stays healthy.
         console.error(`Telegram turn error: ${(err as Error).message}`);
       });
     this.turnQueues.set(sessionId, next);
-    // Clean up the map entry once the tail settles to avoid unbounded growth
-    // for idle sessions.
+    // Clean up the map entry once the tail settles to avoid unbounded growth for idle sessions.
     void next.then(() => {
       if (this.turnQueues.get(sessionId) === next) {
         this.turnQueues.delete(sessionId);
       }
     });
 
-    // Keep the typing indicator alive WHILE this turn waits behind the previous
-    // one in the serial queue. Telegram's typing expires after ~5s; without
-    // refresh the chat looks frozen during the queue wait (which can be long
-    // if the prior turn is doing a slow tool call). This heartbeat runs until
-    // our runTurn starts (runTurn sets up its own heartbeat) — whichever ends
-    // first stops the queue-wait heartbeat. Fire-and-forget, never throws.
+    // Keep the typing indicator alive WHILE this turn waits behind the previous one in the serial queue.
     if (prev !== Promise.resolve()) {
       const typingTimer = setInterval(() => {
         void this.api
@@ -1053,16 +853,12 @@ class BotRunner {
             /* best-effort: network blips during queue wait are non-fatal */
           });
       }, GROUP_TYPING_INTERVAL_MS);
-      // Stop the queue-wait heartbeat once the turn actually begins. We detect
-      // "began" by racing prev against a microtask after runTurn kicks off:
-      // prev resolves right before runTurn is called, so we clear on the same
-      // tick the turn starts running.
+      // Stop the queue-wait heartbeat once the turn actually begins.
       void prev.finally(() => clearInterval(typingTimer));
     }
   }
 
-  /** Best-effort error notification to a chat. Swallows its own errors so it
-   * can never throw out of the catch block that calls it. */
+  /** Best-effort error notification to a chat. */
   private async notifyError(message: TelegramMessage, err: unknown): Promise<void> {
     const text = `Error: ${(err as Error).message}`;
     await this.api.sendMessage({
@@ -1077,23 +873,17 @@ class BotRunner {
     if (message.chat.type === "private") {
       const norm = normalizeInput(text);
       if (norm) return norm;
-      // No text but a voice/audio was sent: the user wants the recording
-      // processed (e.g. transcribed). Provide a minimal instruction so the
-      // turn isn't dropped — the local file path is added later by
-      // withReplyContext (downloadMessageFile + describeDirectAttachment).
+      // Voice/audio without text still needs a placeholder prompt.
       if (message.voice) return "(The user sent a voice message. Transcribe it with speech_to_text, then answer ONLY what they asked — NEVER show the transcript or mention transcription. Reply as if they typed it.)";
       if (message.audio) return "(The user sent an audio file. Transcribe it with speech_to_text if possible, then answer ONLY the content — NEVER show the transcript or mention transcription. Reply as if they typed it.)";
-      // Photo/document/media with no caption: the user attached a file and
-      // wants the bot to look at it. A placeholder keeps the turn alive; the
-      // actual file path + metadata is appended by describeDirectAttachment.
+      // Photo/document/media with no caption: the user attached a file and wants the bot to look at it.
       if (resolveMediaFile(message)) return "(The user sent an image or file with no message. Acknowledge the attachment and ask what they want to do with it, or act on it if the intent is clear.)";
       return "";
     }
 
     const commandInput = stripCommand(text);
     if (commandInput !== null) {
-      // /siberflow with no accompanying text but a media attachment: keep the
-      // turn alive so the file is processed.
+      // /siberflow with no accompanying text but a media attachment: keep the turn alive so the file is processed.
       if (!commandInput && resolveMediaFile(message)) {
         return "(The user sent an image or file with the /siberflow command but no other message. Acknowledge the attachment and ask what they want, or act on it if the intent is clear.)";
       }
@@ -1101,10 +891,7 @@ class BotRunner {
     }
 
     const mentionInput = stripBotMention(text, this.botUsername);
-    // The message mentioned the bot. If there was accompanying text, use it.
-    // If the mention was the ONLY content (e.g. "@bot" by itself), stripBotMention
-    // returns "" — the user still addressed the bot, so don't drop the turn;
-    // fall through to the voice/media placeholder, or a generic greeting prompt.
+    // The message mentioned the bot.
     if (mentionInput) return mentionInput;
     if (mentionInput === "") {
       if (message.voice) return "(The user sent a voice message. Transcribe it with speech_to_text, then answer ONLY what they asked — NEVER show the transcript or mention transcription. Reply as if they typed it.)";
@@ -1114,9 +901,7 @@ class BotRunner {
       return "(The user mentioned the bot with no other message. Greet them briefly and ask what they need.)";
     }
 
-    // Group without a mention: voice/audio messages are intentionally allowed
-    // through (handleUpdate gates only text-only group messages on mentions).
-    // Give them the same hardened placeholder as private chat.
+    // Group without a mention: voice/audio messages are intentionally allowed through (handleUpdate gates only text-only group messages on mentions).
     if (!text && message.voice) return "(The user sent a voice message. Transcribe it with speech_to_text, then answer ONLY what they asked — NEVER show the transcript or mention transcription. Reply as if they typed it.)";
     if (!text && message.audio) return "(The user sent an audio file. Transcribe it with speech_to_text if possible, then answer ONLY the content — NEVER show the transcript or mention transcription. Reply as if they typed it.)";
     return "";
@@ -1130,15 +915,10 @@ class BotRunner {
     const replyImage = await this.downloadMessageFile(message.reply_to_message, workdir);
     const directImage = await this.downloadMessageFile(message, workdir);
     // Diagnostic: log what Telegram actually sent for the reply/quote fields.
-    // Enabled only with SIBERFLOW_DEBUG=true. Helps diagnose group privacy-mode
-    // cases where reply_to_message is present but its text is empty/stripped —
-    // in which case the quote field is the reliable source of the replied text.
     if (isDebug()) {
       const replied = message.reply_to_message;
       const rawText = replied ? (replied.text ?? replied.caption ?? "").trim() : "";
-      // Mirror the actual resolution logic used by withTelegramMessageContext:
-      // plain text → rich_message blocks → quote. The "resolved" preview is the
-      // ground truth of WHAT THE MODEL WILL SEE for the replied content.
+      // Mirror the actual resolution logic used by withTelegramMessageContext: plain text → rich_message blocks → quote.
       let resolvedText = rawText;
       let source = "none";
       if (resolvedText) {
@@ -1175,12 +955,7 @@ class BotRunner {
         `downloadedReplyImage=${replyImage ?? "none"}`,
         `quote=${quoteText ? `"${quoteText.slice(0, 60)}"` : "empty"}`,
       );
-      // Raw dump of the reply_to_message object to see EXACTLY what fields
-      // Telegram sent. Privacy-mode stripping vs. a parsing bug look identical
-      // in the summary above, so this reveals the ground truth (e.g. whether
-      // the text is in a field we don't read like `rich_message`/`entities`).
-      // We dump ALL top-level keys present, not just the ones we think matter,
-      // plus their types/short previews — this only runs with SIBERFLOW_DEBUG.
+      // Raw dump of the reply_to_message object to see EXACTLY what fields Telegram sent.
       if (replied) {
         const raw = dumpAllKeys(replied);
         debug(`[reply] raw reply_to_message keys=${raw}`);
@@ -1192,14 +967,7 @@ class BotRunner {
     });
   }
 
-  /**
-   * Download ANY media attachment from a Telegram message to the session
-   * workdir, not just images. Handles photo, document (any mime), video,
-   * audio, voice, animation (GIF), and sticker. Returns the local file path on
-   * success, or undefined if the message has no downloadable media / the
-   * download failed (e.g. file > 20MB getFile limit). All downloads land in
-   * `{workdir}/_telegram/` so the project dir stays organized.
-   */
+  /** Download ANY media attachment from a Telegram message to the session workdir, not just images. */
   private async downloadMessageFile(
     message: TelegramMessage | undefined,
     workdir: string,
@@ -1226,12 +994,7 @@ class BotRunner {
   private async getRuntime(message: TelegramMessage): Promise<RuntimeSession> {
     const id = sessionIdFor(message);
 
-    // ── Workdir safety net ──
-    // Ensure the workdir exists on EVERY getRuntime call — for cached sessions
-    // AND new ones. It can be missing if an admin deleted it via the web panel,
-    // a /reset ran, or external cleanup touched the folder. Recreating it here
-    // (recursive mkdir is a no-op if it already exists) prevents ENOENT crashes
-    // in tools (exec spawn, image_gen realpath, file ops) that use ctx.projectDir.
+    // ── Workdir safety net ── Ensure the workdir exists on EVERY getRuntime call — for cached sessions AND new ones.
     const workdir = join(this.config.workdirRoot, id);
     await mkdir(workdir, { recursive: true });
 
@@ -1246,20 +1009,14 @@ class BotRunner {
         cached.session.knownMembers = obj;
         void saveSession(cached.session).catch(() => { /* best-effort */ });
       }
-      // NOTE: the system-prompt rebuild + loadHistory that used to happen here
-      // was a race condition — it mutated the Agent's internal history from
-      // OUTSIDE the serial turn queue, corrupting an in-flight turn when a
-      // second message arrived mid-processing. That work now happens inside
-      // runTurn (which runs inside the serial queue), so only one turn touches
-      // the Agent's history at a time. We just return the cached session here.
+      // History reload happens inside runTurn to avoid racing an in-flight Agent.
       return cached;
     }
 
     const loaded = await loadSession(id);
     const now = new Date().toISOString();
 
-    // Resolve the active provider/model — may be overridden by runtime AI
-    // settings (admin web panel) instead of the env-based startup config.
+    // Resolve the active provider/model — may be overridden by runtime AI settings (admin web panel) instead of the env-based startup config.
     const active = this.getActiveProviderModel();
 
     const session: Session =
@@ -1284,19 +1041,14 @@ class BotRunner {
     session.provider = active.provider.name;
     session.model = active.model;
 
-    // Admin private chats get a per-session registry that includes the shell
-    // (exec) tool for server administration. Every other chat (groups, and
-    // private chats with non-admins) uses the shared default registry without
-    // exec. This keeps shell access out of shared group sessions entirely.
+    // Admin private chats get a per-session registry that includes the shell (exec) tool for server administration.
     const adminPrivate = message.chat.type === "private" && this.isAdmin(message.from);
     const registry = adminPrivate ? this.createAdminRegistry() : active.registry;
 
     const runtime: RuntimeSession = {
       agent: undefined as unknown as Agent,
       session,
-      // Rehydrate the persisted roster back into a Map. Old sessions without
-      // the field (or with the old string-only format) start empty and fill
-      // as members chat.
+      // Rehydrate the persisted roster back into a Map.
       knownMembers: new Map(
         Object.entries(session.knownMembers ?? {}).map(([k, v]) => [
           Number(k),
@@ -1319,8 +1071,7 @@ class BotRunner {
       preTruncate: this.config.preTruncate,
       maxIterations: this.config.maxIterations,
       requestDelayMs: this.config.requestDelayMs,
-      // Seed the compact-mode threshold trigger with the resumed session's
-      // last prompt size (contextSize = last iteration's prompt, accurate).
+      // Seed the compact-mode threshold trigger with the resumed session's last prompt size (contextSize = last iteration's prompt, accurate).
       ...(session.usage?.last?.contextSize
         ? { lastPromptTokens: session.usage.last.contextSize }
         : session.usage?.last?.promptTokens
@@ -1331,8 +1082,7 @@ class BotRunner {
       imageAccessLogger: (e) => this.logImageAccess(e),
     });
     agent.loadHistory(withSystemPrompt(session.messages, systemPrompt));
-    // Restore the LLM compact summary (if any) so "compact" mode keeps rolling
-    // it forward instead of restarting from scratch on bot restart.
+    // Restore the LLM compact summary (if any) so "compact" mode keeps rolling it forward instead of restarting from scratch on bot restart.
     agent.loadSummary(session.summary ?? null);
     runtime.agent = agent;
 
@@ -1340,11 +1090,7 @@ class BotRunner {
     return runtime;
   }
 
-  /**
-   * Build the per-session system prompt, including the known-member roster for
-   * group/supergroup chats. The roster lets the model address people by name
-   * (e.g. via bot_script cross-chat send) and understand who participates.
-   */
+  /** Build the per-session system prompt, including the known-member roster for group/supergroup chats. */
   private buildSystemPromptFor(
     message: TelegramMessage,
     runtime: RuntimeSession,
@@ -1367,12 +1113,7 @@ class BotRunner {
     });
   }
 
-  /**
-   * Handle `/login <code>` — the admin web auth flow. Only works in a PRIVATE
-   * chat from a configured admin. If the code matches a pending web login, it
-   * is consumed and a session token is issued; the web UI's poller picks it up
-   * and enters the dashboard. Non-admins or group chats get a refusal.
-   */
+  /** Handle `/login <code>` — the admin web auth flow. */
   private async handleLoginCommand(message: TelegramMessage): Promise<void> {
     const text = message.text ?? message.caption ?? "";
     // Only allowed in private chats, and only for admins.
@@ -1390,7 +1131,7 @@ class BotRunner {
       });
       return;
     }
-    // Extract the code: /login CODE  or  /login@bot CODE
+    // Extract the code: /login CODE or /login@bot CODE
     const match = text.trim().match(/^\/login(?:@\w+)?\s+([A-Za-z0-9]+)\s*$/);
     if (!match) {
       await this.api.sendMessage({
@@ -1426,9 +1167,7 @@ class BotRunner {
   }
 
   private async sendStartMessage(message: TelegramMessage): Promise<void> {
-    // Welcome screen — rich-formatted (bold/italic via markdown→HTML) so it
-    // reads well in the chat. Kept short but covers what the bot can do, the
-    // commands, and key capabilities. Split into a hero + a capabilities card.
+    // Welcome screen — rich-formatted (bold/italic via markdown→HTML) so it reads well in the chat.
     await this.api.sendRichMessage({
       chat_id: message.chat.id,
       message_thread_id: message.message_thread_id,
@@ -1463,11 +1202,7 @@ class BotRunner {
     let activeToolStatus = "";
     let toolHeartbeat: ReturnType<typeof setInterval> | null = null;
     let typingHeartbeat: ReturnType<typeof setInterval> | null = null;
-    // Per-turn tool-call step counter. Incremented on every onToolCallStart,
-    // so it is GLOBAL across the whole turn (spanning multiple LLM iterations
-    // and multiple tool calls). Shown as "Step N — ⏳ ..." so the user can see
-    // the agent making progress (e.g. Step 1, Step 2, Step 3) instead of one
-    // opaque "⏳ Memproses..." for the entire turn.
+    // Per-turn tool-call step counter.
     let toolStep = 0;
     const groupStatus: {
       promise?: Promise<number | undefined>;
@@ -1512,12 +1247,7 @@ class BotRunner {
       }
     };
 
-    /** Fire-and-forget typing indicator refresh. Telegram's "typing..."
-     * indicator expires after ~5s; without periodic refresh the chat looks
-     * frozen (no feedback) while the assistant is streaming or a long tool
-     * runs. Applies to BOTH private and group chats — private chats previously
-     * had no typing indicator at all. All calls are swallowed on failure so a
-     * network blip can never become an unhandled rejection. */
+    /** Fire-and-forget typing indicator refresh. */
     const pokeTyping = (): void => {
       void this.api
         .sendChatAction(message.chat.id, "typing", message.message_thread_id)
@@ -1529,11 +1259,7 @@ class BotRunner {
     const showGroupToolStatus = (status: string): void => {
       if (canDraft) return;
       pokeTyping();
-      // NOTE: no dedup. Previously we skipped the edit when the new status text
-      // equaled the previous one — but with a step counter ("Step 1 — ...",
-      // "Step 2 — ...") two consecutive calls always differ in the number, and
-      // even when the tool name repeats (two run_browser calls) the user needs
-      // to see the step advance. So always send/edit.
+      // Always send/edit group tool status so repeated tools still advance the visible step.
 
       if (!groupStatus.promise) {
         groupStatus.promise = this.api
@@ -1566,21 +1292,14 @@ class BotRunner {
     };
 
     // Typing indicator for ALL chat types (private + group + supergroup).
-    // Refreshed every ~4s because Telegram's "typing..." expires after ~5s.
-    // Previously only groups had this — private chats had no feedback at all
-    // while the model was thinking.
     pokeTyping();
     typingHeartbeat = setInterval(pokeTyping, GROUP_TYPING_INTERVAL_MS);
 
-    // Per-turn abort controller so an in-flight LLM request can be cancelled
-    // cleanly if this turn throws. Mirrors Desktop/VSCode hosts.
+    // Per-turn abort controller so an in-flight LLM request can be cancelled cleanly if this turn throws.
     const abort = new AbortController();
     this.turnAbort = abort;
 
-    // Reload the system prompt + history NOW — inside the serial turn queue,
-    // so only one turn touches the Agent's history at a time. Previously this
-    // ran in getRuntime (outside the queue), which raced with an in-flight
-    // turn when a second message arrived mid-processing, corrupting history.
+    // Reload the system prompt + history NOW — inside the serial turn queue, so only one turn touches the Agent's history at a time.
     const activePrompt = this.getActiveProviderModel();
     const adminPrivateCtx = message.chat.type === "private" && this.isAdmin(message.from);
     const turnRegistry = adminPrivateCtx
@@ -1666,13 +1385,7 @@ class BotRunner {
         });
         start = 1;
       } catch (err) {
-        // The status message ("⏳ Memproses...") could not be edited into the
-        // final result. We must NOT leave it hanging AND post a new message
-        // (that was the "two messages" bug: orphaned spinner + duplicate
-        // result). Instead, delete the orphaned status message, then post all
-        // chunks fresh. If the delete also fails (already gone, no group
-        // rights), we still proceed — a leftover spinner is far better than a
-        // broken turn.
+        // Delete the orphaned status message before posting the final result fresh.
         console.error(`Telegram edit status error: ${(err as Error).message}`);
         await this.api
           .deleteMessage(message.chat.id, replaceMessageId)
@@ -1695,8 +1408,7 @@ class BotRunner {
   private async persist(runtime: RuntimeSession): Promise<void> {
     const usage = runtime.pendingUsage;
     if (usage) {
-      // pendingUsage = last iteration's usage (overwritten each call), so
-      // promptTokens == contextSize. Set it explicitly for parity.
+      // pendingUsage = last iteration's usage (overwritten each call), so promptTokens == contextSize.
       runtime.session.usage.last = { ...usage, contextSize: usage.promptTokens };
       runtime.session.usage.total = {
         promptTokens:
@@ -1707,8 +1419,7 @@ class BotRunner {
     }
     runtime.session.messages = [...runtime.agent.history()];
     runtime.session.updatedAt = new Date().toISOString();
-    // Persist the known-member roster so it survives bot restarts alongside
-    // the chat history. Map → plain object (id-as-string keys for JSON).
+    // Persist the known-member roster so it survives bot restarts alongside the chat history.
     if (runtime.knownMembers.size > 0) {
       const obj: Record<string, { username?: string; name?: string }> = {};
       for (const [uid, rec] of runtime.knownMembers) obj[String(uid)] = rec;
@@ -1716,8 +1427,7 @@ class BotRunner {
     } else {
       delete runtime.session.knownMembers;
     }
-    // Persist the LLM compact summary (if any) produced by "compact" mode so
-    // it survives bot restarts and keeps rolling forward.
+    // Persist the LLM compact summary (if any) produced by "compact" mode so it survives bot restarts and keeps rolling forward.
     const summary = runtime.agent.summaryState();
     if (summary) {
       runtime.session.summary = summary;
@@ -1748,11 +1458,7 @@ class BotRunner {
       return { message: state.message, workdir: state.workdir };
     };
 
-    // Resolve the target chat for a send action. Defaults to the active chat;
-    // an explicit numeric chatId override lets the bot send elsewhere (e.g. the
-    // current user's private chat, reachable via bot.chat.currentUserId). The
-    // user must have /start-ed the bot in private for cross-chat sends to work
-    // — Telegram rejects otherwise, and that error is surfaced to the AI.
+    // Resolve the target chat for a send action.
     const resolveTarget = (chatId: unknown): {
       chatId: number;
       threadId: number | undefined;
@@ -1768,7 +1474,6 @@ class BotRunner {
         throw new Error("chatId must be a valid number.");
       }
       // A private chat (user id) has no thread; only the originating group does.
-      // When overriding to a different chat, never leak the group's thread id.
       return { chatId, threadId: undefined };
     };
 
@@ -1888,8 +1593,7 @@ class BotRunner {
           throw new Error("sendLocation requires numeric latitude and longitude.");
         }
         const target = resolveTarget(undefined);
-        // Note: Telegram's sendLocation uses venue's title/address via a
-        // separate sendVenue call; here we ignore options for the plain point.
+        // Note: Telegram's sendLocation uses venue's title/address via a separate sendVenue call; here we ignore options for the plain point.
         void options;
         const sent = await this.api.sendLocation({
           chat_id: target.chatId,
@@ -1964,10 +1668,7 @@ class BotRunner {
         if (typeof text !== "string" || !text.trim()) {
           throw new Error("reply text must be a non-empty string.");
         }
-        // Telegram reply is sendMessage with reply_parameters pointing at the
-        // user's current message. We model it via a plain sendMessage because
-        // the host's sendMessage doesn't expose reply_parameters; the script-
-        // level intent ("answer this user") is still satisfied.
+        // Telegram reply is sendMessage with reply_parameters pointing at the user's current message.
         const sent = await this.api.sendMessage({
           chat_id: state.message.chat.id,
           text,
@@ -2094,9 +1795,7 @@ export class TelegramApi {
     return this.callMultipart("sendDocument", form);
   }
 
-  /** Generic single-file media upload used by sendVideo/sendAudio/sendAnimation/
-   * sendVoice. `field` is the Telegram media field name (video/audio/animation/
-   * voice). Mirrors sendPhoto/sendDocument's structure exactly. */
+  /** Generic single-file media upload used by sendVideo/sendAudio/sendAnimation/ sendVoice. */
   async sendMediaFile(args: {
     method: "sendVideo" | "sendAudio" | "sendAnimation" | "sendVoice";
     field: "video" | "audio" | "animation" | "voice";
@@ -2116,10 +1815,7 @@ export class TelegramApi {
     return this.callMultipart(args.method, form);
   }
 
-  /** Send an album of photos/videos (all the same media type) as a single
-   * sendMediaGroup call. Each file is attached as attach://<key> and described
-   * in the JSON `media` array. Paths must resolve inside the workdir (host
-   * validates before calling). */
+  /** Send an album of photos/videos (all the same media type) as a single sendMediaGroup call. */
   async sendMediaGroup(args: {
     chat_id: number;
     paths: string[];
@@ -2134,7 +1830,7 @@ export class TelegramApi {
     if (args.message_thread_id) {
       form.set("message_thread_id", String(args.message_thread_id));
     }
-    // Build the media descriptor array. The first item carries the caption.
+    // Build the media descriptor array.
     const media = args.paths.map((p, i) => {
       const ext = extname(p).toLowerCase();
       const type = ext === ".mp4" || ext === ".mov" ? "video" : "photo";
@@ -2185,8 +1881,7 @@ export class TelegramApi {
     });
   }
 
-  /** Plain-text edit of a bot message (used by bot_script). For rich/HTML edits
-   * the host uses editRichMessage; this is the raw form exposed to scripts. */
+  /** Plain-text edit of a bot message (used by bot_script). */
   async editMessageText(args: {
     chat_id: number;
     message_id: number;
@@ -2219,10 +1914,7 @@ export class TelegramApi {
     });
   }
 
-  /** Delete a message. Best-effort: callers swallow errors because a failed
-   * delete (e.g. already-deleted message, no rights in a group) must never
-   * break the turn flow. Used to clean up an orphaned "⏳ Memproses..." status
-   * message when editing it into the final result fails. */
+  /** Delete a message; callers treat failures as best-effort cleanup. */
   async deleteMessage(chatId: number, messageId: number): Promise<unknown> {
     return this.call("deleteMessage", {
       chat_id: chatId,
@@ -2272,15 +1964,7 @@ export class TelegramApi {
     return this.fetchWithRetry<T>(method, url, init);
   }
 
-  /**
-   * POST to a Telegram Bot API method with a hard timeout and automatic retry
-   * for transient network failures. This is the network-resilience core: when
-   * the server temporarily can't reach api.telegram.org (ETIMEDOUT /
-   * ENETUNREACH / ECONNRESET / fetch failed / HTTP 5xx / 429), we back off and
-   * retry instead of letting the call — and possibly the whole turn — hang or
-   * throw. Permanent errors (HTTP 4xx other than 429, "message is not
-   * modified", etc.) are returned immediately without retry.
-   */
+  /** POST to a Telegram Bot API method with a hard timeout and automatic retry for transient network failures. */
   private async fetchWithRetry<T>(
     method: string,
     url: string,
@@ -2296,15 +1980,13 @@ export class TelegramApi {
         }
         const description = json.description ?? `${method} failed with HTTP ${res.status}`;
         const err = new Error(description);
-        // 429 (rate limit) and 5xx are transient — retry. Everything else
-        // (Bad Request, message-not-modified, auth errors, etc.) is permanent.
+        // 429 (rate limit) and 5xx are transient — retry.
         if (res.status !== 429 && res.status < 500) {
           throw err;
         }
         lastError = err;
       } catch (err) {
-        // Non-transient errors (e.g. "message is not modified") must NOT be
-        // retried — they will never succeed and would just waste time.
+        // Non-transient errors fail fast.
         if (!isTransientError(err)) {
           throw err;
         }
@@ -2322,9 +2004,7 @@ export class TelegramApi {
     throw lastError ?? new Error(`${method} failed after ${API_MAX_RETRIES + 1} attempts`);
   }
 
-  /** fetch() with an AbortController timeout so a stalled connection can never
-   * hang until the OS TCP timeout (which can be minutes). On abort, throws an
-   * error classified as transient so fetchWithRetry will retry it. */
+  /** fetch() with an AbortController timeout so a stalled connection can never hang until the OS TCP timeout (which can be minutes). */
   private async fetchWithTimeout(
     url: string,
     init: RequestInit,
@@ -2335,8 +2015,7 @@ export class TelegramApi {
     try {
       return await fetch(url, { ...init, signal: controller.signal });
     } catch (err) {
-      // Re-throw abort as a network-classified error so the retry loop treats
-      // it as transient.
+      // Re-throw abort as a network-classified error so the retry loop treats it as transient.
       if (controller.signal.aborted) {
         throw new Error(`Telegram request timed out after ${timeoutMs}ms`);
       }
@@ -2347,13 +2026,7 @@ export class TelegramApi {
   }
 }
 
-/**
- * Classify an error as transient (worth retrying). Covers the network errors
- * seen in production logs — ETIMEDOUT / ENETUNREACH / ECONNRESET / EAI_AGAIN —
- * plus undici's generic "fetch failed" (whose `cause` carries the real code),
- * and our own timeout message. Non-network errors (4xx, "message is not
- * modified", argument validation) return false so they fail fast.
- */
+/** Classify an error as transient (worth retrying). */
 function isTransientError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const message = err.message ?? "";
@@ -2376,14 +2049,7 @@ function isTransientError(err: unknown): boolean {
   return transientSignals.some((sig) => haystack.includes(sig.toLowerCase()));
 }
 
-/**
- * Format a Telegram message timestamp (unix seconds, from `message.date`) as
- * `YYYY-MM-DD HH:MM` in the server's local timezone. Used as a compact prefix
- * on every user message so the AI can understand message timing. This is a
- * server-local time — if the server runs in UTC but serves WIB users, the
- * hours reflect UTC (acceptable for relative-timing context; switch to a fixed
- * offset if exact wall-clock display matters).
- */
+/** Format a Telegram message timestamp (unix seconds, from `message.date`) as `YYYY-MM-DD HH:MM` in the server's local timezone. */
 function formatTimestamp(unixSeconds: number | undefined): string {
   const d = unixSeconds ? new Date(unixSeconds * 1000) : new Date();
   const pad = (n: number): string => String(n).padStart(2, "0");
@@ -2391,20 +2057,7 @@ function formatTimestamp(unixSeconds: number | undefined): string {
 }
 
 function sessionIdFor(message: TelegramMessage): string {
-  // Decide whether this message gets its own per-topic session or shares the
-  // chat-wide "main" session.
-  //
-  // A real forum topic is identified by message.is_topic_message === true
-  // (Telegram only sets this when Topics are enabled AND the message is inside
-  // a topic). Relying on message_thread_id alone is WRONG: in non-forum groups
-  // (and the forum's own General topic) message_thread_id can still appear —
-  // e.g. on replies, or as a leftover when a group used to be a forum — and
-  // would falsely split one chat into many sessions (the "ghost thread" bug
-  // where a non-forum group spawned sessions like ...-thread-49777).
-  //
-  // SIBERFLOW_TELEGRAM_ONE_SESSION_PER_CHAT=true forces everything in a chat to
-  // share a single session regardless of topics (useful for non-forum groups,
-  // or when the operator wants one continuous history per chat).
+  // Decide whether this message gets its own per-topic session or shares the chat-wide "main" session.
   const oneSessionPerChat =
     process.env.SIBERFLOW_TELEGRAM_ONE_SESSION_PER_CHAT === "true";
   const isRealTopic = message.is_topic_message === true;
@@ -2426,24 +2079,7 @@ function sessionNameFor(chat: TelegramChat): string {
   return chat.title ?? `${chat.type} ${chat.id}`;
 }
 
-/**
- * Recursively flatten ALL text out of a Telegram rich_message's blocks.
- *
- * Why this exists: when a user REPLIES to one of the bot's own messages that
- * was sent via sendRichMessage, Telegram returns that message with an EMPTY
- * `text` field (and empty `caption`). The actual content lives inside
- * `rich_message.blocks[]`, where each block (paragraph, heading, pre, list,
- * blockquote, table, …) carries a `text` of type RichText. RichText itself is
- * a recursive union — it can be:
- *   - a plain string                          -> take it
- *   - an array of RichText                    -> recurse + join
- *   - an object { type:"bold"/"italic"/…, text: RichText } -> recurse into .text
- *
- * We do not care about formatting here; we only need the plain-text content so
- * the model can read what the replied-to bot message said. This walks every
- * node defensively (typeof checks, arrays, objects) and joins with spaces/new-
- * lines so the result is readable. Zero memory retained — pure function.
- */
+/** Recursively flatten ALL text out of a Telegram rich_message's blocks. */
 function extractRichMessageText(blocks: unknown[] | undefined): string {
   if (!Array.isArray(blocks) || blocks.length === 0) return "";
   const lines: string[] = [];
@@ -2467,24 +2103,14 @@ function flattenRichText(node: unknown): string {
       .join("");
   }
   if (typeof node === "object") {
-    // Styled node: { type: "bold"|"italic"|"code"|..., text: RichText }.
-    // Some nodes (link/mention/skip) may also carry `content` instead of `text`.
+    // Styled nodes carry nested text/content.
     const obj = node as { text?: unknown; content?: unknown };
     return flattenRichText(obj.text ?? obj.content);
   }
   return "";
 }
 
-/**
- * Dump ALL top-level keys present on an object (typically a Telegram Message),
- * with a short type + preview per key. Used for diagnostics only
- * (SIBERFLOW_DEBUG=true) to discover which fields Telegram actually sends for
- * a replied-to message — e.g. whether the bot's rich-message text lives in a
- * field we don't currently read (rich_message, entities, etc.). We do NOT
- * assume a schema: we iterate the runtime keys so we never miss an unexpected
- * field, and we redact long values (arrays of file_ids, base64) to keep the
- * log readable.
- */
+/** Dump ALL top-level keys present on an object (typically a Telegram Message), with a short type + preview per key. */
 function dumpAllKeys(obj: object): string {
   const source = obj as Record<string, unknown>;
   const parts: string[] = [];
@@ -2509,8 +2135,7 @@ function previewValue(value: unknown): string {
     return `[${value.length}× ${previewValue(value[0])}]`;
   }
   if (typeof value === "object") {
-    // Nested object: show its keys (one level) so we can spot rich_message.html
-    // or entities without dumping the whole thing.
+    // Nested object: show its keys (one level) so we can spot rich_message.html or entities without dumping the whole thing.
     const keys = Object.keys(value as Record<string, unknown>);
     if (keys.length === 0) return "{}";
     const sampled = keys
@@ -2552,8 +2177,7 @@ function telegramSystemContext(
       `Current user name: ${message.from.username ? `@${message.from.username}` : message.from.first_name}`,
     );
   }
-  // Known member roster for group/supergroup chats. Lets the model address
-  // people by name/id (e.g. for cross-chat bot_script sends). Deduped by id.
+  // Known member roster for group/supergroup chats.
   if (knownMembers && knownMembers.size > 0 && chat.type !== "private") {
     const roster = [...knownMembers.entries()]
       .map(([uid, rec]) => {
@@ -2576,16 +2200,13 @@ function telegramSystemContext(
     "When using any tool in Telegram, never access, read, write, list, upload, send, or reference files outside the session workdir above.",
   );
   if (adminShell) {
-    // Admin private chat: shell (exec) is intentionally enabled for server
-    // administration. The no-shell rule below does NOT apply to this session.
+    // Admin private chat: shell (exec) is intentionally enabled for server administration.
     lines.push(
-      "EXCEPTION (admin session): you are operating in a PRIVATE chat with a configured admin. The exec (shell) tool IS available and is intended for server administration — you may run shell commands anywhere on the host (full access). Other file tools still respect the workdir sandbox above.",
       "When using bot_script, operate only in this current Telegram chat/thread and current session workdir.",
       "Do not invent Telegram chat IDs; use bot.chat for the active chat metadata.",
     );
   } else {
     lines.push(
-      "Do not use shell access in Telegram. Do not call exec or ask for shell commands. If shell access was used in any previous Telegram turn, treat that as a mistake and do not repeat it.",
       "If a requested action requires files outside the session workdir or shell access, refuse that part and explain that Telegram tools are limited to the session workdir.",
       "When using bot_script, operate only in this current Telegram chat/thread and current session workdir.",
       "Do not invent Telegram chat IDs; use bot.chat for the active chat metadata.",
@@ -2625,76 +2246,71 @@ function withSystemPrompt(
   return [{ role: "system", content: systemPrompt }, ...next];
 }
 
-/**
- * Human-readable, tool-specific status shown in the group status message /
- * private draft while a tool runs. Each tool gets a phrase describing what it
- * is doing so the user has a clear, non-generic idea of progress. Falls back to
- * a generic line for tools without a dedicated entry.
- */
+/** Human-readable, tool-specific status shown in the group status message / private draft while a tool runs. */
 function toolStatusText(name: string): string {
   switch (name) {
     // File operations
     case "read_file":
-      return "📄 Membaca file...";
+      return "📄 Read...";
     case "write_file":
-      return "✍️ Menulis file...";
+      return "✍️ Write...";
     case "edit_file":
-      return "✏️ Mengedit file...";
+      return "✏️ Edited...";
     case "copy_file":
-      return "📋 Menyalin file...";
+      return "📋 Copying...";
     case "list_dir":
-      return "📂 Melihat isi folder...";
+      return "📂 ListDir...";
     case "delete_file":
-      return "🗑️ Menghapus file...";
+      return "🗑️ Delete..";
     case "grep":
-      return "🔎 Mencari teks...";
+      return "🔎 Grep...";
     // Shell
     case "exec":
-      return "⚙️ Menjalankan perintah shell...";
+      return "⚙️ Shell...";
     // Database
     case "db_query":
-      return "🗄️ Mengakses database...";
+      return "🗄️ Database...";
     // SSH
     case "ssh_exec":
-      return "🔌 Menjalankan perintah di server remote...";
+      return "🔌 SSH Remote...";
     case "sftp":
-      return "📡 Transfer file via SFTP...";
+      return "📡 SFTP...";
     // Documents
     case "excel_script":
-      return "📊 Memproses file Excel...";
+      return "📊 Excel...";
     case "docx_script":
-      return "📝 Memproses dokumen Word...";
+      return "📝 Word...";
     case "pdf_script":
-      return "📕 Memproses dokumen PDF...";
+      return "📕 PDF...";
     // Browser
     case "run_browser":
-      return "🌐 Membuka halaman web...";
+      return "🌐 Browser...";
     // Image
     case "analyze_image":
-      return "🔍 Menganalisis gambar...";
+      return "🔍 Image Analyze...";
     // Web search
     case "web_search":
-      return "🔎 Mencari di web...";
+      return "🔎 Extract Information...";
     // Speech
     case "text_to_speech":
-      return "🔊 Sedang berbicara...";
+      return "🎙️ Speaking..";
     case "speech_to_text":
-      return "🎙️ Sedang mendengar...";
+      return "🔊 Listen...";
     // Music
     case "music_generate":
-      return "🎵 Membuat musik...";
+      return "🎵 Music...";
     // Bot
     case "bot_script":
-      return "📨 Menjalankan aksi Telegram...";
+      return "📨 Scripting...";
     // Interaction / task
     case "ask_user":
       return "❓ Menunggu jawaban Anda...";
     case "task_update":
       return "✅ Memperbarui daftar tugas...";
     case "image_gen":
-      return "🖼️ Membuat gambar...";
+      return "🖼️ GenerateImage...";
     default:
-      return "⏳ Memproses...";
+      return "⏳ Waiting...";
   }
 }
 
@@ -2719,21 +2335,6 @@ function withTelegramMessageContext(
 
   const replied = message.reply_to_message;
   // Build the most informative "what is being replied to / quoted" context.
-  // Priority of text sources:
-  //   1. message.reply_to_message.text/caption (full text, when privacy mode
-  //      lets the bot see the replied message — typical in DMs and when the
-  //      bot is a group admin or privacy mode is off).
-  //   2. message.quote.text (the specific text fragment the user selected when
-  //      replying — Telegram sends this even when reply_to_message is stripped
-  //      or its text is empty, so it's the most reliable text source in groups
-  //      with default privacy mode).
-  // Resolve the replied message's text. Priority:
-  //   1. reply_to_message.text / caption — full plain text, when available.
-  //   2. reply_to_message.rich_message.blocks — for the bot's OWN rich messages
-  //      Telegram returns an EMPTY text field but the content is in rich_message.
-  //      We flatten the blocks into plain text here (zero retained memory).
-  //   3. message.quote — the user-selected quote fragment (fallback in groups
-  //      with privacy mode stripping the replied text).
   let repliedText = replied ? (replied.text ?? replied.caption ?? "").trim() : "";
   if (!repliedText && replied?.rich_message?.blocks) {
     const rich = extractRichMessageText(replied.rich_message.blocks).trim();
@@ -2741,8 +2342,7 @@ function withTelegramMessageContext(
   }
   const quoteText = message.quote?.text?.trim() ?? "";
   const external = message.external_reply;
-  // external_reply carries only media metadata + a link, not the text; its text
-  // (if any) arrives via message.quote. So treat it as a media descriptor here.
+  // external_reply carries only media metadata + a link, not the text; its text (if any) arrives via message.quote.
   const hasMediaReply =
     !!replied?.photo?.length ||
     !!replied?.document ||
@@ -2762,12 +2362,9 @@ function withTelegramMessageContext(
   const repliedContext = (() => {
     if (replied && (repliedText || hasMediaReply)) {
       // Full replied message available — richest context (text + media).
-      // Pass the already-resolved repliedText so describeRepliedMessage does
-      // NOT re-read the empty message.text field for rich bot messages.
       return describeRepliedMessage(replied, files.replyFilePath, repliedText);
     }
-    // Fall back to whatever fragments Telegram gave us: the selected quote
-    // text, and/or external_reply media metadata.
+    // Fall back to whatever fragments Telegram gave us: the selected quote text, and/or external_reply media metadata.
     const parts: string[] = [];
     if (quoteText) {
       parts.push(`[Quoted text from the replied Telegram message]\n${quoteText}`);
@@ -2788,12 +2385,7 @@ function withTelegramMessageContext(
         ? `@${replied.from.username}`
         : replied.from.first_name
       : "unknown";
-    // Wrap the replied content in an explicit, unambiguous framing so the
-    // model treats it as quoted context (a message the user is replying to),
-    // NOT as instructions or as the user's own message. Using a fenced block +
-    // a clear "the user REPLIED to the following message … then wrote" lead-in
-    // removes the ambiguity of the old layout, where the raw replied text sat
-    // directly under a "# context" header and could be mistaken for instructions.
+    // Frame replied content as quoted context, not user instructions.
     const isQuoteOnly = !!(quoteText && !repliedText);
     const leadIn = isQuoteOnly
       ? "The user replied to a Telegram message and quoted part of it. They could not see the full original text, so only the user-selected quote is available. Quoted message content:"
@@ -2821,8 +2413,7 @@ function withTelegramMessageContext(
       ].join("\n"),
     );
   }
-  // Frame the user's actual message as the question/instruction about the
-  // quoted content above, so the model connects the two.
+  // Frame the user's actual message as the question/instruction about the quoted content above, so the model connects the two.
   const userLeadIn =
     blocks.length > 0
       ? "The user's message in reply to the above content:"
@@ -2831,14 +2422,7 @@ function withTelegramMessageContext(
   return blocks.join("\n\n");
 }
 
-/**
- * Build the context block for a file attached to the user's CURRENT message
- * (not a reply — that's handled separately). Covers ALL media types: photo,
- * document, video, audio, voice, animation, sticker. Returns "" when the
- * message has no attachment. When there is one, the block includes the local
- * file path (so the model can read/process it with file tools), metadata
- * (name, mime, size), and the caption the user typed alongside the file.
- */
+/** Build the context block for a file attached to the user's CURRENT message (not a reply — that's handled separately). */
 function describeDirectAttachment(
   message: TelegramMessage,
   downloadedFilePath?: string,
@@ -2892,8 +2476,7 @@ function describeDirectAttachment(
   if (downloadedFilePath) {
     lines.push(`- Local file path: ${downloadedFilePath}`);
   } else {
-    // Download failed (likely > 20MB getFile limit). Tell the model so it can
-    // explain the limitation instead of pretending the file is available.
+    // Download failed (likely > 20MB getFile limit).
     lines.push("- Local file path: (unavailable — file may exceed the 20MB download limit)");
   }
   return lines.join("\n");
@@ -2917,14 +2500,7 @@ function describeExternalReply(reply: TelegramExternalReplyInfo): string {
 function describeRepliedMessage(
   message: TelegramMessage,
   downloadedImagePath?: string,
-  /** Pre-resolved text for the replied message. The caller
-   * (withTelegramMessageContext) already resolves text → rich_message.blocks →
-   * quote in priority order. If supplied and non-empty, we use it INSTEAD of
-   * re-reading message.text, because message.text is EMPTY for the bot's own
-   * rich messages (the content lives in rich_message.blocks, which the caller
-   * has already flattened). Without this, the rich_message fix had no effect:
-   * the caller resolved the text but this function threw it away and re-read
-   * the empty field. */
+  /** Pre-resolved text for the replied message. */
   resolvedText?: string,
 ): string {
   const parts: string[] = [];
@@ -2985,14 +2561,7 @@ function formatBytes(bytes: number | undefined): string {
   return typeof bytes === "number" ? `, ${bytes} bytes` : "";
 }
 
-/**
- * Resolve the downloadable media (file_id + suggested name) from a Telegram
- * message, for ANY attachment type — photo, document, video, audio, voice,
- * animation, sticker. Returns undefined when the message has no downloadable
- * media. The suggested name keeps the original extension when available so the
- * model can pick the right tool (pdf_script for .pdf, excel_script for .xlsx,
- * analyze_image for images, etc.).
- */
+/** Resolve downloadable media metadata from any supported Telegram attachment. */
 function resolveMediaFile(message: TelegramMessage): { fileId: string; name: string } | undefined {
   if (message.photo?.length) {
     const largest = message.photo[message.photo.length - 1]!;
@@ -3029,9 +2598,7 @@ function resolveMediaFile(message: TelegramMessage): { fileId: string; name: str
     return { fileId: message.animation.file_id, name: `animation-${message.message_id}.gif` };
   }
   if (message.sticker) {
-    // Static stickers are .webp; animated stickers are .tgs (Lottie). We can't
-    // tell from the update which kind it is, so default to .webp — the model
-    // gets the file and the metadata block notes it is a sticker.
+    // Static stickers are .webp; animated stickers are .tgs (Lottie).
     return { fileId: message.sticker.file_id, name: `sticker-${message.message_id}.webp` };
   }
   return undefined;

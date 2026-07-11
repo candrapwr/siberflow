@@ -48,12 +48,6 @@ export const botScriptTool: Tool = {
     "- bot.sendLocation(latitude, longitude) -> { message_id }\n" +
     "- bot.sendPoll(question, options, { multiple?, anonymous? }) -> { message_id } (options = 2-10 strings)\n" +
     "- bot.reply(text) -> { message_id } (answers the current user in the active chat)\n\n" +
-    "## Message manipulation (active chat only)\n" +
-    "- bot.editMessageText(messageId, text) — edit one of the bot's OWN messages\n" +
-    "- bot.deleteMessage(messageId) — delete a message in the active chat\n\n" +
-    "## Chat info (active chat only)\n" +
-    "- bot.getChat() — chat info (title, type, member count, etc.)\n" +
-    "- bot.getChatMember(userId) — a member's status and user info\n\n" +
     "# Rules\n" +
     "- All media file paths MUST point inside the session workdir (relative paths work). " +
     "Paths escaping the workdir are rejected. To create/modify files, enable read_file/write_file/etc.\n" +

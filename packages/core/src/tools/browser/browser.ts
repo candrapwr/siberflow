@@ -346,7 +346,7 @@ export const runBrowserTool: Tool = {
     "Launch a real headless Chrome/Edge browser and run any Puppeteer code you write. " +
     "You get full control — navigate, click, type, wait, evaluate, screenshot, intercept " +
     "network, manage cookies, open multiple tabs, download files, fill & submit forms, " +
-    "log in, test flows, extract data, generate PDFs, etc. Essentially anything a human " +
+    "log in, test flows, extract data, etc. Essentially anything a human " +
     "can do in a browser, you can automate here.\n\n" +
     "You receive `{ page, browser }`: `page` is a Puppeteer Page already navigated to `url` " +
     "(if you provided one); `browser` is the Browser instance so you can open more pages. " +

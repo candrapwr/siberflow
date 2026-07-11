@@ -350,7 +350,7 @@ cd packages/desktop && npm run rebuild
 - **Database query tool** - `db_query` supports MySQL, PostgreSQL, and SQLite
 - **Excel spreadsheet tool** - `excel_script` can read, modify, and create `.xlsx` files through `exceljs`
 - **Word document tool** - `docx_script` can create and read `.docx` files through `docx` and `mammoth`
-- **PDF document tool** - `pdf_script` can create PDFs with `pdf-lib`, read digital text layers with `pdfjs-dist`, and OCR scanned/image PDFs with Tesseract via `ocr: true`
+- **PDF document tool** - `pdf_script` can create PDFs with Python `reportlab`, read digital text layers with `pdfplumber`, and OCR scanned/image PDFs with Tesseract via `ocr: true`
 - **Browser tool** - `run_browser` automates installed Chrome/Edge through Puppeteer; no Chromium download
 - **Image analysis tool** - `analyze_image` sends an image plus prompt to a configured OpenAI-compatible multimodal model
 - **Per-tool toggle** - enable only the tools you need through settings or `SIBERFLOW_TOOLS`
@@ -390,13 +390,36 @@ It supports headings, paragraphs, text styling, bullets/numbering, tables, secti
 
 ### PDF (`pdf_script`)
 
-`pdf_script` uses `pdf-lib` for creation and `pdfjs-dist` for reading. Create mode receives `(pdf, P, font)` with a pre-embedded Helvetica font. Read mode extracts digital text layers from pages and joins pages with `\f`.
+`pdf_script` uses Python for PDF creation and reading — `reportlab` for creation (natural top-down canvas, full Unicode support including emoji), `pdfplumber` for reading (text extraction), and Tesseract for OCR. Libraries are auto-installed via pip on first use (handles PEP 668).
 
-Scanned/image-only PDFs have no text layer, so read mode returns empty. For those, use **OCR mode** (see below) instead.
+**Create mode** — the agent writes a Python script using `reportlab`:
+
+```python
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+
+c = canvas.Canvas('output.pdf', pagesize=A4)
+width, height = A4
+y = height - 50  # start near top
+
+c.setFont('Helvetica-Bold', 20)
+c.drawString(50, y, 'Document Title')
+y -= 30
+
+c.setFont('Helvetica', 11)
+c.drawString(50, y, 'Body text with Unicode: ✓ → ▸')
+c.save()
+```
+
+reportlab uses a **top-down coordinate system** (y starts at the top, decremented as you move down) — far more intuitive than pdf-lib's bottom-left origin. Full Unicode is supported natively (no WinAnsi limitation).
+
+**Read mode** — pass `path` + `readOnly: true`. Extracts text via `pdfplumber`, joining pages with `\f` (form feed).
+
+Scanned/image-only PDFs have no text layer, so read mode returns empty. For those, use **OCR mode** instead.
 
 #### OCR mode (for scanned/image PDFs)
 
-Pass `ocr: true` to recognize text from a PDF that is a scan or photo of a document. The host renders each page to a high-resolution PNG (`pdfjs-dist` + `@napi-rs/canvas`) and OCRs each PNG with the locally installed Tesseract (`pytesseract`). The recognized text is handed to your script exactly like read mode (`(text) => {...}` with `\f` between pages). Use `ocrLanguage` to select the Tesseract language (default `ind` for Indonesian; `eng` for English; `eng+ind` for both).
+Pass `ocr: true` to recognize text from a PDF that is a scan or photo of a document. The host renders each page to a high-resolution PNG via `PyMuPDF` and OCRs each PNG with the locally installed Tesseract (`pytesseract`). The recognized text is returned with `\f` between pages. Use `ocrLanguage` to select the Tesseract language (default `ind` for Indonesian; `eng` for English; `eng+ind` for both).
 
 ```jsonc
 // Example: extract text from a scanned PDF

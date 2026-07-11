@@ -35,22 +35,14 @@ const VALID_SIZES = ["1024x1024", "1792x1024", "1024x1792"] as const;
 export const imageGenTool: Tool = {
   name: "image_gen",
   description:
-    "Generate a new image from a text prompt, or edit an existing image file, " +
-    "using the configured image generation provider. Saves the result PNG/image " +
-    "file inside the project workdir.\n\n" +
-    "Use this when the user asks to create, draw, generate, or make an image, " +
-    "picture, illustration, logo, or artwork. Also use it to EDIT an existing " +
-    "image (change colors, add/remove objects, modify style) by passing the " +
-    "source file path in `image`.\n\n" +
+    "Generate a new image from a text prompt, or edit an existing image file\n\n" +
     "- `prompt` (required): describe the desired image in detail.\n" +
     "- `image` (optional): path to a local image file in the workdir for edit " +
     "mode. Omit to generate a brand-new image.\n" +
     "- `outputPath` (optional): output path inside the workdir. Defaults to " +
     "generated-images/<timestamp>-<slug>.png.\n" +
     "- `size` (optional): 1024x1024 (default), 1792x1024, or 1024x1792. " +
-    "Provider support varies.\n\n" +
-    "Requires SIBERFLOW_IMAGE_GEN_API_KEY. Supports providers: openai, deepinfra, " +
-    "novita, qwen, grok (grok has no edit support).",
+    "Provider support varies.\n\n",
   parameters: {
     type: "object",
     properties: {
