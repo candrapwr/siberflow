@@ -104,16 +104,45 @@ export function defaultAiSettings(): TelegramAiSettings {
 
 /**
  * Load settings from disk, merged over defaults. Returns defaults (enabled:
- * false) if the file is missing or corrupt — never throws.
+ * false) if the file is missing or corrupt — never throws. Also migrates
+ * renamed tool names in `enabledTools` so existing operator configurations
+ * keep working after a rename (e.g. subagent→agent_general).
  */
 export async function loadAiSettings(): Promise<TelegramAiSettings> {
   try {
     const raw = await readFile(SETTINGS_FILE, "utf8");
     const parsed = JSON.parse(raw) as Partial<TelegramAiSettings>;
-    return { ...defaultAiSettings(), ...parsed };
+    const merged = { ...defaultAiSettings(), ...parsed };
+    if (typeof merged.enabledTools === "string") {
+      merged.enabledTools = migrateToolNames(merged.enabledTools);
+    }
+    return merged;
   } catch {
     return defaultAiSettings();
   }
+}
+
+/**
+ * Rename legacy tool identifiers in a comma-separated tool list to their
+ * current names. Idempotent — already-current names pass through unchanged.
+ * Keeps the list deduped and trimmed.
+ */
+export function migrateToolNames(csv: string): string {
+  const renames: Record<string, string> = {
+    subagent: "agent_general",
+    explore: "agent_explorer",
+  };
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const part of csv.split(",")) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const current = renames[trimmed] ?? trimmed;
+    if (seen.has(current)) continue;
+    seen.add(current);
+    out.push(current);
+  }
+  return out.join(",");
 }
 
 /** Persist settings to disk. Never throws — caller handles errors. */

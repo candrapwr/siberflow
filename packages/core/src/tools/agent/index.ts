@@ -1,1 +1,1 @@
-export { createSubagentTool, createExploreTool } from "./spawn.js";
+export { createAgentGeneralTool, createAgentExplorerTool } from "./spawn.js";

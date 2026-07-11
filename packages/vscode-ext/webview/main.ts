@@ -950,7 +950,7 @@ function updateComposerState(): void {
   }
   if (hint) {
     hint.innerHTML = state.subagentPhase
-      ? `Subagent: ${state.subagentPhase.detail ?? state.subagentPhase.phase}…`
+      ? `Agent: ${state.subagentPhase.detail ?? state.subagentPhase.phase}…`
       : state.summarizing
         ? "Summarizing context…"
         : state.busy

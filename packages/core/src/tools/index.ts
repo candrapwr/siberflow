@@ -15,7 +15,7 @@ import { botTools } from "./bot/index.js";
 import { webTools } from "./web/index.js";
 import { speechTools } from "./speech/index.js";
 import { musicTools } from "./music/index.js";
-import { createSubagentTool, createExploreTool } from "./agent/index.js";
+import { createAgentGeneralTool, createAgentExplorerTool } from "./agent/index.js";
 
 export * from "./base.js";
 export { ToolRegistry } from "./registry.js";
@@ -34,7 +34,7 @@ export { botTools } from "./bot/index.js";
 export { webTools } from "./web/index.js";
 export { speechTools } from "./speech/index.js";
 export { musicTools } from "./music/index.js";
-export { createSubagentTool, createExploreTool } from "./agent/index.js";
+export { createAgentGeneralTool, createAgentExplorerTool } from "./agent/index.js";
 
 export interface RegistryOptions {
   /**
@@ -52,9 +52,11 @@ export interface RegistryOptions {
   /**
    * Which tool names to register. Defaults to the file operations only
    * (`DEFAULT_ENABLED_TOOLS`). exec / db_query / ssh_exec / sftp /
-   * excel_script default OFF — opt in via settings/env to keep the
-   * prompt lean and the blast radius small. `task_update` ignores this filter
-   * (it is always registered).
+   * excel_script default OFF — opt in via settings/env to keep the prompt lean
+   * and the blast radius small. `task_update` ignores this filter (it is always
+   * registered). `agent_general`/`agent_explorer` also respect this filter when
+   * their factory gate (`opts.subagent` + `opts.provider`) is open, so each can
+   * be toggled independently.
    */
   enabledTools?: Set<string>;
   /**
@@ -64,10 +66,14 @@ export interface RegistryOptions {
    */
   interaction?: boolean;
   /**
-   * Register the `subagent` tool (spawn a focused, context-isolated agent for
-   * a single task). Default false — it's an opt-in power-user tool that costs
-   * extra LLM calls per use. When true, `provider` MUST also be supplied (the
-   * subagent tool captures it to spin up child agents).
+   * Register the `agent_general` tool (spawn a focused, context-isolated agent
+   * for a single task). Default false — it's an opt-in power-user tool that
+   * costs extra LLM calls per use. When true, `provider` MUST also be supplied
+   * (the agent tool captures it to spin up child agents). This is the master
+   * gate for the factory; whether `agent_general` and `agent_explorer` are
+   * actually registered is then filtered per-name via `enabledTools`, so each
+   * can be toggled independently (hosts that want both always-on should include
+   * both names in `enabledTools`).
    */
   subagent?: boolean;
   /**
@@ -125,10 +131,15 @@ export function createDefaultRegistry(opts: RegistryOptions = {}): ToolRegistry 
     for (const tool of interactionTools) registry.register(tool);
   }
   // Subagent + Explore tools: opt-in power-user features. Registered LAST so
-  // the factory closures capture the fully-built registry.
+  // the factory closures capture the fully-built registry. The `opts.subagent`
+  // flag is the master gate (kept for backward-compat with hosts that hardcode
+  // it true); individual enable/disable is then controlled by `enabledTools`,
+  // so each can be toggled independently (e.g. from the Telegram admin panel).
   if (opts.subagent && opts.provider) {
-    registry.register(createSubagentTool(opts.provider, registry, opts.subagentMaxIterations));
-    registry.register(createExploreTool(opts.provider, registry, opts.subagentMaxIterations));
+    const sub = createAgentGeneralTool(opts.provider, registry, opts.subagentMaxIterations);
+    const exp = createAgentExplorerTool(opts.provider, registry, opts.subagentMaxIterations);
+    if (enabled.has(sub.name)) registry.register(sub);
+    if (enabled.has(exp.name)) registry.register(exp);
   }
   return registry;
 }

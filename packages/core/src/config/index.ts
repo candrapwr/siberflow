@@ -38,6 +38,18 @@ export function loadConfigFromEnv(
     );
   }
 
+  const subagent = env.SIBERFLOW_SUBAGENT === "true";
+  const enabledTools = resolveEnabledTools(env);
+  // The agent_general/agent_explorer factory is gated by `subagent`, but the
+  // actual registration is now also filtered per-name via enabledTools. When
+  // the operator opts in with SIBERFLOW_SUBAGENT=true, ensure both names are in
+  // the set so the CLI behaves as before (both available), unless the user
+  // explicitly listed tools (in which case they can add them themselves).
+  if (subagent) {
+    enabledTools.add("agent_general");
+    enabledTools.add("agent_explorer");
+  }
+
   return {
     provider,
     apiKey,
@@ -46,9 +58,9 @@ export function loadConfigFromEnv(
     autoContinue: env.SIBERFLOW_AUTO_CONTINUE !== "false",
     maxIterations: resolveMaxIterations(env),
     requestDelayMs: resolveRequestDelay(env),
-    enabledTools: resolveEnabledTools(env),
+    enabledTools,
     preTruncate: env.SIBERFLOW_PRE_TRUNCATE !== "false",
-    subagent: env.SIBERFLOW_SUBAGENT === "true",
+    subagent,
     hideTools: env.SIBERFLOW_HIDE_TOOLS === "true",
     ...(env.SIBERFLOW_MODEL ? { model: env.SIBERFLOW_MODEL } : {}),
     ...(env.SIBERFLOW_BASE_URL ? { baseUrl: env.SIBERFLOW_BASE_URL } : {}),

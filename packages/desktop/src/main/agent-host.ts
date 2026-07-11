@@ -305,9 +305,15 @@ export class AgentHost {
     // Only register filesystem + exec tools when the session has a working
     // directory. Sessions without a workdir keep db/ssh/task tools only.
     const hasWorkdir = !!this.current?.projectDir;
+    // subagent + explore are always available in the Desktop host — add both
+    // names to the enabled set so they pass the per-name filter (the factory
+    // gate is opened by `subagent: true` below).
+    const enabledTools = new Set(this.settings.enabledTools);
+    enabledTools.add("agent_general");
+    enabledTools.add("agent_explorer");
     this.registry = createDefaultRegistry({
       filesystem: hasWorkdir,
-      enabledTools: new Set(this.settings.enabledTools),
+      enabledTools,
       provider: this.provider,
       subagent: true,
       subagentMaxIterations: this.settings.maxIterations,

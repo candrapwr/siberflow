@@ -577,9 +577,9 @@ async function handleDeleteImageEditPreset(res: ServerResponse, id: string): Pro
 
 /**
  * The full catalog of opt-in tools the admin panel can toggle, grouped by
- * category. Always-on tools (task_update, ask_user) and factory tools
- * (subagent, explore) are listed as informational but cannot be toggled. This
- * mirrors the tool-name universe in packages/core/src/tools/index.ts.
+ * category. Always-on tools (task_update, ask_user) are not listed here —
+ * they cannot be toggled. This mirrors the tool-name universe in
+ * packages/core/src/tools/index.ts.
  */
 const TOOL_CATALOG: { category: string; tools: { name: string; description: string }[] }[] = [
   {
@@ -645,6 +645,13 @@ const TOOL_CATALOG: { category: string; tools: { name: string; description: stri
     tools: [
       { name: "speech_to_text", description: "Transcribe audio to text" },
       { name: "text_to_speech", description: "Synthesize speech from text" },
+    ],
+  },
+  {
+    category: "Agent",
+    tools: [
+      { name: "agent_general", description: "Agent General — delegate a task to a focused helper agent (extra LLM calls)" },
+      { name: "agent_explorer", description: "Agent Explorer — read-only helper to search & summarize codebase" },
     ],
   },
 ];

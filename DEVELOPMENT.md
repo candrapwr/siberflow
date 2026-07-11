@@ -579,20 +579,20 @@ Saat satu assistant message trigger **2+ tool calls paralel** (batch), mereka di
 - VSCode: protocol extension `tool_batch_start`/`tool_batch_end` → `startToolBatch`/`endToolBatch` di webview nest `.tool` ke dalam `.tool-group` container.
 - Hidden tools (`task_update` → `__hidden__`) tetap di-skip dari grouping.
 
-### Subagent & Explore tools
+### Agent General & Agent Explorer tools
 
 Main agent bisa delegate task ke **helper agent terisolasi** (clean context, no history) yang jalankan tools sendiri, lalu return summary text. Context helper gak bocor ke main — hanya final result yang cross-back.
 
 Dua tool:
 
-- **`subagent(task, tools?)`** — general-purpose helper. `tools` adalah explicit allow-list (default: semua tool parent kecuali subagent/explore). Bisa modify file.
-- **`explore(task)`** — read-only searcher. Fix tools: `read_file`, `grep`, `list_dir`, `exec`. GAK bisa write/edit/delete. Ideal buat "cari X", "gimana Y kerja".
+- **`agent_general(task, tools?)`** — general-purpose helper. `tools` adalah explicit allow-list (default: semua tool parent kecuali agent_general/agent_explorer). Bisa modify file.
+- **`agent_explorer(task)`** — read-only searcher. Fix tools: `read_file`, `grep`, `list_dir`, `exec`. GAK bisa write/edit/delete. Ideal buat "cari X", "gimana Y kerja".
 
 Arsitektur ([spawn.ts](packages/core/src/tools/agent/spawn.ts)):
 
-- Factory pattern: `createSubagentTool(provider, registry, maxIter)` closure-capture parent's provider+registry (chicken-and-egg workaround karena `ToolContext` gak bawa provider).
+- Factory pattern: `createAgentGeneralTool` / `createAgentExplorerTool(provider, registry, maxIter)` closure-capture parent's provider+registry (chicken-and-egg workaround karena `ToolContext` gak bawa provider).
 - Saat execute: build sub-registry (filter parent tools), `new Agent({...})`, `subAgent.send(task)`, return final text (self-truncate 8K char).
-- Recursion guard: subagent/explore tool selalu di-exclude dari sub-registry (depth-1 limit, hard cap).
+- Recursion guard: agent_general/agent_explorer tool selalu di-exclude dari sub-registry (depth-1 limit, hard cap).
 - Progress forwarding: subagent's `onToolCallStart`/`onToolResult` → `ctx.subagentProgress(phase, detail)` → `agent.currentEvents.onSubagentUpdate` → host UI indicator.
 - maxIterations: inherit dari parent's config (bukan hardcoded).
 
@@ -670,7 +670,7 @@ Semua via env. CLI loader (`packages/cli/src/env.ts`) walk-up dari cwd cari `.en
 | `SIBERFLOW_MAX_ITERATIONS` | `50` | Batas tool-calling iterasi per turn. Naikkan untuk task besar (scaffolding modul, dll) |
 | `SIBERFLOW_HIDE_TOOLS` | `false` | Sembunyikan detail tool call di CLI — ganti dengan spinner berlabel nama tool |
 | `SIBERFLOW_PRE_TRUNCATE` | `true` | Pre-truncate output tool gede (read_file 200 baris, exec 20K char, write_file args digest) di sumber |
-| `SIBERFLOW_SUBAGENT` | `false` | (CLI/Telegram) Aktifkan tool subagent + explore. Desktop & VSCode selalu aktif |
+| `SIBERFLOW_SUBAGENT` | `false` | (CLI/Telegram) Aktifkan tool agent_general + agent_explorer. Desktop & VSCode selalu aktif |
 | `DEEPSEEK_API_KEY` | — | wajib jika `provider=deepseek` |
 | `GEMINI_API_KEY` | — | wajib jika `provider=gemini` |
 | `OPENAI_API_KEY` | — | wajib jika `provider=openai` atau `openai-responses` |
