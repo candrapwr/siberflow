@@ -76,15 +76,10 @@ interface ExaError {
 export const webSearchTool: Tool = {
   name: "web_search",
   description:
-    "Search the web and read page content. Two modes: " +
-    '(1) mode "search" with a `query` — runs a web search and returns up to 10 ' +
-    "results, each with title, url, publishedDate, and a few highlight snippets so " +
-    "you can scan what exists on a topic. " +
-    '(2) mode "content" with a `url` — fetches the readable text of that page ' +
-    "(up to `maxCharacters`, default 500, max 15000). " +
-    "Use this for current information, documentation, articles, news, release notes, " +
-    "or reading any URL. Prefer this over run_browser for read-only web research — " +
-    "it is faster and lighter. Requires a configured API key (SIBERFLOW_EXA_API_KEY).",
+    "Search the web and read page content via Exa. Mode 'search' + `query`: returns up to 10 results " +
+    "(title, url, date, snippets). Mode 'content' + `url`: fetches readable text (up to `maxCharacters`, " +
+    "default 500, max 15000). Prefer this over run_browser for read-only research — faster and lighter. " +
+    "Requires SIBERFLOW_EXA_API_KEY.",
   parameters: {
     type: "object",
     properties: {

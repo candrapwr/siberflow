@@ -42,12 +42,10 @@ const DEFAULT_LANGUAGE_CODE = "id";
 export const musicGenerateTool: Tool = {
   name: "music_generate",
   description:
-    "Generate a music track from a text prompt and lyrics using the configured DeepInfra ACE-Step music model, then save the audio file inside the project workdir. " +
-    "Use this when the user asks to create a song, jingle, background music, or music with vocals. " +
-    "Provide `prompt` (genre, mood, instruments, vocals, tempo/key), `lyrics`, and `duration` in seconds. " +
-    "Duration MUST be between 30 and 180 seconds. Match duration to the lyrics: short lyrics should use 30 seconds; longer lyrics can use up to 180 seconds, but do not generate songs longer than 3 minutes. " +
-    "If the user asks for instrumental music, describe it clearly in `prompt` and pass an empty lyrics string. " +
-    "The tool writes the result to `outputPath` if provided, otherwise it creates a timestamped file. Requires SIBERFLOW_MUSIC_API_KEY.",
+    "Generate a music track (30-180s) from a text `prompt` (genre, mood, instruments, tempo) and `lyrics`, " +
+    "saved inside the project workdir. For instrumental music, pass an empty `lyrics` string. " +
+    "Match `duration` to lyric length — short lyrics use 30s. Writes to `outputPath` or a timestamped file. " +
+    "Requires SIBERFLOW_MUSIC_API_KEY.",
   parameters: {
     type: "object",
     properties: {

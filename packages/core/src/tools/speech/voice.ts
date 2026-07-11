@@ -47,12 +47,9 @@ interface SttArgs {
 export const textToSpeechTool: Tool = {
   name: "text_to_speech",
   description:
-    "Convert text to a spoken-audio MP3 file using neural text-to-speech (Microsoft Edge neural voices via edge-tts). " +
-    "Provide the `text` to speak and an `outputPath` (a .mp3 path inside the project workdir where the audio is written). " +
-    "Voice defaults to id-ID-ArdiNeural (Indonesian male voice 'Ardi') — this is the only voice used. " +
-    "Optional `rate` adjusts speaking rate (e.g. '+10%', '-5%'). " +
-    "Use this when the user asks to generate voice/audio from text, read text aloud, or produce a spoken clip in Indonesian. " +
-    "Requires python3 + edge-tts installed on the host. If the library is missing, the full error is returned.",
+    "Convert text to a spoken-audio MP3 via Edge neural TTS (voice: id-ID-ArdiNeural, Indonesian male). " +
+    "Writes to `outputPath` inside the workdir; optional `rate` adjusts speed (e.g. '+10%'). " +
+    "Requires python3 + edge-tts on the host; if missing, the full error is returned.",
   parameters: {
     type: "object",
     properties: {
@@ -109,12 +106,10 @@ asyncio.run(main())
 export const speechToTextTool: Tool = {
   name: "speech_to_text",
   description:
-    "Transcribe an audio file to text using speech recognition (Google Web Speech via SpeechRecognition). " +
-    "Provide `path` to an audio file inside the project workdir. .ogg/.oga/.m4a and other non-wav formats are " +
-    "automatically converted to 16kHz mono WAV using ffmpeg before recognition. " +
-    "Recognition defaults to Indonesian (id-ID). Optional `language` overrides it only if the user explicitly asks. " +
-    "Use this to transcribe voice messages, podcast clips, or any recorded speech. Returns the recognized text. " +
-    "Requires python3 + SpeechRecognition + ffmpeg on the host. If anything is missing, the full error is returned.",
+    "Transcribe an audio file to text (Google Web Speech via SpeechRecognition). Non-wav formats (.ogg, .m4a, " +
+    "etc.) are auto-converted to 16kHz mono WAV via ffmpeg first. Defaults to Indonesian (id-ID); `language` " +
+    "overrides only if the user explicitly asks. Requires python3 + SpeechRecognition + ffmpeg; if missing, " +
+    "the full error is returned.",
   parameters: {
     type: "object",
     properties: {

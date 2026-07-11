@@ -49,16 +49,12 @@ export const imageGenTool: Tool = {
       prompt: {
         type: "string",
         description:
-          "Detailed description of the image to generate, or the edit instruction " +
-          "when modifying an existing image. Be specific about style, composition, " +
-          "colors, lighting, and subject.",
+          "Detailed description of the image to generate, or the edit instruction when modifying.",
       },
       image: {
         type: "string",
         description:
-          "Path to a source image file inside the project workdir. When provided, " +
-          "the tool runs in EDIT mode (modify the image per `prompt`). When omitted, " +
-          "the tool generates a new image from scratch.",
+          "Path to a source image in the workdir (edit mode). Omit to generate a new image.",
       },
       outputPath: {
         type: "string",

@@ -33,70 +33,15 @@ const DEFAULT_TIMEOUT_MS = 60_000;
 export const pdfScriptTool: Tool = {
   name: "pdf_script",
   description:
-    "Create or read a PDF document using Python (reportlab for creation, pdfplumber for reading).\n\n" +
-    "MODES:\n" +
-    "• Create: pass `saveAs` + `script` (Python code). Use `reportlab` to build the PDF. " +
-    "The script runs in the session workdir; save the PDF to `saveAs` (relative path). " +
-    "reportlab is auto-installed via pip if missing.\n" +
-    "• Read: pass `path` + `readOnly: true`. Extracts text via pdfplumber.\n" +
-    "• OCR: pass `path` + `ocr: true` for scanned/image PDFs (uses Tesseract).\n\n" +
-    "CREATE — reportlab quick reference (natural top-down layout):\n" +
-    "```python\n" +
-    "from reportlab.lib.pagesizes import A4\n" +
-    "from reportlab.lib.units import mm\n" +
-    "from reportlab.lib.colors import HexColor\n" +
-    "from reportlab.pdfgen import canvas\n" +
-    "\n" +
-    "c = canvas.Canvas('output.pdf', pagesize=A4)\n" +
-    "width, height = A4  # 595, 842 points\n" +
-    "y = height - 50  # start near top (50pt margin)\n" +
-    "\n" +
-    "# Text flows DOWNWARD — decrement y as you go\n" +
-    "c.setFont('Helvetica-Bold', 20)\n" +
-    "c.drawString(50, y, 'Title Here')\n" +
-    "y -= 30\n" +
-    "\n" +
-    "c.setFont('Helvetica', 11)\n" +
-    "c.drawString(50, y, 'Body text...')\n" +
-    "y -= 20\n" +
-    "\n" +
-    "# Shapes\n" +
-    "c.setFillColor(HexColor('#1a73e8'))\n" +
-    "c.rect(50, y - 40, 495, 40, fill=1, stroke=0)  # x, y_bottom, w, h\n" +
-    "c.setFillColor(HexColor('#ffffff'))\n" +
-    "c.drawString(60, y - 25, 'Text inside box')\n" +
-    "y -= 60\n" +
-    "\n" +
-    "# Text wrapping (reportlab's stringWidth + manual wrap, or use Paragraph):\n" +
-    "from reportlab.lib.utils import simpleSplit\n" +
-    "for line in simpleSplit(long_text, 'Helvetica', 11, 495):\n" +
-    "    c.drawString(50, y, line)\n" +
-    "    y -= 14\n" +
-    "\n" +
-    "# New page when running low\n" +
-    "if y < 60:\n" +
-    "    c.showPage()\n" +
-    "    y = height - 50\n" +
-    "\n" +
-    "c.save()\n" +
-    "print('PDF created: output.pdf')\n" +
-    "```\n" +
-    "LAYOUT RULES: y starts at `height - 50` (top). Decrement y after each element. " +
-    "Use gaps: title→-30, paragraph line→-14, after box→-(boxHeight+15). " +
-    "New page when y < 60. Fonts: Helvetica, Helvetica-Bold, Helvetica-Oblique. " +
-    "Unicode/emoji supported natively.\n\n" +
-    "READ — extract text from an existing PDF:\n" +
-    "```python\n" +
-    "import pdfplumber\n" +
-    "with pdfplumber.open('input.pdf') as pdf:\n" +
-    "    for page in pdf.pages:\n" +
-    "        print(page.extract_text())\n" +
-    "```\n\n" +
-    "FONT LIMITATION: None — reportlab supports full Unicode with Helvetica. " +
-    "Emoji and special characters work natively.\n\n" +
-    "The script MUST be synchronous Python. Execution is capped at 60 seconds. " +
-    "On error (missing library, syntax error), stderr is returned so you can fix and retry. " +
-    "reportlab/pdfplumber are auto-installed via pip if missing.",
+    "Create or read a PDF using Python — reportlab for creation, pdfplumber for reading, Tesseract for OCR.\n\n" +
+    "Modes: (1) create — pass `saveAs` + Python `script` using reportlab (save to `saveAs`, relative); " +
+    "(2) read — pass `path` + `readOnly:true`, extracts text via pdfplumber; " +
+    "(3) OCR — pass `path` + `ocr:true` for scanned/image PDFs.\n\n" +
+    "reportlab layout: top-down via a Canvas — start y near `height - margin` and decrement after each " +
+    "element (title -30, line -14, box -(h+15)); new page when y < 60. Fonts: Helvetica family; full " +
+    "Unicode/emoji supported. pdfplumber: `with pdfplumber.open(p) as pdf: for page in pdf.pages: page.extract_text()`.\n\n" +
+    "Script runs in the workdir, capped at 60s. reportlab/pdfplumber auto-install via pip if missing. " +
+    "On error, stderr is returned for retry.",
   parameters: {
     type: "object",
     properties: {

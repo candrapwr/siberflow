@@ -29,70 +29,35 @@ const MAX_RETURN_CHARS = 200_000;
 export const docxScriptTool: Tool = {
   name: "docx_script",
   description:
-    "Create or read a Word (.docx) document by running a JavaScript function you supply, " +
-    "with full access to the `docx` library API (create mode) or the HTML content of an existing " +
-    "document (read mode). This is the single tool for Word document work.\n\n" +
-    "MODES:\n" +
-    "• Create a new document: pass `saveAs` (or `path`) + a script that builds the document via the " +
-    "`docx` API. Signature: `(doc, docx) => { ... }` where `doc` is a fresh empty `Document` and " +
-    "`docx` is the `docx` library module (giving you `Paragraph`, `TextRun`, `HeadingLevel`, " +
-    "`Table`, `TableRow`, `TableCell`, `ImageRun`, `AlignmentType`, `Packer`, etc.). Mutate `doc` " +
-    "(typically by adding sections with `doc.addSection({...})` or by constructing it with sections). " +
-    "The host serializes `doc` to .docx via `docx.Packer.toBuffer` and writes it to `path`/`saveAs` " +
-    "after the script runs — you never touch the filesystem.\n" +
-    "• Read an existing document: pass `path` + `readOnly: true`. The host loads the .docx via " +
-    "mammoth and converts it to HTML, then passes that HTML STRING to your script as the first arg. " +
-    "Signature: `(html) => { ... return data }`. Extract whatever you need (tables, headings, word " +
-    "counts, structure) and RETURN it — the return value is serialized to JSON and sent back to you " +
-    "as the tool result.\n\n" +
-    "CREATING — common patterns:\n" +
-    "• Heading: `new docx.Paragraph({ heading: docx.HeadingLevel.HEADING_1, children: [new docx.TextRun('Title')] })`\n" +
-    "• Styled text: `new docx.TextRun({ text: 'bold red', bold: true, color: 'FF0000', size: 24 })` " +
-    "(size is in half-points: 24 = 12pt)\n" +
-    "• Bullet list: `new docx.Paragraph({ text: 'item', bullet: { level: 0 } })`\n" +
-    "• Table: `new docx.Table({ rows: [ new docx.TableRow({ children: [ new docx.TableCell({ children: [new docx.Paragraph('cell')] }) ] }) ] })`\n" +
-    "• Image: `new docx.ImageRun({ data: <Uint8Array/Buffer>, transformation: { width: 200, height: 200 } })`. " +
-    "The sandbox blocks `fs`, so to embed an image read its bytes OUTSIDE this tool first (e.g. via " +
-    "read_file) and inline them as a Uint8Array literal in the script.\n\n" +
-    "READING — the HTML you receive is mammoth's semantic conversion: headings become <h1>-<h6>, " +
-    "paragraphs <p>, tables <table>, lists <ul>/<ol>. Note: exact visual formatting (fonts, colors, " +
-    "margins) is NOT preserved — mammoth extracts structure/content, not styling.\n\n" +
-    "The script MUST be synchronous (return a plain value, not a Promise). The host performs all " +
-    "async I/O (loading, mammoth conversion, Packer serialization, writing) outside the sandbox. " +
-    "The sandbox blocks `require`, `process`, `fs`, network, `eval`, `Function`, and `Promise`; " +
-    "execution is capped at 5 seconds. On error, the message is returned so you can fix and retry.",
+    "Create or read a Word (.docx) document via a JavaScript function — full `docx` library API for " +
+    "creation, or mammoth-converted HTML for reading.\n\n" +
+    "Create: signature `(doc, docx) => { ... }`. `doc` is a fresh `Document`; `docx` is the module " +
+    "(Paragraph, TextRun, HeadingLevel, Table, ImageRun, AlignmentType, Packer, etc.). Build via " +
+    "`doc.addSection({...})`; the host serializes and writes to `path`/`saveAs`.\n" +
+    "Read: pass `path` + `readOnly:true`. Signature `(html) => { ... return data }`. The HTML is " +
+    "mammoth's semantic conversion (headings→<h1>-<h6>, lists→<ul>/<ol>); visual styling is NOT preserved.\n\n" +
+    "Image bytes must be inlined as a Uint8Array (fs is blocked). Script MUST be synchronous; sandbox " +
+    "blocks require/process/fs/network/eval/Function/Promise; capped at 5s. Errors are returned for retry.",
   parameters: {
     type: "object",
     properties: {
       path: {
         type: "string",
         description:
-          "Document to read (when readOnly:true) OR the destination to write (create mode). In read " +
-          "mode the file must exist; in create mode it is written here (overwriting if present). " +
-          "Absolute or relative to project dir.",
+          "Document to read (readOnly:true) or destination to write (create). Relative to project dir.",
       },
       saveAs: {
         type: "string",
-        description:
-          "Optional explicit destination path for create mode (overrides `path` for the write). Must " +
-          "be inside the project sandbox.",
+        description: "Optional write destination (overrides `path`).",
       },
       script: {
         type: "string",
         description:
-          "A synchronous JavaScript function expression.\n" +
-          "Create mode: `(doc, docx) => { ... }` — build the document, no return needed (or return a " +
-          "summary string).\n" +
-          "Read mode: `(html) => { ... return data }` — extract data from the HTML string and return it.\n" +
-          "Examples —\n" +
-          "Create: \"(doc, docx) => { doc.addSection({ children: [ new docx.Paragraph({ heading: docx.HeadingLevel.HEADING_1, children: [new docx.TextRun('Report')] }), new docx.Paragraph('Body text') ] }); }\"\n" +
-          "Read: \"(html) => { const headings = (html.match(/<h[1-6][^>]*>(.*?)<\\/h[1-6]>/g) || []).map(h => h.replace(/<[^>]+>/g,'')); return { headingCount: headings.length, headings }; }\"",
+          "Synchronous function. Create: `(doc, docx) => { ... }`. Read: `(html) => { ... return data }`.",
       },
       readOnly: {
         type: "boolean",
-        description:
-          "If true: read mode. The .docx at `path` is loaded and converted to HTML, passed to the " +
-          "script; nothing is written to disk. Default false (create mode).",
+        description: "If true: read mode (load + convert to HTML, no write). Default false (create).",
       },
     },
     required: ["script"],
