@@ -1425,7 +1425,7 @@ function renderAgentLog() {
       : '<span class="muted">-</span>';
     const firstLine = e.error ? (e.error.split('\\n')[0] || e.error) : '';
     const errorCell = e.error
-      ? '<a href="javascript:void(0)" onclick="showAgentDetail(\'' + esc(e.id) + '\')" style="color:#f87171;font-size:11px" title="Klik untuk lihat detail & request body">' + esc(firstLine.slice(0, 100)) + (firstLine.length > 100 ? '…' : '') + '</a>'
+      ? '<a href="javascript:void(0)" onclick="showAgentDetail(&quot;' + esc(e.id) + '&quot;)" style="color:#f87171;font-size:11px" title="Klik untuk lihat detail & request body">' + esc(firstLine.slice(0, 100)) + (firstLine.length > 100 ? '…' : '') + '</a>'
       : '<span class="muted">-</span>';
     rows += '<tr>' +
       '<td class="muted" style="font-size:12px;white-space:nowrap">' + fmtDate(e.timestamp) + '</td>' +
