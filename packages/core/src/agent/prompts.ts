@@ -103,13 +103,12 @@ only once the intent is clear. For concrete, well-scoped requests, just do the w
  * the Agent Explorer and multi-step work to the Agent General.
  */
 function buildAgentGuidance(hasExplorer: boolean, hasGeneral: boolean): string {
-  const lines: string[] = ["\n\n# DELEGATE to your agent helper(s) — this is mandatory"];
+  const lines: string[] = ["\n\n# Use your sub agent — this is mandatory"];
   lines.push("You MUST use the agent tool(s) below; do NOT do this kind of work yourself.");
   if (hasExplorer) {
     lines.push(
       "- Research or information lookup (web search, news, docs, \"how does X work\", \"find all Y\", reading any URL): " +
-        "MUST call `agent_explorer`. NEVER call web_search or run_browser yourself for these — that is the agent's job. " +
-        "Calling web_search/run_browser directly when agent_explorer is available is a mistake.",
+        "MUST call `agent_explorer`. NEVER call web_search or run_browser yourself for these — that is the agent's job. ",
     );
   }
   if (hasGeneral) {
