@@ -245,8 +245,14 @@ function loadAppConfig(): AppConfig {
       : {}),
   });
 
+  // Startup registry (used as the fallback when no fresh registry is needed).
+  // Strip admin-only tools (exec) here too — this registry feeds non-admin
+  // chats via getActiveProviderModel's fallthrough. Admin private chats get
+  // exec back via createAdminRegistry() at turn time.
+  const startupTools = resolveTelegramTools();
+  for (const t of cliTools) startupTools.delete(t.name);
   const registry = createDefaultRegistry({
-    enabledTools: resolveTelegramTools(),
+    enabledTools: startupTools,
     tasks: false,
     interaction: false,
     provider,
@@ -428,6 +434,19 @@ class BotRunner {
     return resolveTelegramTools();
   }
 
+  /**
+   * The enabled-tools set for NON-admin chats. Same as getActiveEnabledTools()
+   * but with admin-only tools (the CLI/shell tools — currently just `exec`)
+   * stripped out, so the shell can never leak into group chats or non-admin
+   * private chats regardless of what SIBERFLOW_TELEGRAM_TOOLS lists. Admin
+   * private chats get those tools back via createAdminRegistry().
+   */
+  private getPublicEnabledTools(): Set<string> {
+    const tools = this.getActiveEnabledTools();
+    for (const t of cliTools) tools.delete(t.name);
+    return tools;
+  }
+
   private createAdminRegistry(): ToolRegistry {
     const registry = createDefaultRegistry({
       enabledTools: this.getActiveEnabledTools(),
@@ -458,7 +477,7 @@ class BotRunner {
         customDefaultModel: this.aiSettings.customDefaultModel,
       });
       const registry = createDefaultRegistry({
-        enabledTools: this.getActiveEnabledTools(),
+        enabledTools: this.getPublicEnabledTools(),
         tasks: false,
         interaction: false,
         provider,
@@ -472,7 +491,7 @@ class BotRunner {
       this.aiSettings.toolsOverride || this.config.registry === undefined;
     if (needsFreshRegistry) {
       const registry = createDefaultRegistry({
-        enabledTools: this.getActiveEnabledTools(),
+        enabledTools: this.getPublicEnabledTools(),
         tasks: false,
         interaction: false,
         provider: this.config.provider,
