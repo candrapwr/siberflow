@@ -458,8 +458,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private rebuildAgent(): void {
     if (!this.apiKey) return;
     this.provider = createProvider(this.settings.provider, this.providerConfig());
+    // subagent + explore are always available in the VS Code host — add both
+    // names to the enabled set so they pass the per-name filter (the factory
+    // gate is opened by `subagent: true` below).
+    const enabledTools = new Set(this.settings.enabledTools);
+    enabledTools.add("agent_general");
+    enabledTools.add("agent_explorer");
     this.registry = createDefaultRegistry({
-      enabledTools: new Set(this.settings.enabledTools),
+      enabledTools,
       provider: this.provider,
       subagent: true,
       subagentMaxIterations: this.settings.maxIterations,

@@ -245,7 +245,9 @@ function loadAppConfig(): AppConfig {
     tasks: false,
     interaction: false,
     provider,
-    subagent: coreConfig.subagent,
+    // The subagent/explore factory is always available; individual enable is
+    // filtered per-name via enabledTools (toggleable from the admin panel).
+    subagent: true,
     subagentMaxIterations: coreConfig.maxIterations,
   });
 
@@ -421,6 +423,9 @@ class BotRunner {
       enabledTools: this.getActiveEnabledTools(),
       tasks: false,
       interaction: false,
+      provider: this.config.provider,
+      subagent: true,
+      subagentMaxIterations: this.config.maxIterations,
     });
     // Register every CLI tool (currently just execTool).
     for (const tool of cliTools) {
@@ -447,6 +452,8 @@ class BotRunner {
         tasks: false,
         interaction: false,
         provider,
+        subagent: true,
+        subagentMaxIterations: this.config.maxIterations,
       });
       return { provider, model: this.aiSettings.customDefaultModel, registry };
     }
@@ -459,6 +466,8 @@ class BotRunner {
         tasks: false,
         interaction: false,
         provider: this.config.provider,
+        subagent: true,
+        subagentMaxIterations: this.config.maxIterations,
       });
       return {
         provider: this.config.provider,
@@ -1204,6 +1213,9 @@ class BotRunner {
     let typingHeartbeat: ReturnType<typeof setInterval> | null = null;
     // Per-turn tool-call step counter.
     let toolStep = 0;
+    /** The tool currently running (set in onToolCallStart). Used by the
+     *  subagent progress handler to keep the live status line consistent. */
+    let runningToolName = "";
     const groupStatus: {
       promise?: Promise<number | undefined>;
     } = {};
@@ -1330,7 +1342,34 @@ class BotRunner {
             },
             onToolCallStart: (_index, name) => {
               toolStep++;
+              runningToolName = name;
               const status = `Step ${toolStep} — ${toolStatusText(name)}`;
+              if (!canDraft) {
+                showGroupToolStatus(status);
+                return;
+              }
+              showToolDraft(status);
+            },
+            onSubagentUpdate: (phase, info) => {
+              // Reuse the toolStatusText vocabulary for the live status line so
+              // agent progress looks like any other tool's status. Only the
+              // "tool" phase carries a usable inner-tool name in `info`.
+              const isExplorer = runningToolName === "agent_explorer";
+              const parentName = isExplorer ? "Agent Explorer" : "Agent General";
+              const parentIcon = isExplorer ? "🔭" : "🤖";
+              let line: string;
+              if (phase === "tool") {
+                const inner = typeof info === "string" && info ? info : "";
+                line = `${parentIcon} ${parentName}: ${toolStatusText(inner)}`;
+              } else if (phase === "thinking") {
+                line = `${parentIcon} ${parentName}: thinking...`;
+              } else if (phase === "error") {
+                line = `${parentIcon} ${parentName}: ${info ?? "error"}`;
+              } else {
+                // "tool_done" / "done" — keep the parent status, no flicker.
+                return;
+              }
+              const status = `Step ${toolStep} — ${line}`;
               if (!canDraft) {
                 showGroupToolStatus(status);
                 return;
@@ -2309,6 +2348,11 @@ function toolStatusText(name: string): string {
       return "✅ Memperbarui daftar tugas...";
     case "image_gen":
       return "🖼️ GenerateImage...";
+    // Agent tools
+    case "agent_general":
+      return "🤖 Agent General...";
+    case "agent_explorer":
+      return "🔭 Agent Explorer...";
     default:
       return "⏳ Waiting...";
   }

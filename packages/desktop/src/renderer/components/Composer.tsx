@@ -201,7 +201,7 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={subagentPhase ? `Subagent: ${subagentPhase.detail ?? subagentPhase.phase}…` : summarizing ? "Summarizing context…" : busy ? "Generating…" : "Message Siberflow…"}
+          placeholder={subagentPhase ? `Agent: ${subagentPhase.detail ?? subagentPhase.phase}…` : summarizing ? "Summarizing context…" : busy ? "Generating…" : "Message Siberflow…"}
           disabled={busy}
           rows={1}
         />
