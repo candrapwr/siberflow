@@ -11,15 +11,19 @@ Rules:
 - Iterate with tools as needed, but be efficient — avoid redundant calls.
 - When done, return a clear, factual summary of what you found/did.`;
 
-/** Read-only Agent Explorer prompt — search and read, no modifications. */
-const AGENT_EXPLORER_SYSTEM_PROMPT = `You are a read-only Agent Explorer. Your sole job: search, read, and summarize — NEVER modify, write, or delete anything. Return a concise, factual summary of what you found. Use grep/list_dir/read_file to fan out broadly, then synthesize. Keep the result under ~1000 words.`;
+/** Read-only Agent Explorer prompt — search and read (codebase + web), no modifications. */
+const AGENT_EXPLORER_SYSTEM_PROMPT = `You are a read-only Agent Explorer. Your sole job: search, read, and summarize — NEVER modify, write, or delete anything. Use grep/list_dir/read_file to explore the codebase, web_search to look up information online, and run_browser to read pages web_search can't fetch. Fan out broadly, then synthesize. Return a concise, factual summary under ~1000 words.`;
 
 const MAX_RESULT_CHARS = 8000;
 /** Default maxIterations — same as Agent class default. */
 const DEFAULT_MAX_ITERATIONS = 100;
 
-/** Read-only tools allowed in the Agent Explorer preset. */
-const AGENT_EXPLORER_TOOLS = new Set(["read_file", "grep", "list_dir", "exec"]);
+/**
+ * Tool allow-list for the Agent Explorer preset. Read-only filesystem tools
+ * plus read-only web tools (web_search + run_browser), filtered to whatever
+ * the parent registry actually has registered (see buildSubRegistry).
+ */
+const AGENT_EXPLORER_TOOLS = new Set(["read_file", "grep", "list_dir", "exec", "web_search", "run_browser"]);
 
 interface AgentGeneralToolArgs {
   task: string;
@@ -119,7 +123,10 @@ export function createAgentExplorerTool(
   return {
     name: "agent_explorer",
     description:
-      "Send a read-only helper (Agent Explorer) to search and read the codebase or information on internet, then return a summary. It cannot modify anything — only look. Use this for questions like 'find all X', 'how does Y work', or 'where is Z defined', so your own context stays clean.",
+      "Send a read-only helper (Agent Explorer) to search and summarize, so your own context stays clean. " +
+      "It explores the codebase (grep/list_dir/read_file/exec) and looks up information online " +
+      "(web_search, run_browser when available) — but cannot modify anything. Use for 'find all X', " +
+      "'how does Y work', 'where is Z defined', or any web research.",
     parameters: {
       type: "object",
       properties: {

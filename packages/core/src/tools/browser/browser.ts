@@ -347,6 +347,7 @@ export const runBrowserTool: Tool = {
     "`{ page, browser }` — `page` is navigated to `url` if provided; `browser` lets you open more pages. " +
     "Write any Puppeteer calls; return a string or JSON-serializable value.\n\n" +
     "Gotchas:\n" +
+    "- When web searching, use Bing, DuckDuckGo, or Brave — NOT Google Search (it blocks automation).\n" +
     "- `page.waitForTimeout(ms)` was REMOVED in Puppeteer v22+ — sleep with " +
     "`await new Promise(r => setTimeout(r, ms))` instead.\n" +
     "- Prefer `page.waitForSelector()` / `page.$$eval()` over fixed sleeps for AJAX/SPA content.\n" +
