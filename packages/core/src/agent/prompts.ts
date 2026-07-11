@@ -95,19 +95,30 @@ changes. State your interpretation in one line; if still ambiguous, ask ONE clar
 only once the intent is clear. For concrete, well-scoped requests, just do the work without preamble.`;
 
 /**
- * Agent-tool delegation guidance — Telegram only, appended when agent_explorer
- * or agent_general is registered. Telegram runs on a tighter context budget
- * than the desktop/CLI hosts, so nudge the model to offload research/exploration
- * to the read-only Agent Explorer (keeps the main context clean) and to lean on
- * the Agent General for multi-step work.
+ * Build the agent-delegation guidance — Telegram only, appended when
+ * agent_explorer and/or agent_general is registered. Generated dynamically so
+ * it ONLY mentions tools that are actually registered (avoids confusing the
+ * model with a tool it doesn't have). Telegram runs on a tighter context
+ * budget than desktop/CLI, so the model MUST offload research/exploration to
+ * the Agent Explorer and multi-step work to the Agent General.
  */
-export const AGENT_GUIDANCE = `\n\n# Use your agent helpers aggressively
-You have an \`agent_explorer\` and/or \`agent_general\` tool — USE THEM to keep your own context lean:
-- For ANY research or information lookup (web search, reading docs, exploring the codebase, "how does X work", \
-"find all Y"), delegate to \`agent_explorer\` FIRST instead of calling web_search/run_browser/grep yourself. \
-It runs read-only and returns a concise summary.
-- For multi-step execution work that would fill your context with many tool calls, delegate to \`agent_general\`.
-Only call web_search/run_browser/grep directly for a quick single lookup.`;
+function buildAgentGuidance(hasExplorer: boolean, hasGeneral: boolean): string {
+  const lines: string[] = ["\n\n# DELEGATE to your agent helper(s) — this is mandatory"];
+  lines.push("You MUST use the agent tool(s) below; do NOT do this kind of work yourself.");
+  if (hasExplorer) {
+    lines.push(
+      "- Research or information lookup (web search, news, docs, \"how does X work\", \"find all Y\", reading any URL): " +
+        "MUST call `agent_explorer`. NEVER call web_search or run_browser yourself for these — that is the agent's job. " +
+        "Calling web_search/run_browser directly when agent_explorer is available is a mistake.",
+    );
+  }
+  if (hasGeneral) {
+    lines.push(
+      "- Multi-step work that needs many tool calls: MUST delegate to `agent_general`.",
+    );
+  }
+  return lines.join("\n");
+}
 
 export interface BuildPromptOptions {
   interface: AgentInterface;
@@ -134,9 +145,12 @@ export function buildSystemPrompt(opts: BuildPromptOptions): string {
   if (opts.tasksEnabled) prompt += TASKS_GUIDANCE;
   if (opts.summaryMode) prompt += SUMMARY_GUIDANCE;
   // Telegram-only nudge: prefer the agent helpers for research/multi-step work
-  // to keep the tighter Telegram context budget clean.
-  if (opts.interface === "telegram" && (tools.includes("agent_explorer") || tools.includes("agent_general"))) {
-    prompt += AGENT_GUIDANCE;
+  // to keep the tighter Telegram context budget clean. Generated dynamically so
+  // only the actually-registered agent tool(s) are mentioned.
+  const hasExplorer = tools.includes("agent_explorer");
+  const hasGeneral = tools.includes("agent_general");
+  if (opts.interface === "telegram" && (hasExplorer || hasGeneral)) {
+    prompt += buildAgentGuidance(hasExplorer, hasGeneral);
   }
   return prompt;
 }
