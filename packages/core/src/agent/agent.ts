@@ -4,6 +4,7 @@ import { toSchema } from "../tools/base.js";
 import {
   DEFAULT_OPTIMIZE_CONFIG,
   SUMMARY_SYSTEM_PROMPT,
+  ensureToolCallBalance,
   findSubTurnBoundaryFromEnd,
   findTurnBoundaryFromEnd,
   optimizeContext,
@@ -672,6 +673,13 @@ export class Agent {
       await sleep(this.requestDelayMs, events.signal);
     }
 
+    // Final safety net: strip any orphaned tool_calls / orphaned tool results
+    // so strict OpenAI-compatible providers never reject the request with
+    // HTTP 400 ("must be followed by tool messages"). Catches every case the
+    // optimizeContext-level sanitizer could miss (mid-turn aborts, race
+    // conditions, corrupted rehydrated history). Pure and cheap.
+    const safeMessages = ensureToolCallBalance(messages);
+
     let assistant: AssistantMessage | null = null;
     let finishReason: FinishReason = "other";
     let usage: UsageStats | undefined;
@@ -679,7 +687,7 @@ export class Agent {
     try {
       for await (const ev of this.provider.chatStream({
         model: this.model,
-        messages,
+        messages: safeMessages,
         tools: toolSchemas,
         signal: events.signal,
       })) {

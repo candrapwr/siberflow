@@ -211,10 +211,11 @@ function shortVal(v: unknown): string {
  * assistant message whose tool_calls lack ALL their results, and any tool
  * result whose call id has no preceding tool_calls — keeping the list valid.
  *
- * Runs as the final step of optimizeContext (on every exit path, including the
- * disabled pass-through) so the provider never sees a malformed chain.
+ * Runs as the final step of optimizeContext AND at the runStream chokepoint
+ * (the single point where messages leave for the provider), so the provider
+ * never sees a malformed chain regardless of how the orphan arose.
  */
-function ensureToolCallBalance(messages: readonly Message[]): Message[] {
+export function ensureToolCallBalance(messages: readonly Message[]): Message[] {
   if (messages.length === 0) return [...messages];
   // First pass: collect tool_call ids that have a result somewhere in the list.
   const answeredIds = new Set<string>();
@@ -279,7 +280,7 @@ export function optimizeContext(
       // No summary yet — send the raw full history. The threshold trigger in
       // generateSummaryIncremental / foldCurrentTurnMidLoop decides WHEN to
       // start summarizing; until then, nothing is compressed.
-      return { messages: [...messages], stats };
+      return { messages: ensureToolCallBalance([...messages]), stats };
     }
     const upTo = Math.min(summary.upToIndex, messages.length - 1);
     // Defensive: snap the boundary down so the verbatim tail can't start with
