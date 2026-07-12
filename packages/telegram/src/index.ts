@@ -1490,6 +1490,21 @@ class BotRunner {
       clearTypingHeartbeat();
       // Cancel any in-flight LLM request from this turn so it doesn't linger.
       abort.abort();
+      // Record the main-turn error in the agent access log so it shows up in
+      // the admin panel (alongside sub-agent errors). Captures the provider
+      // error message (HTTP status + body) and, when the provider attached it,
+      // the raw request body for debugging.
+      this.logAgentAccess({
+        userId: message.from?.id ?? "unknown",
+        tool: "main_turn",
+        task: input.slice(0, 500),
+        model: activePrompt.model,
+        status: "error",
+        error: (err as Error).stack ?? (err as Error).message ?? String(err),
+        ...((err as { requestBody?: string }).requestBody
+          ? { requestBody: (err as { requestBody?: string }).requestBody }
+          : {}),
+      });
       const text = `Error: ${(err as Error).message}`;
       const replaceMessageId = groupStatus.promise
         ? await groupStatus.promise
