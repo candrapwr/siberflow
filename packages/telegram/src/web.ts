@@ -290,15 +290,16 @@ async function handleRequest(
   if (path === "/api/sessions" && req.method === "GET") {
     return handleListSessions(res);
   }
-  const sessionMatch = path.match(/^\/api\/session\/(.+)$/);
-  if (sessionMatch && req.method === "GET") {
-    return handleGetSession(res, decodeURIComponent(sessionMatch[1]!));
-  }
-  // Download a session log (raw main or optimized snapshot) as a JSON attachment.
+  // Download route MUST come before the generic /api/session/:id route — the
+  // latter's greedy (.+) capture would otherwise swallow /download/main|optimized.
   const dlMatch = path.match(/^\/api\/session\/(.+)\/download\/(main|optimized)$/);
   if (dlMatch && req.method === "GET") {
     const [, dlId, dlType] = dlMatch;
     return handleDownloadSession(res, decodeURIComponent(dlId!), dlType as "main" | "optimized");
+  }
+  const sessionMatch = path.match(/^\/api\/session\/(.+)$/);
+  if (sessionMatch && req.method === "GET") {
+    return handleGetSession(res, decodeURIComponent(sessionMatch[1]!));
   }
   const workdirMatch = path.match(/^\/api\/workdir\/(.+)$/);
   if (workdirMatch && req.method === "GET") {
