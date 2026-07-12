@@ -20,6 +20,8 @@ import {
   deleteSession,
   listSessions,
   loadSession,
+  loadOptimizedView,
+  loadOptimizedMiddleView,
   type Session,
 } from "@siberflow/core";
 import type { TelegramApi } from "./index.js";
@@ -291,6 +293,12 @@ async function handleRequest(
   const sessionMatch = path.match(/^\/api\/session\/(.+)$/);
   if (sessionMatch && req.method === "GET") {
     return handleGetSession(res, decodeURIComponent(sessionMatch[1]!));
+  }
+  // Download a session log (raw main or optimized snapshot) as a JSON attachment.
+  const dlMatch = path.match(/^\/api\/session\/(.+)\/download\/(main|optimized)$/);
+  if (dlMatch && req.method === "GET") {
+    const [, dlId, dlType] = dlMatch;
+    return handleDownloadSession(res, decodeURIComponent(dlId!), dlType as "main" | "optimized");
   }
   const workdirMatch = path.match(/^\/api\/workdir\/(.+)$/);
   if (workdirMatch && req.method === "GET") {
@@ -981,7 +989,7 @@ async function handleListSessions(res: ServerResponse): Promise<void> {
   sendJson(res, 200, items);
 }
 
-/** GET /api/session/:id — return the raw (non-optimized) message log. */
+/** GET /api/session/:id — return the raw (non-optimized) message log + optimized comparison stats. */
 async function handleGetSession(res: ServerResponse, id: string): Promise<void> {
   if (!id.startsWith("telegram-")) {
     sendJson(res, 400, { error: "Only telegram sessions are accessible." });
@@ -1007,6 +1015,12 @@ async function handleGetSession(res: ServerResponse, id: string): Promise<void> 
     }
     return r;
   });
+  // Load the optimized sibling (if any) so the admin panel can compare main vs
+  // optimized token/message counts. Both files carry session.usage, but the
+  // optimized snapshot's message count + contextSize reflect what the model
+  // actually saw after optimization.
+  const optimized = await loadOptimizedView(id).catch(() => null)
+    ?? await loadOptimizedMiddleView(id).catch(() => null);
   sendJson(res, 200, {
     id: session.id,
     name: session.name,
@@ -1017,7 +1031,65 @@ async function handleGetSession(res: ServerResponse, id: string): Promise<void> 
     usage: session.usage,
     knownMembers: session.knownMembers ?? null,
     messages: trimmed,
+    mainStats: {
+      messageCount: session.messages.length,
+      promptTokens: session.usage?.last?.promptTokens ?? 0,
+      contextSize: session.usage?.last?.contextSize ?? session.usage?.last?.promptTokens ?? 0,
+      totalTokens: (session.usage?.total?.promptTokens ?? 0) + (session.usage?.total?.completionTokens ?? 0),
+    },
+    optimizedStats: optimized
+      ? {
+          messageCount: optimized.messages.length,
+          promptTokens: optimized.usage?.last?.promptTokens ?? 0,
+          contextSize: optimized.usage?.last?.contextSize ?? optimized.usage?.last?.promptTokens ?? 0,
+          generatedAt: optimized._generatedAt ?? null,
+        }
+      : null,
   });
+}
+
+/**
+ * GET /api/session/:id/download/:type — serve the raw session JSON (main) or
+ * the optimized snapshot JSON (optimized) as a downloadable attachment. Used
+ * by the admin panel's "Download" buttons so operators can inspect full logs
+ * offline.
+ */
+async function handleDownloadSession(
+  res: ServerResponse,
+  id: string,
+  type: "main" | "optimized",
+): Promise<void> {
+  if (!id.startsWith("telegram-")) {
+    sendJson(res, 400, { error: "Only telegram sessions are accessible." });
+    return;
+  }
+  let payload: string;
+  let filename: string;
+  if (type === "main") {
+    const session = await loadSession(id);
+    if (!session) {
+      sendJson(res, 404, { error: "Session not found." });
+      return;
+    }
+    payload = JSON.stringify(session, null, 2);
+    filename = `${id}.json`;
+  } else {
+    const optimized = (await loadOptimizedView(id).catch(() => null))
+      ?? (await loadOptimizedMiddleView(id).catch(() => null));
+    if (!optimized) {
+      sendJson(res, 404, { error: "Optimized view not available (optimization may be disabled or no turn has run)." });
+      return;
+    }
+    payload = JSON.stringify(optimized, null, 2);
+    filename = `${id}.optimized.json`;
+  }
+  const safeName = filename.replace(/[^\w.-]/g, "_");
+  res.writeHead(200, {
+    "content-type": "application/json; charset=utf-8",
+    "content-disposition": `attachment; filename="${safeName}"`,
+    "content-length": Buffer.byteLength(payload, "utf8"),
+  });
+  res.end(payload);
 }
 
 /** GET /api/workdir/:id — recursively list a session's workdir contents. */

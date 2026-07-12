@@ -45,12 +45,46 @@ function pathFor(id: string): string {
   return join(SESSIONS_DIR, `${id}.json`);
 }
 
-function optimizedPathFor(id: string): string {
+export function optimizedPathFor(id: string): string {
   return join(SESSIONS_DIR, `${id}.optimized.json`);
 }
 
-function optimizedMiddlePathFor(id: string): string {
+export function optimizedMiddlePathFor(id: string): string {
   return join(SESSIONS_DIR, `${id}.optimized_middle.json`);
+}
+
+/**
+ * Load the optimized session view from disk (the snapshot of what the model
+ * actually saw after context optimization). Returns null if the file does not
+ * exist (optimization may be disabled or no turn has run yet).
+ */
+export async function loadOptimizedView(
+  id: string,
+): Promise<(Session & { _view?: string; _generatedAt?: string }) | null> {
+  try {
+    const content = await readFile(optimizedPathFor(id), "utf8");
+    return JSON.parse(content) as Session & { _view?: string; _generatedAt?: string };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
+}
+
+/**
+ * Load the optimized-middle session view (summary mode's snapshot). Same shape
+ * and semantics as loadOptimizedView, but reads the `.optimized_middle.json`
+ * sibling file. Returns null if missing.
+ */
+export async function loadOptimizedMiddleView(
+  id: string,
+): Promise<(Session & { _view?: string; _generatedAt?: string }) | null> {
+  try {
+    const content = await readFile(optimizedMiddlePathFor(id), "utf8");
+    return JSON.parse(content) as Session & { _view?: string; _generatedAt?: string };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
 }
 
 export function newSessionId(): string {
