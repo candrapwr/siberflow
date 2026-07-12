@@ -28,11 +28,11 @@ interface ContentModeArgs {
 
 const DEFAULT_BASE_URL = "https://api.exa.ai";
 /** Fixed result count for search mode (not user-configurable by design). */
-const SEARCH_NUM_RESULTS = 10;
+const SEARCH_NUM_RESULTS = 5;
 /** Default + caps for content mode text length. */
 const DEFAULT_MAX_CHARACTERS = 500;
 const MAX_MAX_CHARACTERS = 15_000;
-const REQUEST_TIMEOUT_MS = 60_000;
+const REQUEST_TIMEOUT_MS = 120_000;
 const MAX_OUTPUT = 200_000;
 
 interface ExaSearchResult {
@@ -76,7 +76,7 @@ interface ExaError {
 export const webSearchTool: Tool = {
   name: "web_search",
   description:
-    "Search the web and read page content via Exa. Mode 'search' + `query`: returns up to 10 results " +
+    "Search the web and read page content via Exa. Mode 'search' + `query`: returns up to 5 results " +
     "(title, url, date, snippets). Mode 'content' + `url`: fetches readable text (up to `maxCharacters`, " +
     "default 500, max 15000). Prefer this over run_browser for read-only research — faster and lighter. " +
     "Requires SIBERFLOW_EXA_API_KEY.",
