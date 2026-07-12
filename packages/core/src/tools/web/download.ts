@@ -162,7 +162,7 @@ async function doDownload(url: string, dest: string): Promise<string> {
     }
 
     await new Promise<void>((resolve, reject) => {
-      fileStream.end((err) => (err ? reject(err) : resolve()));
+      fileStream.end((err: Error | undefined) => (err ? reject(err) : resolve()));
     });
 
     return `Downloaded ${url} → ${dest} (${(downloaded / 1024 / 1024).toFixed(2)} MB)`;
