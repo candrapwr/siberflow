@@ -1430,7 +1430,7 @@ function renderAgentLog() {
     rows += '<tr>' +
       '<td class="muted" style="font-size:12px;white-space:nowrap">' + fmtDate(e.timestamp) + '</td>' +
       '<td class="mono">' + esc(e.userId ?? "-") + '</td>' +
-      '<td class="mono">' + esc(e.tool || "-") + '</td>' +
+      '<td class="mono">' + (e.tool === 'main_turn' ? '⚠️ main_turn' : esc(e.tool || "-")) + '</td>' +
       '<td class="mono" style="font-size:12px">' + esc(e.model || "-") + '</td>' +
       '<td style="max-width:320px">' + taskCell + '</td>' +
       '<td style="text-align:center">' + statusBadge + '</td>' +
@@ -1438,7 +1438,7 @@ function renderAgentLog() {
     '</tr>';
   }
   wrap.innerHTML =
-    '<div class="form-help" style="margin-bottom:12px">' + agentLogCache.length + ' entri (maks 500, tersimpan di disk — bertahan saat restart). Klik error untuk lihat detail & request body.</div>' +
+    '<div class="form-help" style="margin-bottom:12px">' + agentLogCache.length + ' entri (maks 500, tersimpan di disk). Mencakup sub-agent (agent_general/explorer) dan error main turn. Klik error untuk detail & request body.</div>' +
     '<table><thead><tr>' +
       '<th>Waktu</th><th>User ID</th><th>Tool</th><th>Model</th><th>Task</th><th style="text-align:center">Status</th><th>Error</th>' +
     '</tr></thead><tbody>' + rows + '</tbody></table>';
