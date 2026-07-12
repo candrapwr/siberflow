@@ -7,15 +7,38 @@ import { resolveWithin } from "../file/path-utils.js";
 const MAX_BYTES = 100 * 1024 * 1024; // 100 MB
 const TIMEOUT_MS = 300_000; // 5 minutes
 
+const DEFAULT_HEADERS: Record<string, string> = {
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+};
+
+function buildHeaders(userHeaders?: Record<string, string>): Record<string, string> {
+  const merged = { ...DEFAULT_HEADERS };
+  if (!userHeaders || typeof userHeaders !== "object") return merged;
+
+  // Sanitize: only allow string values; skip prototype pollution keys
+  for (const [key, val] of Object.entries(userHeaders)) {
+    if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
+    if (typeof val !== "string") continue;
+    // Block CRLF injection in header values
+    if (/[\r\n]/.test(val)) continue;
+    merged[key] = val;
+  }
+  return merged;
+}
+
 interface Args {
   url: string;
   save_path: string;
+  headers?: Record<string, string>;
 }
 
 export const downloadFileTool: Tool = {
   name: "download_file",
   description:
     "Download a file from http(s) URL to the project directory. " +
+    "Supports optional custom HTTP headers (e.g. to override User-Agent, Referer, etc). " +
+    "Default User-Agent is set to a common Chrome browser string to avoid bot detection. " +
     "Max 100 MB. Returns error as result on any failure.",
   parameters: {
     type: "object",
@@ -32,13 +55,21 @@ export const downloadFileTool: Tool = {
           "Parent directories are created automatically. " +
           "Example: 'downloads/file.zip' or 'images/photo.jpg'.",
       },
+      headers: {
+        type: "object",
+        description:
+          "Optional custom HTTP headers to send with the request. " +
+          "A default Chrome User-Agent is always set; providing a 'User-Agent' here overrides it. " +
+          "Example: { \"Referer\": \"https://example.com\", \"User-Agent\": \"my-custom-ua\" }",
+        additionalProperties: { type: "string" },
+      },
     },
     required: ["url", "save_path"],
     additionalProperties: false,
   },
   async execute(rawArgs, ctx) {
     try {
-      const { url, save_path } = rawArgs as Args;
+      const { url, save_path, headers } = rawArgs as Args;
 
       if (!url || typeof url !== "string") {
         return "Error: `url` is required and must be a non-empty string.";
@@ -52,16 +83,19 @@ export const downloadFileTool: Tool = {
         return "Error: `url` must start with http:// or https://.";
       }
 
+      // Build headers: default + user overrides
+      const reqHeaders = buildHeaders(headers);
+
       // Resolve save path inside the project sandbox
       const fullPath = await resolveWithin(ctx.projectDir, save_path.trim());
       await mkdir(dirname(fullPath), { recursive: true });
 
       // Step 1: Check file size via HEAD request (best-effort)
-      const sizeCheck = await checkSize(trimmedUrl);
+      const sizeCheck = await checkSize(trimmedUrl, reqHeaders);
       if (typeof sizeCheck === "string") return sizeCheck;
 
       // Step 2: Download with streaming + size enforcement
-      return await doDownload(trimmedUrl, fullPath);
+      return await doDownload(trimmedUrl, fullPath, reqHeaders);
     } catch (err) {
       return `Error: ${(err as Error).message}`;
     }
@@ -73,11 +107,11 @@ export const downloadFileTool: Tool = {
  * Returns `true` if the file is within limits or HEAD is unavailable.
  * Returns an error string if the file clearly exceeds the 100 MB limit.
  */
-async function checkSize(url: string): Promise<true | string> {
+async function checkSize(url: string, headers: Record<string, string>): Promise<true | string> {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 15_000);
-    const res = await fetch(url, { method: "HEAD", signal: controller.signal });
+    const res = await fetch(url, { method: "HEAD", headers, signal: controller.signal });
     clearTimeout(timer);
 
     if (!res.ok) return true; // HEAD not supported — proceed to download
@@ -103,13 +137,13 @@ async function checkSize(url: string): Promise<true | string> {
  * and cleans up the partial file on any error. Errors are returned as
  * strings so the model sees them in the tool result.
  */
-async function doDownload(url: string, dest: string): Promise<string> {
+async function doDownload(url: string, dest: string, headers: Record<string, string>): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
   let response: Response;
   try {
-    response = await fetch(url, { signal: controller.signal });
+    response = await fetch(url, { headers, signal: controller.signal });
   } catch (err) {
     clearTimeout(timer);
     const msg =
