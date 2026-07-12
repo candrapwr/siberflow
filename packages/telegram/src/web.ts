@@ -663,7 +663,10 @@ const TOOL_CATALOG: { category: string; tools: { name: string; description: stri
   },
   {
     category: "Search",
-    tools: [{ name: "web_search", description: "Web search (Exa)" }],
+    tools: [
+      { name: "web_search", description: "Web search (Exa)" },
+      { name: "download_file", description: "Download files from URL (max 100 MB)" },
+    ],
   },
   {
     category: "Music",

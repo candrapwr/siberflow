@@ -12,7 +12,7 @@ import { browserTools } from "./browser/index.js";
 import { interactionTools } from "./interaction/index.js";
 import { imageTools } from "./image/index.js";
 import { botTools } from "./bot/index.js";
-import { webTools } from "./web/index.js";
+import { webTools, downloadFileTool } from "./web/index.js";
 import { speechTools } from "./speech/index.js";
 import { musicTools } from "./music/index.js";
 import { createAgentGeneralTool, createAgentExplorerTool } from "./agent/index.js";
@@ -31,7 +31,7 @@ export { browserTools } from "./browser/index.js";
 export { interactionTools } from "./interaction/index.js";
 export { imageTools } from "./image/index.js";
 export { botTools } from "./bot/index.js";
-export { webTools } from "./web/index.js";
+export { webTools, downloadFileTool } from "./web/index.js";
 export { speechTools } from "./speech/index.js";
 export { musicTools } from "./music/index.js";
 export { createAgentGeneralTool, createAgentExplorerTool } from "./agent/index.js";
@@ -113,7 +113,7 @@ export function createDefaultRegistry(opts: RegistryOptions = {}): ToolRegistry 
 
   // Local file/output tools require the project sandbox (workdir).
   // Register only those the user enabled AND only when a workdir exists.
-  const fsCandidates = [...fileTools, ...cliTools, ...excelTools, ...docxTools, ...pdfTools, ...imageTools, ...musicTools];
+  const fsCandidates = [...fileTools, ...cliTools, ...excelTools, ...docxTools, ...pdfTools, ...imageTools, ...musicTools, downloadFileTool];
   for (const tool of fsCandidates) {
     if (hasFs && enabled.has(tool.name)) registry.register(tool);
   }
