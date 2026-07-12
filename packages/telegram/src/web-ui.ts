@@ -1540,16 +1540,47 @@ async function showDetail(id) {
   openModal("📄 Detail: " + id, '<div class="empty"><span class="spin"></span> Memuat pesan...</div>');
   try {
     const d = await api("/api/session/" + encodeURIComponent(id));
-    renderDetail(d);
+    renderDetail(d, id);
   } catch (e) {
     document.getElementById("modalBody").innerHTML = '<div class="empty">Gagal: ' + esc(e.message) + '</div>';
   }
 }
-function renderDetail(d) {
+function renderDetail(d, sessionId) {
+  const dlBase = '/api/session/' + encodeURIComponent(sessionId) + '/download/';
+  const dlMain = dlBase + 'main';
+  const dlOpt = dlBase + 'optimized';
+  // Token comparison table: main (full history) vs optimized (what model saw).
+  const ms = d.mainStats || {};
+  const os = d.optimizedStats || null;
+  const fmtTok = function(n) { return (n || 0).toLocaleString(); };
+  const savedPrompt = (ms.promptTokens && os && os.contextSize) ? (ms.promptTokens - os.contextSize) : 0;
+  const savedMsgs = (ms.messageCount && os && os.messageCount) ? (ms.messageCount - os.messageCount) : 0;
+  const tokenTable =
+    '<div style="margin:12px 0">' +
+      '<div class="label" style="margin-bottom:8px">📊 Token & Message Comparison</div>' +
+      '<table class="kv" style="font-size:12px"><thead><tr>' +
+        '<th>Metric</th><th>Main (full)</th><th>Optimized (model saw)</th><th>Saved</th>' +
+      '</tr></thead><tbody>' +
+        '<tr><td>Messages</td><td class="mono">' + fmtTok(ms.messageCount) + '</td>' +
+          '<td class="mono">' + (os ? fmtTok(os.messageCount) : '-') + '</td>' +
+          '<td class="mono" style="color:' + (savedMsgs > 0 ? '#4ade80' : '#8b92a4') + '">' + (os ? '-' + fmtTok(savedMsgs) : '-') + '</td></tr>' +
+        '<tr><td>Prompt tokens (last turn)</td><td class="mono">' + fmtTok(ms.promptTokens) + '</td>' +
+          '<td class="mono">' + (os ? fmtTok(os.contextSize) : '-') + '</td>' +
+          '<td class="mono" style="color:' + (savedPrompt > 0 ? '#4ade80' : '#8b92a4') + '">' + (os ? '-' + fmtTok(savedPrompt) : '-') + '</td></tr>' +
+        '<tr><td>Total tokens (all turns)</td><td class="mono">' + fmtTok(ms.totalTokens) + '</td>' +
+          '<td class="muted">-</td><td class="muted">-</td></tr>' +
+      '</tbody></table>' +
+      (os && os.generatedAt ? '<div class="muted" style="font-size:11px;margin-top:4px">Optimized snapshot: ' + fmtDate(os.generatedAt) + '</div>' : '') +
+      (!os ? '<div class="muted" style="font-size:11px;margin-top:4px">Optimized view belum tersedia (optimization disabled atau belum ada turn).</div>' : '') +
+    '</div>';
+  const downloadRow =
+    '<div style="margin:12px 0;display:flex;gap:8px;flex-wrap:wrap">' +
+      '<a class="button" href="' + dlMain + '" download style="text-decoration:none">⬇ Download Main Log</a>' +
+      '<a class="button" href="' + dlOpt + '" download style="text-decoration:none">⬇ Download Optimized Log</a>' +
+    '</div>';
   const meta = '<div class="msg-meta">' +
     'Provider: <strong>' + esc(d.provider) + '</strong> · Model: <strong>' + esc(d.model) + '</strong><br>' +
     'Dibuat: ' + fmtDate(d.createdAt) + ' · Update: ' + fmtDate(d.updatedAt) +
-    (d.usage && d.usage.total ? ' · Token total: ' + (d.usage.total.promptTokens + d.usage.total.completionTokens) : '') +
     '</div>';
   let rows = '';
   for (const m of d.messages) {
@@ -1574,7 +1605,7 @@ function renderDetail(d) {
       '<td style="width:280px">' + toolCell + '</td>' +
     '</tr>';
   }
-  const html = meta + '<table class="msg-table"><thead><tr>' +
+  const html = meta + tokenTable + downloadRow + '<table class="msg-table"><thead><tr>' +
     '<th>#</th><th>Role</th><th>Content</th><th>Tool</th>' +
     '</tr></thead><tbody>' + rows + '</tbody></table>';
   document.getElementById("modalBody").innerHTML = html;
