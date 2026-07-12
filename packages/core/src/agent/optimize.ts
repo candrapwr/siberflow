@@ -202,6 +202,57 @@ function shortVal(v: unknown): string {
   return "…";
 }
 
+/**
+ * Sanitize a message list so every assistant.tool_calls is followed by a
+ * matching tool result, and every tool result has a preceding tool_calls.
+ * Aborted turns, crashes mid-tool-call, or corrupted session files can leave
+ * "orphaned" entries that strict OpenAI-compatible providers (DeepSeek, etc.)
+ * reject with HTTP 400 ("must be followed by tool messages"). This drops any
+ * assistant message whose tool_calls lack ALL their results, and any tool
+ * result whose call id has no preceding tool_calls — keeping the list valid.
+ *
+ * Runs as the final step of optimizeContext (on every exit path, including the
+ * disabled pass-through) so the provider never sees a malformed chain.
+ */
+function ensureToolCallBalance(messages: readonly Message[]): Message[] {
+  if (messages.length === 0) return [...messages];
+  // First pass: collect tool_call ids that have a result somewhere in the list.
+  const answeredIds = new Set<string>();
+  for (const m of messages) {
+    if (m.role === "tool" && m.toolCallId) answeredIds.add(m.toolCallId);
+  }
+  // Second pass: drop orphaned entries. An assistant with tool_calls is kept
+  // only if EVERY call id has a result; a tool result is kept only if its id
+  // was emitted by a preceding assistant.tool_calls.
+  const emittedCallIds = new Set<string>();
+  const out: Message[] = [];
+  for (const m of messages) {
+    if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
+      const allAnswered = m.toolCalls.every((tc) => answeredIds.has(tc.id));
+      if (!allAnswered) {
+        // Orphaned tool_calls — drop the call metadata. If the assistant also
+        // carried text content, keep it as a plain assistant text message so we
+        // don't lose the turn's narrative; otherwise drop it entirely.
+        if (m.content && m.content.trim().length > 0) {
+          out.push({ role: "assistant", content: m.content });
+        }
+        continue;
+      }
+      for (const tc of m.toolCalls) emittedCallIds.add(tc.id);
+      out.push(m);
+      continue;
+    }
+    if (m.role === "tool") {
+      // Keep only if a preceding assistant.tool_calls emitted this id.
+      if (!emittedCallIds.has(m.toolCallId)) continue;
+      out.push(m);
+      continue;
+    }
+    out.push(m);
+  }
+  return out;
+}
+
 export function optimizeContext(
   messages: readonly Message[],
   config: ContextOptimizeConfig,
@@ -210,7 +261,7 @@ export function optimizeContext(
   const stats: OptimizationStats = { collapsedCount: 0, bytesSaved: 0 };
 
   if (!config.enabled) {
-    return { messages: [...messages], stats };
+    return { messages: ensureToolCallBalance(messages), stats };
   }
 
   const mode: OptimizeMode = config.mode ?? "compact";
@@ -267,7 +318,7 @@ export function optimizeContext(
     );
     stats.collapsedCount = head.length;
     stats.bytesSaved = Math.max(0, headBytes - summary.text.length);
-    return { messages: optimized, stats };
+    return { messages: ensureToolCallBalance(optimized), stats };
   }
 
   // "recent" keeps the most recent completed turn's tool activity intact and
@@ -279,18 +330,18 @@ export function optimizeContext(
   if (mode === "recent") {
     const keepStart = findSecondLastUserIndex(messages);
     if (keepStart === -1) {
-      return { messages: [...messages], stats };
+      return { messages: ensureToolCallBalance(messages), stats };
     }
     const head = compressToolHistory(messages.slice(0, keepStart), "summary", stats);
     const tail = messages.slice(keepStart);
     // head ends in a system/user/assistant content message; tail starts with
     // a user message — roles can't collide, so no merge needed. But run it
     // anyway defensively (cheap, and keeps the invariant for callers).
-    return { messages: mergeAdjacent([...head, ...tail]), stats };
+    return { messages: ensureToolCallBalance(mergeAdjacent([...head, ...tail])), stats };
   }
 
   // drop / summary compress the entire message list.
-  return { messages: compressToolHistory(messages, mode, stats), stats };
+  return { messages: ensureToolCallBalance(compressToolHistory(messages, mode, stats)), stats };
 }
 
 /**
