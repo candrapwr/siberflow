@@ -180,11 +180,14 @@ function findPuppeteerCoreEntry(paths: string[]): string | undefined {
  * host so the temp-dir worker can resolve it.
  */
 function buildWorkerSource(): string {
+  const ppPath = resolvePuppeteerCorePath();
+  const nmIdx = ppPath.lastIndexOf("node_modules");
+  const nmDir = nmIdx === -1 ? "" : ppPath.substring(0, nmIdx + "node_modules".length);
   return `
 // puppeteer-extra + stealth plugin for anti-detection (Google, CAPTCHA, etc.)
+import puppeteer from ${JSON.stringify(`file://${ppPath}`)};
 import { createRequire } from "module";
-const _reqBrowser = createRequire(process.cwd() + "/_pkg.json");
-import puppeteer from ${JSON.stringify(`file://${resolvePuppeteerCorePath()}`)};
+const _reqBrowser = createRequire(${JSON.stringify(nmDir + "/package.json")});
 const puppeteerExtra = _reqBrowser("puppeteer-extra");
 const StealthPlugin = _reqBrowser("puppeteer-extra-plugin-stealth");
 puppeteerExtra.use(StealthPlugin());
