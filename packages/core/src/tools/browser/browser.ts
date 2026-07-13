@@ -180,9 +180,14 @@ function findPuppeteerCoreEntry(paths: string[]): string | undefined {
  * host so the temp-dir worker can resolve it.
  */
 function buildWorkerSource(): string {
-  const ppPath = resolvePuppeteerCorePath();
   return `
-import puppeteer from ${JSON.stringify(`file://${ppPath}`)};
+// puppeteer-extra + stealth plugin for anti-detection (Google, CAPTCHA, etc.)
+import { createRequire } from "module";
+const _reqBrowser = createRequire(process.cwd() + "/_pkg.json");
+import puppeteer from ${JSON.stringify(`file://${resolvePuppeteerCorePath()}`)};
+const puppeteerExtra = _reqBrowser("puppeteer-extra");
+const StealthPlugin = _reqBrowser("puppeteer-extra-plugin-stealth");
+puppeteerExtra.use(StealthPlugin());
 const parent = process;
 const forbiddenScriptPatterns = [
   ["child_process", /\\b(?:node:)?child_process\\b/],
@@ -218,13 +223,14 @@ async function launchBrowser() {
   let lastErr;
   for (const channel of channels) {
     try {
+      // Using puppeteerExtra (with stealth plugin) to avoid anti-bot detection.
       // --no-zygote: Chrome normally forks a "zygote" helper that pre-spawns
       // renderers. With --no-zygote each renderer is a direct child of the
       // browser process, so killing the browser process reliably reaps all
       // children (no orphaned zygote/GPU/Crashpad processes = no zombies).
       // Combined with killTree() in the parent, this is what prevents the
       // "Chrome zombie" leak when a run_browser call times out or errors.
-      return await puppeteer.launch({ channel, headless: true, args: ["--no-sandbox", "--disable-setuid-sandbox", "--no-zygote"] });
+      return await puppeteerExtra.launch({ channel, headless: true, args: ["--no-sandbox", "--disable-setuid-sandbox", "--no-zygote"] });
     } catch (e) {
       lastErr = e;
     }
@@ -343,11 +349,11 @@ function ensureWorkerFile(): void {
 export const runBrowserTool: Tool = {
   name: "run_browser",
   description:
-    "Run Puppeteer code in a headless Chrome/Edge (the user's installed browser). You receive " +
-    "`{ page, browser }` — `page` is navigated to `url` if provided; `browser` lets you open more pages. " +
+    "Run Puppeteer code in a headless Chrome/Edge (the user's installed browser) with stealth anti-detection. " +
+    "You receive `{ page, browser }` — `page` is navigated to `url` if provided; `browser` lets you open more pages. " +
     "Write any Puppeteer calls; return a string or JSON-serializable value.\n\n" +
-    "Gotchas:\n" +
-    "- When web searching, use Bing, DuckDuckGo, or Brave — NOT Google Search (it blocks automation).\n" +
+    "Features:\n" +
+    "- Stealth anti-detection (puppeteer-extra + stealth plugin) — Google, Bing, and most sites work without CAPTCHA.\n" +
     "- `page.waitForTimeout(ms)` was REMOVED in Puppeteer v22+ — sleep with " +
     "`await new Promise(r => setTimeout(r, ms))` instead.\n" +
     "- Prefer `page.waitForSelector()` / `page.$$eval()` over fixed sleeps for AJAX/SPA content.\n" +
