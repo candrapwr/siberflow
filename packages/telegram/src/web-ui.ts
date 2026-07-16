@@ -282,6 +282,28 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     margin-top: 4px;
   }
 
+  /* ── View chooser cards (main vs optimized) ── */
+  .view-cards { display: flex; gap: 10px; flex-wrap: wrap; }
+  .view-card {
+    display: flex; align-items: center; gap: 10px;
+    flex: 1; min-width: 180px;
+    padding: 12px 14px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: border-color 0.12s, background 0.12s;
+  }
+  .view-card:hover { border-color: var(--accent); }
+  .view-card.active {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+  }
+  .view-card.disabled { opacity: 0.5; cursor: not-allowed; }
+  .view-card.disabled:hover { border-color: var(--border); }
+  .view-card-icon { font-size: 20px; line-height: 1; }
+  .view-card-title { font-weight: 600; font-size: 13px; margin-bottom: 2px; }
+
   /* ── Workdir tree ── */
   .file-tree { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; }
   .file-tree .dir { color: var(--accent); }
@@ -1536,22 +1558,28 @@ function renderSessions() {
 }
 
 // ── Detail (message log) ──
+// State for the currently-open detail modal, so the view chooser can switch
+// between main / optimized without re-fetching the whole meta payload.
+let detailState = null;
 async function showDetail(id) {
-  openModal("📄 Detail: " + id, '<div class="empty"><span class="spin"></span> Memuat pesan...</div>');
+  detailState = null;
+  openModal("📄 Detail: " + id, '<div class="empty"><span class="spin"></span> Memuat metadata...</div>');
   try {
     const d = await api("/api/session/" + encodeURIComponent(id));
-    renderDetail(d, id);
+    renderDetailShell(d, id);
   } catch (e) {
     document.getElementById("modalBody").innerHTML = '<div class="empty">Gagal: ' + esc(e.message) + '</div>';
   }
 }
-function renderDetail(d, sessionId) {
+function renderDetailShell(d, sessionId) {
+  detailState = { sessionId, d, activeView: null };
   const dlBase = '/api/session/' + encodeURIComponent(sessionId) + '/download/';
   const dlMain = dlBase + 'main';
   const dlOpt = dlBase + 'optimized';
   // Token comparison table: main (full history) vs optimized (what model saw).
   const ms = d.mainStats || {};
   const os = d.optimizedStats || null;
+  const hasOpt = !!d.hasOptimized;
   const fmtTok = function(n) { return (n || 0).toLocaleString(); };
   const savedPrompt = (ms.promptTokens && os && os.contextSize) ? (ms.promptTokens - os.contextSize) : 0;
   const savedMsgs = (ms.messageCount && os && os.messageCount) ? (ms.messageCount - os.messageCount) : 0;
@@ -1582,8 +1610,73 @@ function renderDetail(d, sessionId) {
     'Provider: <strong>' + esc(d.provider) + '</strong> · Model: <strong>' + esc(d.model) + '</strong><br>' +
     'Dibuat: ' + fmtDate(d.createdAt) + ' · Update: ' + fmtDate(d.updatedAt) +
     '</div>';
+  const chooser = renderViewChooser(d, sessionId);
+  const html = meta + tokenTable + downloadRow + chooser + '<div id="msgTableArea"></div>';
+  document.getElementById("modalBody").innerHTML = html;
+}
+// Two cards: pick "Session Asli" (main) or "Hasil Optimized" before loading rows.
+function renderViewChooser(d, sessionId) {
+  const ms = d.mainStats || {};
+  const os = d.optimizedStats || null;
+  const hasOpt = !!d.hasOptimized;
+  const fmtTok = function(n) { return (n || 0).toLocaleString(); };
+  const activeMain = detailState && detailState.activeView === 'main';
+  const activeOpt = detailState && detailState.activeView === 'optimized';
+  const cardMain =
+    '<div class="view-card' + (activeMain ? ' active' : '') + '" onclick="loadMessages(\'' + esc(sessionId) + '\', \'main\')">' +
+      '<div class="view-card-icon">📋</div>' +
+      '<div class="view-card-body">' +
+        '<div class="view-card-title">Session Asli</div>' +
+        '<div class="muted" style="font-size:12px">' + fmtTok(ms.messageCount) + ' pesan · history lengkap</div>' +
+      '</div>' +
+    '</div>';
+  const cardOpt = hasOpt
+    ? '<div class="view-card' + (activeOpt ? ' active' : '') + '" onclick="loadMessages(\'' + esc(sessionId) + '\', \'optimized\')">' +
+        '<div class="view-card-icon">⚡</div>' +
+        '<div class="view-card-body">' +
+          '<div class="view-card-title">Hasil Optimized</div>' +
+          '<div class="muted" style="font-size:12px">' + (os ? fmtTok(os.messageCount) : '0') + ' pesan · yang dilihat model</div>' +
+        '</div>' +
+      '</div>'
+    : '<div class="view-card disabled">' +
+        '<div class="view-card-icon">⚡</div>' +
+        '<div class="view-card-body">' +
+          '<div class="view-card-title">Hasil Optimized</div>' +
+          '<div class="muted" style="font-size:12px">Belum tersedia</div>' +
+        '</div>' +
+      '</div>';
+  return '<div style="margin:12px 0">' +
+    '<div class="label" style="margin-bottom:8px">Pilih view untuk memuat pesan</div>' +
+    '<div class="view-cards">' + cardMain + cardOpt + '</div>' +
+  '</div>';
+}
+async function loadMessages(sessionId, view) {
+  const area = document.getElementById("msgTableArea");
+  if (!area) return;
+  area.innerHTML = '<div class="empty"><span class="spin"></span> Memuat pesan ' + esc(view) + '...</div>';
+  // Mark the active card immediately for responsiveness.
+  if (detailState) {
+    detailState.activeView = view;
+    const chooserWrap = area.previousElementSibling;
+    if (chooserWrap) {
+      const newChooser = document.createElement('div');
+      newChooser.innerHTML = renderViewChooser(detailState.d, sessionId);
+      chooserWrap.replaceWith(newChooser.firstElementChild);
+    }
+  }
+  try {
+    const data = await api("/api/session/" + encodeURIComponent(sessionId) + "/messages/" + view);
+    const cur = document.getElementById("msgTableArea");
+    if (!cur) return;
+    cur.innerHTML = renderMessageTable(data.messages || []);
+  } catch (e) {
+    const cur = document.getElementById("msgTableArea");
+    if (cur) cur.innerHTML = '<div class="empty">Gagal: ' + esc(e.message) + '</div>';
+  }
+}
+function renderMessageTable(messages) {
   let rows = '';
-  for (const m of d.messages) {
+  for (const m of messages) {
     const roleClass = "role-" + m.role;
     let toolCell = '';
     if (m.toolCalls && m.toolCalls.length) {
@@ -1605,14 +1698,16 @@ function renderDetail(d, sessionId) {
       '<td style="width:280px">' + toolCell + '</td>' +
     '</tr>';
   }
-  const html = meta + tokenTable + downloadRow + '<table class="msg-table"><thead><tr>' +
+  const html = '<table class="msg-table"><thead><tr>' +
     '<th>#</th><th>Role</th><th>Content</th><th>Tool</th>' +
     '</tr></thead><tbody>' + rows + '</tbody></table>';
-  document.getElementById("modalBody").innerHTML = html;
-  // Bind click-to-expand on each content cell
-  document.querySelectorAll(".msg-content").forEach(el => {
-    el.addEventListener("click", () => el.classList.toggle("collapsed"));
-  });
+  // Defer binding until inserted into DOM.
+  setTimeout(() => {
+    document.querySelectorAll("#msgTableArea .msg-content").forEach(el => {
+      el.addEventListener("click", () => el.classList.toggle("collapsed"));
+    });
+  }, 0);
+  return html;
 }
 
 // ── Workdir ──

@@ -181,6 +181,25 @@ function buildMessageRows(session: Session): MessageRow[] {
 }
 
 /**
+ * Truncate very long content (system prompts can be huge) for the list view;
+ * the full content is available via a click-to-expand that fetches the raw
+ * row. We flag truncated rows so the UI can show a "show more" affordance.
+ */
+function trimMessageRows(rows: MessageRow[]): Array<MessageRow & { truncated?: boolean; fullLength?: number }> {
+  return rows.map((r) => {
+    if (r.content.length > CONTENT_PREVIEW_LIMIT) {
+      return {
+        ...r,
+        content: r.content.slice(0, CONTENT_PREVIEW_LIMIT),
+        truncated: true,
+        fullLength: r.content.length,
+      };
+    }
+    return r;
+  });
+}
+
+/**
  * Start the admin web service. Returns the http.Server (already listening).
  * The bot polling loop continues to run independently after this resolves —
  * listen() is non-blocking.
@@ -296,6 +315,13 @@ async function handleRequest(
   if (dlMatch && req.method === "GET") {
     const [, dlId, dlType] = dlMatch;
     return handleDownloadSession(res, decodeURIComponent(dlId!), dlType as "main" | "optimized");
+  }
+  // Lazy message-log fetch (main | optimized). Also MUST come before the
+  // generic /api/session/:id route for the same greedy-capture reason.
+  const msgMatch = path.match(/^\/api\/session\/(.+)\/messages\/(main|optimized)$/);
+  if (msgMatch && req.method === "GET") {
+    const [, msgId, msgView] = msgMatch;
+    return handleGetSessionMessages(res, decodeURIComponent(msgId!), msgView as "main" | "optimized");
   }
   const sessionMatch = path.match(/^\/api\/session\/(.+)$/);
   if (sessionMatch && req.method === "GET") {
@@ -993,7 +1019,7 @@ async function handleListSessions(res: ServerResponse): Promise<void> {
   sendJson(res, 200, items);
 }
 
-/** GET /api/session/:id — return the raw (non-optimized) message log + optimized comparison stats. */
+/** GET /api/session/:id — return session metadata + optimized comparison stats only. Message logs are loaded lazily via /api/session/:id/messages/:view so the detail modal can prompt the operator to pick a view (main vs optimized) before fetching rows. */
 async function handleGetSession(res: ServerResponse, id: string): Promise<void> {
   if (!id.startsWith("telegram-")) {
     sendJson(res, 400, { error: "Only telegram sessions are accessible." });
@@ -1004,21 +1030,6 @@ async function handleGetSession(res: ServerResponse, id: string): Promise<void> 
     sendJson(res, 404, { error: "Session not found." });
     return;
   }
-  const rows = buildMessageRows(session);
-  // Truncate very long content (system prompts can be huge) for the list view;
-  // the full content is available via a click-to-expand that fetches the raw
-  // row. We flag truncated rows so the UI can show a "show more" affordance.
-  const trimmed = rows.map((r) => {
-    if (r.content.length > CONTENT_PREVIEW_LIMIT) {
-      return {
-        ...r,
-        content: r.content.slice(0, CONTENT_PREVIEW_LIMIT),
-        truncated: true,
-        fullLength: r.content.length,
-      };
-    }
-    return r;
-  });
   // Load the optimized sibling (if any) so the admin panel can compare main vs
   // optimized token/message counts. Both files carry session.usage, but the
   // optimized snapshot's message count + contextSize reflect what the model
@@ -1034,7 +1045,6 @@ async function handleGetSession(res: ServerResponse, id: string): Promise<void> 
     updatedAt: session.updatedAt,
     usage: session.usage,
     knownMembers: session.knownMembers ?? null,
-    messages: trimmed,
     mainStats: {
       messageCount: session.messages.length,
       promptTokens: session.usage?.last?.promptTokens ?? 0,
@@ -1049,6 +1059,46 @@ async function handleGetSession(res: ServerResponse, id: string): Promise<void> 
           generatedAt: optimized._generatedAt ?? null,
         }
       : null,
+    hasOptimized: !!optimized,
+  });
+}
+
+/**
+ * GET /api/session/:id/messages/:view — return the message-log rows for the
+ * requested view. `main` reads the verbatim original session; `optimized`
+ * reads the optimized snapshot (what the model actually saw after context
+ * optimization). Used for lazy-loading after the operator picks a view in the
+ * detail modal.
+ */
+async function handleGetSessionMessages(
+  res: ServerResponse,
+  id: string,
+  view: "main" | "optimized",
+): Promise<void> {
+  if (!id.startsWith("telegram-")) {
+    sendJson(res, 400, { error: "Only telegram sessions are accessible." });
+    return;
+  }
+  let session: (Session & { _view?: string; _generatedAt?: string }) | null;
+  if (view === "main") {
+    session = await loadSession(id);
+  } else {
+    session = (await loadOptimizedView(id).catch(() => null))
+      ?? (await loadOptimizedMiddleView(id).catch(() => null));
+  }
+  if (!session) {
+    sendJson(res, 404, {
+      error: view === "main"
+        ? "Session not found."
+        : "Optimized view not available (optimization may be disabled or no turn has run).",
+    });
+    return;
+  }
+  const trimmed = trimMessageRows(buildMessageRows(session));
+  sendJson(res, 200, {
+    view,
+    messageCount: session.messages.length,
+    messages: trimmed,
   });
 }
 
