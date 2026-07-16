@@ -1610,12 +1610,15 @@ function renderDetailShell(d, sessionId) {
     'Provider: <strong>' + esc(d.provider) + '</strong> · Model: <strong>' + esc(d.model) + '</strong><br>' +
     'Dibuat: ' + fmtDate(d.createdAt) + ' · Update: ' + fmtDate(d.updatedAt) +
     '</div>';
-  const chooser = renderViewChooser(d, sessionId);
+  const chooser = renderViewChooser(d);
   const html = meta + tokenTable + downloadRow + chooser + '<div id="msgTableArea"></div>';
   document.getElementById("modalBody").innerHTML = html;
 }
 // Two cards: pick "Session Asli" (main) or "Hasil Optimized" before loading rows.
-function renderViewChooser(d, sessionId) {
+// Cards call argument-less wrappers (loadMain / loadOptimized) which read the
+// current session id from detailState — this avoids nested-quote escaping in
+// the inline onclick attribute.
+function renderViewChooser(d) {
   const ms = d.mainStats || {};
   const os = d.optimizedStats || null;
   const hasOpt = !!d.hasOptimized;
@@ -1623,7 +1626,7 @@ function renderViewChooser(d, sessionId) {
   const activeMain = detailState && detailState.activeView === 'main';
   const activeOpt = detailState && detailState.activeView === 'optimized';
   const cardMain =
-    '<div class="view-card' + (activeMain ? ' active' : '') + '" onclick="loadMessages(\'' + esc(sessionId) + '\', \'main\')">' +
+    '<div class="view-card' + (activeMain ? ' active' : '') + '" onclick="loadMain()">' +
       '<div class="view-card-icon">📋</div>' +
       '<div class="view-card-body">' +
         '<div class="view-card-title">Session Asli</div>' +
@@ -1631,7 +1634,7 @@ function renderViewChooser(d, sessionId) {
       '</div>' +
     '</div>';
   const cardOpt = hasOpt
-    ? '<div class="view-card' + (activeOpt ? ' active' : '') + '" onclick="loadMessages(\'' + esc(sessionId) + '\', \'optimized\')">' +
+    ? '<div class="view-card' + (activeOpt ? ' active' : '') + '" onclick="loadOptimized()">' +
         '<div class="view-card-icon">⚡</div>' +
         '<div class="view-card-body">' +
           '<div class="view-card-title">Hasil Optimized</div>' +
@@ -1650,19 +1653,22 @@ function renderViewChooser(d, sessionId) {
     '<div class="view-cards">' + cardMain + cardOpt + '</div>' +
   '</div>';
 }
-async function loadMessages(sessionId, view) {
+// Argument-less wrappers so the inline onclick has no nested quotes.
+function loadMain() { loadMessages('main'); }
+function loadOptimized() { loadMessages('optimized'); }
+async function loadMessages(view) {
+  if (!detailState) return;
+  const sessionId = detailState.sessionId;
   const area = document.getElementById("msgTableArea");
   if (!area) return;
   area.innerHTML = '<div class="empty"><span class="spin"></span> Memuat pesan ' + esc(view) + '...</div>';
   // Mark the active card immediately for responsiveness.
-  if (detailState) {
-    detailState.activeView = view;
-    const chooserWrap = area.previousElementSibling;
-    if (chooserWrap) {
-      const newChooser = document.createElement('div');
-      newChooser.innerHTML = renderViewChooser(detailState.d, sessionId);
-      chooserWrap.replaceWith(newChooser.firstElementChild);
-    }
+  detailState.activeView = view;
+  const chooserWrap = area.previousElementSibling;
+  if (chooserWrap) {
+    const newChooser = document.createElement('div');
+    newChooser.innerHTML = renderViewChooser(detailState.d);
+    chooserWrap.replaceWith(newChooser.firstElementChild);
   }
   try {
     const data = await api("/api/session/" + encodeURIComponent(sessionId) + "/messages/" + view);
