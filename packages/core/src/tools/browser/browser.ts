@@ -184,13 +184,19 @@ function buildWorkerSource(): string {
   const nmIdx = ppPath.lastIndexOf("node_modules");
   const nmDir = nmIdx === -1 ? "" : ppPath.substring(0, nmIdx + "node_modules".length);
   return `
-// puppeteer-extra + stealth plugin for anti-detection (Google, CAPTCHA, etc.)
 import puppeteer from ${JSON.stringify(`file://${ppPath}`)};
 import { createRequire } from "module";
 const _reqBrowser = createRequire(${JSON.stringify(nmDir + "/package.json")});
-const puppeteerExtra = _reqBrowser("puppeteer-extra");
-const StealthPlugin = _reqBrowser("puppeteer-extra-plugin-stealth");
-puppeteerExtra.use(StealthPlugin());
+let puppeteerLauncher = puppeteer;
+try {
+  const puppeteerExtra = _reqBrowser("puppeteer-extra");
+  const StealthPlugin = _reqBrowser("puppeteer-extra-plugin-stealth");
+  puppeteerExtra.use(StealthPlugin());
+  puppeteerLauncher = puppeteerExtra;
+} catch {
+  // Stealth is optional. Fall back to plain puppeteer-core instead of failing
+  // the whole run_browser call when the optional package is not installed.
+}
 const parent = process;
 const forbiddenScriptPatterns = [
   ["child_process", /\\b(?:node:)?child_process\\b/],
@@ -206,7 +212,8 @@ const forbiddenScriptPatterns = [
   ["process", /\\bprocess\\b/],
   ["new Function", /\\bnew\\s+Function\\s*\\(/],
   ["Function constructor", /\\bFunction\\s*\\(/],
-  ["eval", /\\beval\\s*\\(/],
+  // Allow Puppeteer's page.$eval()/page.$$eval(); block only direct eval(...).
+  ["eval", /(?<![$\\w])eval\\s*\\(/],
 ];
 
 function assertNoShellLikeScriptAccess(script) {
@@ -233,7 +240,7 @@ async function launchBrowser() {
       // children (no orphaned zygote/GPU/Crashpad processes = no zombies).
       // Combined with killTree() in the parent, this is what prevents the
       // "Chrome zombie" leak when a run_browser call times out or errors.
-      return await puppeteerExtra.launch({ channel, headless: true, args: ["--no-sandbox", "--disable-setuid-sandbox", "--no-zygote"] });
+      return await puppeteerLauncher.launch({ channel, headless: true, args: ["--no-sandbox", "--disable-setuid-sandbox", "--no-zygote"] });
     } catch (e) {
       lastErr = e;
     }
