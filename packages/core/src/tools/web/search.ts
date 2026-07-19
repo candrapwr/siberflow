@@ -252,6 +252,7 @@ async function postJson<T>(url: string, apiKey: string, body: unknown): Promise<
       method: "POST",
       headers: {
         "content-type": "application/json",
+        "authorization": `Bearer ${apiKey}`,
         "x-api-key": apiKey,
       },
       body: JSON.stringify(body),
