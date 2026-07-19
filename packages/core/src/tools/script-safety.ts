@@ -17,7 +17,8 @@ const FORBIDDEN_SCRIPT_PATTERNS: ForbiddenScriptPattern[] = [
   { name: "process", pattern: /\bprocess\b/ },
   { name: "new Function", pattern: /\bnew\s+Function\s*\(/ },
   { name: "Function constructor", pattern: /\bFunction\s*\(/ },
-  { name: "eval", pattern: /\beval\s*\(/ },
+  // Allow Puppeteer's page.$eval()/page.$$eval(); block only direct eval(...).
+  { name: "eval", pattern: /(?<![$\w])eval\s*\(/ },
   // CDP methods that let the script write to the HOST filesystem outside the
   // project sandbox. This was the actual write-vector in the CVE-2026-31431
   // pretext compromise: the attacker used createCDPSession() +
