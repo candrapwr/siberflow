@@ -6,9 +6,9 @@
  * and response parsing. All providers return a raw image {@link Buffer} plus a
  * format hint so the tool can pick the right file extension.
  *
- * Providers: openai, deepinfra (OpenAI-compatible endpoint), novita (Seedream),
- * qwen (Tongyi Wanxiang, async task), grok (FLUX-based). grok has no public
- * edit endpoint.
+ * Providers: openai, general (OpenAI-like JSON endpoint), deepinfra
+ * (OpenAI-compatible endpoint), novita (Seedream), qwen (Tongyi Wanxiang,
+ * async task), grok (FLUX-based). grok has no public edit endpoint.
  */
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
@@ -165,6 +165,54 @@ export const openaiProvider: ImageGenProvider = {
     if (!res.ok) throw new Error(`OpenAI images/edits HTTP ${res.status}: ${await readError(res)}`);
     const json = (await res.json()) as { data?: { url?: string; b64_json?: string }[] };
     if (!json.data?.[0]) throw new Error("OpenAI edit returned no image data.");
+    return fromOpenAiData(json.data[0]);
+  },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Provider: general
+// OpenAI-like JSON image API. Generation matches OpenAI's JSON payload at
+// /images/generations. Editing intentionally uses the SAME endpoint and payload
+// as generation, with one extra `image` property containing pure base64 bytes
+// (no data:image/...;base64, prefix).
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const generalProvider: ImageGenProvider = {
+  name: "general",
+  async generate(req: ImageGenRequest): Promise<ImageGenResult> {
+    const url = `${cleanBaseUrl(req.baseUrl)}/images/generations`;
+    const res = await fetchWithTimeout(url, {
+      method: "POST",
+      headers: { authorization: authHeader(req.apiKey), "content-type": "application/json" },
+      body: JSON.stringify({
+        model: req.model,
+        prompt: req.prompt,
+        n: 1,
+        ...(req.size ? { size: req.size } : {}),
+      }),
+    });
+    if (!res.ok) throw new Error(`General images/generations HTTP ${res.status}: ${await readError(res)}`);
+    const json = (await res.json()) as { data?: { url?: string; b64_json?: string }[] };
+    if (!json.data?.[0]) throw new Error("General provider returned no image data.");
+    return fromOpenAiData(json.data[0]);
+  },
+  async edit(req: ImageEditRequest): Promise<ImageGenResult> {
+    const url = `${cleanBaseUrl(req.baseUrl)}/images/generations`;
+    const imageData = await readFile(req.imagePath);
+    const res = await fetchWithTimeout(url, {
+      method: "POST",
+      headers: { authorization: authHeader(req.apiKey), "content-type": "application/json" },
+      body: JSON.stringify({
+        model: req.model,
+        prompt: req.prompt,
+        n: 1,
+        ...(req.size ? { size: req.size } : {}),
+        image: imageData.toString("base64"),
+      }),
+    });
+    if (!res.ok) throw new Error(`General image edit HTTP ${res.status}: ${await readError(res)}`);
+    const json = (await res.json()) as { data?: { url?: string; b64_json?: string }[] };
+    if (!json.data?.[0]) throw new Error("General edit returned no image data.");
     return fromOpenAiData(json.data[0]);
   },
 };
@@ -365,6 +413,7 @@ export const grokProvider: ImageGenProvider = {
 /** Map of provider name → adapter. The tool looks up by env-configured name. */
 export const IMAGE_GEN_PROVIDERS: Record<string, ImageGenProvider> = {
   openai: openaiProvider,
+  general: generalProvider,
   deepinfra: deepinfraProvider,
   novita: novitaProvider,
   qwen: qwenProvider,
@@ -374,6 +423,7 @@ export const IMAGE_GEN_PROVIDERS: Record<string, ImageGenProvider> = {
 /** Default base URL + model per provider (used when env doesn't override). */
 export const PROVIDER_DEFAULTS: Record<string, { baseUrl: string; model: string }> = {
   openai: { baseUrl: "https://api.openai.com/v1", model: "gpt-image-1" },
+  general: { baseUrl: "https://api.openai.com/v1", model: "gpt-image-1" },
   deepinfra: { baseUrl: "https://api.deepinfra.com/v1", model: "black-forest-labs/FLUX-1-schnell" },
   novita: { baseUrl: "https://api.novita.ai", model: "seedream-5.0-lite" },
   qwen: { baseUrl: "https://dashscope.aliyuncs.com", model: "wanx2.1-turbo" },
