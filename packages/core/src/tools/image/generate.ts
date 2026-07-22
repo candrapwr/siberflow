@@ -9,7 +9,7 @@
  *
  * Config (env, prefix SIBERFLOW_IMAGE_GEN_):
  * - SIBERFLOW_IMAGE_GEN_API_KEY  (required at call time)
- * - SIBERFLOW_IMAGE_GEN_PROVIDER  openai | deepinfra | novita | qwen | grok
+ * - SIBERFLOW_IMAGE_GEN_PROVIDER  openai | general | deepinfra | novita | qwen | grok
  * - SIBERFLOW_IMAGE_GEN_MODEL     model id (default per provider)
  * - SIBERFLOW_IMAGE_GEN_BASE_URL  API root (default per provider)
  */

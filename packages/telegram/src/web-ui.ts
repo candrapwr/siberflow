@@ -802,6 +802,7 @@ function renderSettings() {
           '<div class="form-field"><label>Provider</label>' +
             '<select id="setIgProvider" ' + igDisabled + '>' +
               '<option value="openai"' + (s.imageGenProvider === 'openai' ? ' selected' : '') + '>openai (gpt-image)</option>' +
+              '<option value="general"' + (s.imageGenProvider === 'general' ? ' selected' : '') + '>general (JSON base64 edit)</option>' +
               '<option value="deepinfra"' + (s.imageGenProvider === 'deepinfra' ? ' selected' : '') + '>deepinfra (FLUX)</option>' +
               '<option value="novita"' + (s.imageGenProvider === 'novita' ? ' selected' : '') + '>novita (Seedream)</option>' +
               '<option value="qwen"' + (s.imageGenProvider === 'qwen' ? ' selected' : '') + '>qwen (Wanxiang)</option>' +
@@ -902,6 +903,7 @@ function renderSettings() {
           '<div class="form-field"><label>Provider</label>' +
             '<select id="setIeProvider" ' + ieDisabled + '>' +
               '<option value="openai"' + (s.imageEditProvider === 'openai' ? ' selected' : '') + '>openai (gpt-image)</option>' +
+              '<option value="general"' + (s.imageEditProvider === 'general' ? ' selected' : '') + '>general (JSON base64 edit)</option>' +
               '<option value="deepinfra"' + (s.imageEditProvider === 'deepinfra' ? ' selected' : '') + '>deepinfra (FLUX)</option>' +
               '<option value="novita"' + (s.imageEditProvider === 'novita' ? ' selected' : '') + '>novita (Seedream)</option>' +
               '<option value="qwen"' + (s.imageEditProvider === 'qwen' ? ' selected' : '') + '>qwen (Wanxiang)</option>' +

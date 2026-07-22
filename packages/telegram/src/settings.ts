@@ -35,7 +35,7 @@ export interface TelegramAiSettings {
   // ── Image generator override ──
   /** false = image_gen uses env (SIBERFLOW_IMAGE_GEN_*); true = use fields below. */
   imageGenEnabled: boolean;
-  /** Image gen provider: openai | deepinfra | novita | qwen | grok. */
+  /** Image gen provider: openai | general | deepinfra | novita | qwen | grok. */
   imageGenProvider: string;
   /** Image gen API key. */
   imageGenApiKey: string;
@@ -63,7 +63,7 @@ export interface TelegramAiSettings {
   // ── Image EDIT override ──
   /** false = image edit uses image-gen config; true = use fields below. */
   imageEditEnabled: boolean;
-  /** Image edit provider: openai | deepinfra | novita | qwen | grok. */
+  /** Image edit provider: openai | general | deepinfra | novita | qwen | grok. */
   imageEditProvider: string;
   /** Image edit API key. */
   imageEditApiKey: string;
@@ -193,7 +193,7 @@ export interface ImageGenPreset {
   id: string;
   /** User-chosen label, e.g. "OpenAI Production". */
   name: string;
-  /** Provider name: openai | deepinfra | novita | qwen | grok. */
+  /** Provider name: openai | general | deepinfra | novita | qwen | grok. */
   provider: string;
   /** API key (stored in full, local file). */
   apiKey: string;
