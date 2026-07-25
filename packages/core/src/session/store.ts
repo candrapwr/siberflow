@@ -53,6 +53,28 @@ export function optimizedMiddlePathFor(id: string): string {
   return join(SESSIONS_DIR, `${id}.optimized_middle.json`);
 }
 
+/** Path to the `<id>.full.json` pre-compaction backup sibling file. */
+export function fullBackupPathFor(id: string): string {
+  return join(SESSIONS_DIR, `${id}.full.json`);
+}
+
+/**
+ * One-time backup of a session's FULL pre-compaction state, written to
+ * `<id>.full.json` next to the session file. Used by the manual "compact now"
+ * feature so an operator can recover the original, unsummarized history if a
+ * compaction turns out to be a mistake. This file is NEVER read by the agent
+ * flow — it's a safety net only. Calling it again overwrites the prior backup
+ * (we keep only the most recent full snapshot before the latest compaction).
+ */
+export async function saveFullBackup(session: Session): Promise<void> {
+  await ensureDir();
+  await writeFile(
+    fullBackupPathFor(session.id),
+    JSON.stringify(session, null, 2),
+    "utf8",
+  );
+}
+
 /**
  * Load the optimized session view from disk (the snapshot of what the model
  * actually saw after context optimization). Returns null if the file does not
@@ -176,6 +198,12 @@ export async function deleteSession(id: string): Promise<boolean> {
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
   }
+  // Best-effort cleanup of the pre-compaction backup file (if any).
+  try {
+    await unlink(fullBackupPathFor(id));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
   // Drop the session's uploaded Excel files from tmp. Best-effort: a failure
   // here must not mask a successful session-file deletion.
   try {
@@ -263,6 +291,7 @@ export async function listSessions(filter?: {
     if (!f.endsWith(".json")) continue;
     if (f.endsWith(".optimized.json")) continue; // sibling monitoring file
     if (f.endsWith(".optimized_middle.json")) continue; // sibling monitoring file
+    if (f.endsWith(".full.json")) continue; // pre-compaction backup (safety net)
     try {
       const raw = await readFile(join(SESSIONS_DIR, f), "utf8");
       const s = JSON.parse(raw) as Session;

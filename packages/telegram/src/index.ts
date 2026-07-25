@@ -7,12 +7,14 @@ import {
   Agent,
   buildSystemPrompt,
   cliTools,
+  compactConversation,
   createDefaultRegistry,
   createProvider,
   deleteSession,
   loadConfigFromEnv,
   loadSession,
   optimizeContext,
+  saveFullBackup,
   saveOptimizedMiddleView,
   saveOptimizedView,
   saveSession,
@@ -20,6 +22,7 @@ import {
   type BotScriptHost,
   type ImageAccessLogEntry,
   type AgentAccessLogEntry,
+  type Message,
   type Provider,
   type Session,
   type ToolRegistry,
@@ -215,6 +218,7 @@ async function main(): Promise<void> {
     getAiSettings: () => runner.getAiSettings(),
     applyAiSettings: (s) => runner.applyAiSettings(s),
     dropSession: (id) => runner.dropSession(id),
+    compactSession: (id) => runner.compactSession(id),
     getImageAccessLog: () => runner.getImageAccessLog(),
     getAgentAccessLog: () => runner.getAgentAccessLog(),
     getAgentAccessLogDetail: (id) => runner.getAgentAccessLogDetail(id),
@@ -1190,6 +1194,204 @@ class BotRunner {
     this.sessions.set(id, runtime);
     return runtime;
   }
+
+  /**
+   * Resolve (or rebuild) a session runtime by session id — without a Telegram
+   * message. Used by admin actions that only have an id (e.g. the manual
+   * "compact now" route). Unlike getRuntime(message), this does NOT update the
+   * known-member roster (there's no sender) and uses the active provider's
+   * registry directly (no per-admin shell tool). Returns null if the session
+   * file doesn't exist on disk and isn't cached.
+   */
+  private async getRuntimeById(
+    id: string,
+  ): Promise<RuntimeSession | null> {
+    // Reuse a cached runtime if present (same as getRuntime's fast path).
+    const cached = this.sessions.get(id);
+    if (cached) return cached;
+
+    // Otherwise load from disk; if it doesn't exist, there's nothing to compact.
+    const loaded = await loadSession(id);
+    if (!loaded) return null;
+
+    const workdir = join(this.config.workdirRoot, id);
+    await mkdir(workdir, { recursive: true });
+    const active = this.getActiveProviderModel();
+
+    loaded.projectDir = workdir;
+    loaded.provider = active.provider.name;
+    loaded.model = active.model;
+
+    // Minimal system prompt (no admin/private context, no roster) — compact
+    // only needs a coherent agent state; the system prompt isn't sent as part
+    // of the summarization request anyway.
+    const systemPrompt = buildSystemPrompt({
+      interface: "telegram",
+      enabledToolNames: active.registry.list().map((t) => t.name),
+    });
+
+    const agent = new Agent({
+      provider: active.provider,
+      registry: active.registry,
+      model: active.model,
+      projectDir: workdir,
+      systemPrompt,
+      contextOptimize: this.config.contextOptimize,
+      tasksEnabled: false,
+      autoContinue: this.config.autoContinue,
+      preTruncate: this.config.preTruncate,
+      maxIterations: this.config.maxIterations,
+      requestDelayMs: this.config.requestDelayMs,
+      ...(loaded.usage?.last?.contextSize
+        ? { lastPromptTokens: loaded.usage.last.contextSize }
+        : loaded.usage?.last?.promptTokens
+          ? { lastPromptTokens: loaded.usage.last.promptTokens }
+          : {}),
+      botScript: this.createBotScriptHost(),
+    });
+    agent.loadHistory(withSystemPrompt(loaded.messages, systemPrompt));
+    agent.loadSummary(loaded.summary ?? null);
+
+    const runtime: RuntimeSession = {
+      agent,
+      session: loaded,
+      knownMembers: new Map(
+        Object.entries(loaded.knownMembers ?? {}).map(([k, v]) => [
+          Number(k),
+          typeof v === "string" ? { username: v } : v,
+        ]),
+      ),
+    };
+    this.sessions.set(id, runtime);
+    return runtime;
+  }
+
+  /**
+   * Chain an arbitrary async task onto a session's serial queue so it can't
+   * race an in-flight Telegram turn (the Agent's mutable state is not safe
+   * for concurrent use). Mirrors enqueueTurn's chaining + self-cleanup, but
+   * runs `fn` instead of runTurn. Returns fn's result.
+   */
+  private enqueueTask<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.turnQueues.get(sessionId) ?? Promise.resolve();
+    const next = prev
+      .catch(() => {
+        /* swallow prior rejection so the chain stays healthy */
+      })
+      .then(fn);
+    // Keep the chain entry as an always-resolving promise so subsequent
+    // enqueueTurn/enqueueTask calls wait correctly.
+    this.turnQueues.set(sessionId, next.then(undefined, () => undefined));
+    void next.finally(() => {
+      if (this.turnQueues.get(sessionId) === next.then(undefined, () => undefined)) {
+        this.turnQueues.delete(sessionId);
+      }
+    });
+    return next;
+  }
+
+  /**
+   * Manually force a compaction pass on a session from the admin web panel.
+   * Runs the standalone compactConversation() (bypassing mode/threshold
+   * guards), then REPLACES the session's stored messages with the compacted
+   * view so the context is permanently smaller — independent of the session's
+   * configured optimize mode. The original full history is backed up to
+   * `<id>.full.json` first. Serialized via enqueueTask so it can't race an
+   * in-flight Telegram turn.
+   *
+   * Returns { ok, stats? } — ok:false with reason when there's nothing to
+   * compact (too short / nothing new).
+   */
+  async compactSession(
+    id: string,
+  ): Promise<{
+    ok: boolean;
+    reason?: string;
+    message?: string;
+    stats?: { turnsSummarized: number; summaryChars: number; before: number; after: number };
+  }> {
+    const MIN_COMPACT_MESSAGES = 6;
+    const COMPACT_TIMEOUT_MS = 60_000;
+
+    const rt = await this.getRuntimeById(id);
+    if (!rt) {
+      return { ok: false, reason: "not-found", message: "Session not found." };
+    }
+    if (rt.session.messages.length < MIN_COMPACT_MESSAGES) {
+      return {
+        ok: false,
+        reason: "too-short",
+        message: `Need at least ${MIN_COMPACT_MESSAGES} messages to compact (this session has ${rt.session.messages.length}).`,
+      };
+    }
+
+    try {
+      return await this.enqueueTask(id, async () => {
+        const history = rt.agent.history();
+        const beforeCount = history.length;
+
+        const result = await compactConversation({
+          provider: rt.agent.getProvider(),
+          model: rt.agent.getModel(),
+          messages: history,
+          summary: rt.agent.summaryState(),
+          keepRecent: this.config.contextOptimize.compactKeepRecent ?? 2,
+          requestDelayMs: this.config.requestDelayMs ?? 0,
+          events: { signal: AbortSignal.timeout(COMPACT_TIMEOUT_MS) },
+        });
+
+        if (!result.compacted || !result.summary) {
+          return {
+            ok: false,
+            reason: "nothing-to-compact",
+            message:
+              "Nothing new to summarize — the session is already fully compacted or shorter than the keep-recent window.",
+          };
+        }
+
+        const summary = result.summary;
+        const upTo = Math.min(summary.upToIndex, history.length - 1);
+        const tail = history.slice(upTo + 1);
+        const summaryMsg: Message = {
+          role: "user",
+          content: `[Compacted summary — earlier history was folded into this narrative]\n${summary.text}`,
+        };
+        const hasSystem = history[0]?.role === "system";
+        const newMessages: Message[] = hasSystem
+          ? [history[0]!, summaryMsg, ...tail]
+          : [summaryMsg, ...tail];
+
+        // 1. Back up the full pre-compaction state (safety net).
+        try {
+          await saveFullBackup(rt.session);
+        } catch {
+          /* non-fatal */
+        }
+
+        // 2. Replace messages + drop the now-redundant rolling summary.
+        rt.session.messages = newMessages;
+        rt.session.summary = undefined;
+        rt.session.updatedAt = new Date().toISOString();
+        rt.agent.loadHistory(newMessages);
+        rt.agent.loadSummary(null);
+        await saveSession(rt.session);
+
+        return {
+          ok: true,
+          stats: {
+            turnsSummarized: result.stats?.turnsSummarized ?? 0,
+            summaryChars: result.stats?.summaryChars ?? summary.text.length,
+            before: beforeCount,
+            after: newMessages.length,
+          },
+        };
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Compact failed";
+      return { ok: false, reason: "error", message };
+    }
+  }
+
 
   /** Build the per-session system prompt, including the known-member roster for group/supergroup chats. */
   private buildSystemPromptFor(

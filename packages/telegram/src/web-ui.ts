@@ -1551,6 +1551,7 @@ function renderSessions() {
         '<button class="icon-btn" title="Detail pesan" onclick="showDetail(\\''+s.id+'\\')">📄</button>' +
         '<button class="icon-btn" title="Workdir" onclick="showWorkdir(\\''+s.id+'\\')">📁</button>' +
         '<button class="icon-btn" title="Kirim pesan ke chat ini" onclick="fillSendAndOpen(\\''+s.id+'\\')">✉</button>' +
+        '<button class="icon-btn" title="Ringkas konteks via AI" onclick="compactSession(\\''+s.id+'\\')">📦</button>' +
         '<button class="icon-btn danger" title="Hapus session" onclick="deleteSession(\\''+s.id+'\\')">🗑</button>' +
       '</div></td>' +
     '</tr>';
@@ -1750,6 +1751,25 @@ async function deleteSession(id) {
       loadSessions();
     } else {
       toast("Gagal: " + (d.error || "unknown"), false);
+    }
+  } catch (e) {
+    toast("Gagal: " + e.message, false);
+  }
+}
+
+async function compactSession(id) {
+  if (!confirm("Ringkas konteks session via AI?\\n\\n" + id + "\\n\\nPesan lama akan diganti dengan ringkasan AI. Backup disimpan otomatis.")) return;
+  try {
+    toast("Memproses compacting...", true);
+    const d = await api("/api/compact/" + encodeURIComponent(id), { method: "POST" });
+    if (d.ok) {
+      const stat = d.stats ? " (" + d.stats.before + " → " + d.stats.after + " pesan)" : "";
+      toast("Konteks diringkas" + stat, true);
+      loadSessions();
+    } else if (d.reason === "too-short" || d.reason === "nothing-to-compact") {
+      toast(d.message || "Tidak bisa diringkas.", false);
+    } else {
+      toast("Gagal: " + (d.message || d.reason || "unknown"), false);
     }
   } catch (e) {
     toast("Gagal: " + e.message, false);

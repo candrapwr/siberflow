@@ -6,7 +6,6 @@ import {
   SUMMARY_SYSTEM_PROMPT,
   ensureToolCallBalance,
   findSubTurnBoundaryFromEnd,
-  findTurnBoundaryFromEnd,
   optimizeContext,
   serializeTurns,
   snapToTurnBoundary,
@@ -16,6 +15,7 @@ import {
   type SummaryState,
 } from "./optimize.js";
 import { TaskStore, renderTaskList, type Task } from "./tasks.js";
+import { compactConversation } from "./compact.js";
 import { debug } from "../debug.js";
 import type {
   AssistantMessage,
@@ -310,6 +310,20 @@ export class Agent {
 
   history(): readonly Message[] {
     return this.messages;
+  }
+
+  /**
+   * Read-only access to the underlying provider and model name. Exposed so
+   * external callers (e.g. a manual "compact now" admin action) can run their
+   * own LLM calls against the same provider without having to reconstruct one.
+   * These are the same instances the agent uses internally.
+   */
+  getProvider(): Provider {
+    return this.provider;
+  }
+
+  getModel(): string {
+    return this.model;
   }
 
   /** Replace the message history (e.g. when restoring a saved session). */
@@ -820,91 +834,33 @@ export class Agent {
       return;
     }
 
-    // Current user message was pushed by send() just before us, so it's the
-    // last message right now. Everything strictly before it is a completed
-    // turn eligible to be summarized.
+    // The current user message was pushed by send() just before us, so it's
+    // the last message right now. We pass messages WITHOUT it (slice(0, -1))
+    // so compactConversation treats the previous turn as the last eligible one
+    // and never folds the in-flight user turn into the summary.
     if (this.messages.length < 2) return; // need at least [system?, user] — nothing completed yet
-    const currentUserIdx = this.messages.length - 1;
-    const lastEligibleIdx = currentUserIdx - 1;
-    if (lastEligibleIdx < 0) return;
 
-    const alreadySummarizedUpTo = this.summary?.upToIndex ?? -1;
-    // Keep the compactKeepRecent most recent COMPLETED TURNS verbatim —
-    // counted per-turn (a turn = user msg + its assistant/tool activity), NOT
-    // per-message. A heavy turn with 5 tool results counts as ONE unit, so we
-    // fold whole tool-call chains into the summary rather than leaving them in
-    // the verbatim tail.
-    const candidate = findTurnBoundaryFromEnd(
-      this.messages,
-      lastEligibleIdx,
-      this.compactKeepRecent,
-      alreadySummarizedUpTo,
-    );
-    // Snap down to a SAFE turn boundary so the verbatim tail we keep doesn't
-    // start mid-tool-call-chain (an orphan `tool` result with no preceding
-    // `assistant.tool_calls` is rejected by strict providers with HTTP 400).
-    const summarizeUpTo = snapToTurnBoundary(
-      this.messages,
-      candidate,
-      alreadySummarizedUpTo,
-    );
-    // Nothing new to fold in (or no safe boundary was found).
-    if (summarizeUpTo <= alreadySummarizedUpTo) return;
-
-    const turnsToSummarize = this.messages.slice(
-      alreadySummarizedUpTo + 1,
-      summarizeUpTo + 1,
-    );
-    if (turnsToSummarize.length === 0) return;
-
-    // Build the summarization prompt. The prior summary (if any) is fed back
-    // in so the model rolls it forward instead of restarting from scratch.
-    const summaryPrompt: Message[] = [
-      { role: "system", content: SUMMARY_SYSTEM_PROMPT },
-      ...(this.summary
-        ? [
-            {
-              role: "user" as const,
-              content: `Previous summary (update and extend it; preserve its key facts):\n${this.summary.text}`,
-            },
-          ]
-        : []),
-      {
-        role: "user",
-        content:
-          `Conversation turns to summarize (roles: user, assistant, tool):\n\n` +
-          serializeTurns(turnsToSummarize),
+    const result = await compactConversation({
+      provider: this.provider,
+      model: this.model,
+      messages: this.messages.slice(0, -1),
+      summary: this.summary,
+      keepRecent: this.compactKeepRecent,
+      requestDelayMs: this.requestDelayMs,
+      events: {
+        signal: events.signal,
+        onStart: () => events.onContextCompacting?.(),
+        onComplete: (stats) =>
+          events.onContextCompacted?.({
+            turnsSummarized: stats.turnsSummarized,
+            summaryChars: stats.summaryChars,
+          }),
       },
-    ];
-
-    debug(
-      `📦 compact: summarizing ${turnsToSummarize.length} message(s) [${alreadySummarizedUpTo + 1}..${summarizeUpTo}]`,
-    );
-    events.onContextCompacting?.();
-
-    // Internal call: no tools, no UI streaming callbacks — only abort signal.
-    // runStream already applies requestDelayMs throttling.
-    const { assistant } = await this.runStream(summaryPrompt, [], {
-      signal: events.signal,
     });
-    const text = (assistant.content ?? "").trim();
-    if (text.length === 0) {
-      debug("📦 compact: model returned empty summary, keeping prior state");
-      return;
+
+    if (result.compacted && result.summary) {
+      this.summary = result.summary;
     }
-
-    this.summary = {
-      text,
-      upToIndex: summarizeUpTo,
-      updatedAt: new Date().toISOString(),
-    };
-    events.onContextCompacted?.({
-      turnsSummarized: turnsToSummarize.length,
-      summaryChars: text.length,
-    });
-    debug(
-      `📦 compact: summary updated (${text.length} chars), covers up to index ${summarizeUpTo}`,
-    );
   }
 
   /**

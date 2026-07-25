@@ -68,6 +68,15 @@ export interface WebServiceOptions {
   /** Drop a session from the in-memory cache (called on delete so a user's
    *  next message starts fresh instead of reusing the cached Agent/history). */
   dropSession: (id: string) => void;
+  /** Manually compact a session's context via AI (admin action). Replaces the
+   *  session's stored messages with the compacted view; backs up the full
+   *  history first. Serialized against in-flight turns by the runner. */
+  compactSession: (id: string) => Promise<{
+    ok: boolean;
+    reason?: string;
+    message?: string;
+    stats?: { turnsSummarized: number; summaryChars: number; before: number; after: number };
+  }>;
   /** Returns the image-tool access log (newest first). */
   getImageAccessLog: () => Array<{ userId: number | string; tool: string; mode?: string; model: string; status: string; error?: string; timestamp: string }>;
   /** Returns the agent-tool access log (newest first), without requestBody. */
@@ -205,9 +214,9 @@ function trimMessageRows(rows: MessageRow[]): Array<MessageRow & { truncated?: b
  * listen() is non-blocking.
  */
 export async function startWebService(opts: WebServiceOptions): Promise<Server> {
-  const { api, workdirRoot, port, getAiSettings, applyAiSettings, dropSession, getImageAccessLog, getAgentAccessLog, getAgentAccessLogDetail, clearAgentAccessLog } = opts;
+  const { api, workdirRoot, port, getAiSettings, applyAiSettings, dropSession, compactSession, getImageAccessLog, getAgentAccessLog, getAgentAccessLogDetail, clearAgentAccessLog } = opts;
   const server = createServer((req, res) => {
-    void handleRequest(req, res, { api, workdirRoot, getAiSettings, applyAiSettings, dropSession, getImageAccessLog, getAgentAccessLog, getAgentAccessLogDetail, clearAgentAccessLog }).catch((err) => {
+    void handleRequest(req, res, { api, workdirRoot, getAiSettings, applyAiSettings, dropSession, compactSession, getImageAccessLog, getAgentAccessLog, getAgentAccessLogDetail, clearAgentAccessLog }).catch((err) => {
       console.error(`Admin web error: ${(err as Error).message}`);
       sendJson(res, 500, { error: "Internal server error" });
     });
@@ -228,6 +237,12 @@ async function handleRequest(
     getAiSettings: () => TelegramAiSettings;
     applyAiSettings: (s: TelegramAiSettings) => Promise<void>;
     dropSession: (id: string) => void;
+    compactSession: (id: string) => Promise<{
+      ok: boolean;
+      reason?: string;
+      message?: string;
+      stats?: { turnsSummarized: number; summaryChars: number; before: number; after: number };
+    }>;
     getImageAccessLog: () => Array<{ userId: number | string; tool: string; mode?: string; model: string; status: string; error?: string; timestamp: string }>;
     getAgentAccessLog: () => Array<{ id: string; userId: number | string; tool: string; task: string; model: string; status: string; error?: string; timestamp: string }>;
     getAgentAccessLogDetail: (id: string) => { id: string; userId: number | string; tool: string; task: string; model: string; status: string; error?: string; requestBody?: string; timestamp: string } | undefined;
@@ -334,6 +349,10 @@ async function handleRequest(
   const deleteMatch = path.match(/^\/api\/delete\/(.+)$/);
   if (deleteMatch && req.method === "POST") {
     return handleDeleteSession(res, ctx.workdirRoot, decodeURIComponent(deleteMatch[1]!), ctx.dropSession);
+  }
+  const compactMatch = path.match(/^\/api\/compact\/(.+)$/);
+  if (compactMatch && req.method === "POST") {
+    return handleCompactSession(res, decodeURIComponent(compactMatch[1]!), ctx.compactSession);
   }
   if (path === "/api/send" && req.method === "POST") {
     return handleSendMessage(req, res, ctx.api);
@@ -1234,6 +1253,30 @@ async function handleDeleteSession(
     console.error(`Admin web: failed to remove workdir ${workdirPath}: ${(err as Error).message}`);
   }
   sendJson(res, 200, { ok: true, removed, workdirRemoved });
+}
+
+/** POST /api/compact/:id — manually compact a session's context via AI. */
+async function handleCompactSession(
+  res: ServerResponse,
+  id: string,
+  compactSession: (id: string) => Promise<{
+    ok: boolean;
+    reason?: string;
+    message?: string;
+    stats?: { turnsSummarized: number; summaryChars: number; before: number; after: number };
+  }>,
+): Promise<void> {
+  if (!id.startsWith("telegram-")) {
+    sendJson(res, 400, { error: "Only telegram sessions are accessible." });
+    return;
+  }
+  try {
+    const result = await compactSession(id);
+    sendJson(res, 200, result);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Compact failed";
+    sendJson(res, 500, { ok: false, reason: "error", message });
+  }
 }
 
 /** POST /api/send — send a text message to a chat by id via the bot. */
