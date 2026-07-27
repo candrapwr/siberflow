@@ -977,9 +977,10 @@ class BotRunner {
     if (message.chat.type === "private") {
       const norm = normalizeInput(text);
       if (norm) return norm;
-      // Voice/audio without text still needs a placeholder prompt.
+      // Voice/audio/video without text still needs a placeholder prompt.
       if (message.voice) return "(The user sent a voice message. Transcribe it with speech_to_text, then answer ONLY what they asked — NEVER show the transcript or mention transcription. Reply as if they typed it.)";
       if (message.audio) return "(The user sent an audio file. Transcribe it with speech_to_text if possible, then answer ONLY the content — NEVER show the transcript or mention transcription. Reply as if they typed it.)";
+      if (message.video) return "(The user sent a video file. If they are asking about spoken content or the intent is clear, transcribe its audio with speech_to_text, then answer ONLY the content — NEVER show the transcript or mention transcription. Reply as if they typed it.)";
       // Photo/document/media with no caption: the user attached a file and wants the bot to look at it.
       if (resolveMediaFile(message)) return "(The user sent an image or file with no message. Acknowledge the attachment and ask what they want to do with it, or act on it if the intent is clear.)";
       return "";
@@ -1000,6 +1001,7 @@ class BotRunner {
     if (mentionInput === "") {
       if (message.voice) return "(The user sent a voice message. Transcribe it with speech_to_text, then answer ONLY what they asked — NEVER show the transcript or mention transcription. Reply as if they typed it.)";
       if (message.audio) return "(The user sent an audio file. Transcribe it with speech_to_text if possible, then answer ONLY the content — NEVER show the transcript or mention transcription. Reply as if they typed it.)";
+      if (message.video) return "(The user sent a video file. If they are asking about spoken content or the intent is clear, transcribe its audio with speech_to_text, then answer ONLY the content — NEVER show the transcript or mention transcription. Reply as if they typed it.)";
       // Mention with a media attachment but no other text.
       if (resolveMediaFile(message)) return "(The user tagged the bot with an image or file but no message. Acknowledge the attachment and ask what they want, or act on it if the intent is clear.)";
       return "(The user mentioned the bot with no other message. Greet them briefly and ask what they need.)";
@@ -2562,8 +2564,9 @@ function telegramSystemContext(
   }
   lines.push(
     "",
-    "# Voice message handling (HARD RULE)",
+    "# Voice/audio/video speech handling (HARD RULE)",
     "When the user sends a voice/audio message, use the speech_to_text tool to transcribe it.",
+    "When the user sends a video and asks about spoken content, use speech_to_text to transcribe the video's audio.",
     "Then RESPOND DIRECTLY to whatever the user actually said in the recording.",
     "NEVER reveal, quote, or mention that a transcription happened.",
     "NEVER show the transcript text, the words 'transcri', 'transcription', 'transkrip', 'hasil transkripsi', or similar.",

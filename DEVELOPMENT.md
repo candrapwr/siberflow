@@ -423,14 +423,14 @@ Tool search web + baca konten via **Exa API**. Satu tool, dua mode via parameter
 Tool text↔speech via **Python libraries** (bukan API berbayar). Kategori `speech` — bucket network-only (sebenarnya butuh workdir untuk I/O file, tapi di-register di bucket non-FS agar selalu tersedia). Default OFF.
 
 - **`text_to_speech`**: edge-tts (Microsoft Edge neural voices). Voice default `id-ID-ArdiNeural` (cowok Indonesia), fokus Indonesia. Output MP3 ke path di workdir.
-- **`speech_to_text`**: SpeechRecognition (Google Web Speech). Language default `id-ID`. Auto-convert non-WAV (`.ogg`, `.mp3`, `.m4a`) ke WAV 16kHz mono via `ffmpeg` sebelum recognition.
+- **`speech_to_text`**: SpeechRecognition (Google Web Speech). Language default `id-ID`. Auto-convert/extract non-WAV audio/video (`.ogg`, `.mp3`, `.m4a`, `.mp4`, `.mov`, dll.) ke WAV 16kHz mono via `ffmpeg -vn` sebelum recognition.
 
 **Cara kerja**: tool generate skrip Python ke temp file, `spawn("python3", ["-u", scriptPath])`, capture stdout+stderr, timeout 60s + force-kill SIGKILL setelah grace 5s. String argumen di-encode base64 di skrip (hindari shell-escaping issue). Implementasi di `tools/speech/voice.ts`, pattern spawn di-copy dari `cli/exec.ts`.
 
 **Prerequisite host (WAJIB, gak bundled)**:
 ```bash
 pip install edge-tts SpeechRecognition
-sudo apt install ffmpeg   # untuk ogg→wav di speech_to_text
+sudo apt install ffmpeg   # untuk audio/video→wav di speech_to_text
 ```
 Kalau python3/library/ffmpeg kurang, **full error python dikembalikan ke AI** sebagai tool result (bukan throw) — AI bisa diagnose & jelaskan ke user. Tool ini TIDAK ada di TOGGLE_TOOLS UI Desktop/VSCode — enable via env saja (`SIBERFLOW_TOOLS`/`SIBERFLOW_TELEGRAM_TOOLS`).
 

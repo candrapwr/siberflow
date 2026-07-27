@@ -531,7 +531,7 @@ SIBERFLOW_TELEGRAM_TOOLS=run_browser,web_search
 These tools convert text ↔ speech via Python libraries (no API key required):
 
 - **`text_to_speech`** - synthesizes an MP3 from text using `edge-tts` (Microsoft Edge neural voices). Voice defaults to `id-ID-ArdiNeural` (Indonesian male). Output is written to a path inside the project workdir.
-- **`speech_to_text`** - transcribes an audio file to text using `SpeechRecognition` (Google Web Speech). Recognition defaults to Indonesian (`id-ID`). Non-WAV files (`.ogg`, `.mp3`, `.m4a`, etc.) are automatically converted to 16 kHz mono WAV with `ffmpeg` before recognition.
+- **`speech_to_text`** - transcribes an audio or video file to text using `SpeechRecognition` (Google Web Speech). Recognition defaults to Indonesian (`id-ID`). Non-WAV files (`.ogg`, `.mp3`, `.m4a`, `.mp4`, `.mov`, etc.) are automatically converted/extracted to 16 kHz mono WAV with `ffmpeg -vn` before recognition.
 
 ### Host prerequisites (required)
 
@@ -541,7 +541,7 @@ These tools shell out to `python3`, so the host must have Python and the librari
 # Python 3 + the libraries
 pip install edge-tts SpeechRecognition
 
-# ffmpeg (required by speech_to_text for ogg/mp3/m4a → wav conversion)
+# ffmpeg (required by speech_to_text for audio/video → wav conversion)
 sudo apt install ffmpeg          # Debian/Ubuntu
 # brew install ffmpeg            # macOS
 # choco install ffmpeg           # Windows

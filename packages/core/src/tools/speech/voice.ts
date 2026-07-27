@@ -13,8 +13,8 @@ import { runPython, formatPythonResult } from "../python-runner.js";
  *
  * Both tools shell out to `python3` via a generated temp script (the shared
  * `runPython` runner). They are filesystem-group tools: text_to_speech writes
- * its .mp3 into the workdir, and speech_to_text reads an audio file from the
- * workdir (so the sandbox applies). Because they invoke Python, the host must
+ * its .mp3 into the workdir, and speech_to_text reads an audio/video file from
+ * the workdir (so the sandbox applies). Because they invoke Python, the host must
  * have python3 + the libraries installed. If anything is missing, the FULL
  * python stderr is returned to the model as the tool result so it can diagnose
  * and explain the failure.
@@ -22,7 +22,7 @@ import { runPython, formatPythonResult } from "../python-runner.js";
  * Requirements on the host:
  *   - python3 on PATH
  *   - pip install edge-tts SpeechRecognition pydub
- *   - ffmpeg on PATH (for ogg→wav conversion in speech_to_text)
+ *   - ffmpeg on PATH (for audio/video→wav conversion in speech_to_text)
  */
 
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -106,8 +106,8 @@ asyncio.run(main())
 export const speechToTextTool: Tool = {
   name: "speech_to_text",
   description:
-    "Transcribe an audio file to text (Google Web Speech via SpeechRecognition). Non-wav formats (.ogg, .m4a, " +
-    "etc.) are auto-converted to 16kHz mono WAV via ffmpeg first. Defaults to Indonesian (id-ID); `language` " +
+    "Transcribe an audio or video file to text (Google Web Speech via SpeechRecognition). Non-wav formats " +
+    "(.ogg, .m4a, .mp3, .mp4, .mov, etc.) are converted/extracted to 16kHz mono WAV via ffmpeg first. Defaults to Indonesian (id-ID); `language` " +
     "overrides only if the user explicitly asks. Requires python3 + SpeechRecognition + ffmpeg; if missing, " +
     "the full error is returned.",
   parameters: {
@@ -115,7 +115,8 @@ export const speechToTextTool: Tool = {
     properties: {
       path: {
         type: "string",
-        description: "Path to the audio file inside the project workdir (.wav, .ogg, .oga, .mp3, .m4a). Required.",
+        description:
+          "Path to the audio or video file inside the project workdir (.wav, .ogg, .oga, .mp3, .m4a, .mp4, .mov, .webm, etc.). Required.",
       },
       language: {
         type: "string",
@@ -143,7 +144,7 @@ export const speechToTextTool: Tool = {
       ? `import base64, subprocess
 wav_tmp = base64.b64decode("${wavB64}").decode("utf-8")
 inp = base64.b64decode("${inB64}").decode("utf-8")
-r = subprocess.run(["ffmpeg", "-y", "-i", inp, "-ar", "16000", "-ac", "1", wav_tmp], capture_output=True, text=True)
+r = subprocess.run(["ffmpeg", "-y", "-i", inp, "-vn", "-ar", "16000", "-ac", "1", wav_tmp], capture_output=True, text=True)
 if r.returncode != 0:
     print("ffmpeg conversion failed:", r.stderr)
     raise SystemExit(2)

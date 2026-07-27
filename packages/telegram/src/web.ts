@@ -724,7 +724,7 @@ const TOOL_CATALOG: { category: string; tools: { name: string; description: stri
   {
     category: "Speech",
     tools: [
-      { name: "speech_to_text", description: "Transcribe audio to text" },
+      { name: "speech_to_text", description: "Transcribe audio/video to text" },
       { name: "text_to_speech", description: "Synthesize speech from text" },
     ],
   },
