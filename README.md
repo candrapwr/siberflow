@@ -1,10 +1,37 @@
-# Siberflow
+<div align="center">
 
-Siberflow is an AI coding and productivity platform with multi-provider support, streaming tool calls, sandboxed file access, database tools, persistent multi-session history, and task checklists. Current interfaces: **CLI**, **VS Code extension** sidebar, **Desktop app** built with Electron and React, and a **Telegram bot**.
+# 🌊 Siberflow
 
-[Baca versi Bahasa Indonesia](README.id.md)
+**Satu agen AI untuk ngoding & produktivitas — di CLI, VS Code, Desktop, dan Telegram.**
 
-Siberflow is developed by **DataSiberLab**. For questions, collaboration, or technical support, contact **candrapwr@datasiber.com**.
+Multi-provider, tool calling streaming, akses file & database ter-sandbox, riwayat multi-sesi yang persisten, dan daftar tugas yang bisa dilanjutkan kapan saja.
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D20-green.svg)](https://nodejs.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.6-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Electron](https://img.shields.io/badge/Electron-desktop-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
+[![Interfaces](https://img.shields.io/badge/interfaces-CLI·VSCode·Desktop·Telegram-orange.svg)](#-cli)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#-berkontribusi)
+[![Status](https://img.shields.io/badge/status-aktif_maintained-success.svg)](#-roadmap)
+[![Stars](https://img.shields.io/github/stars/candrapwr/siberflow?style=social&label=Star)](https://github.com/candrapwr/siberflow/stargazers)
+
+</div>
+
+---
+
+> 🇮🇩 **[Baca versi Bahasa Indonesia](./README.id.md)** · 🌐 Bagian dari **Ekosistem Siber** — dibangun & dirawat oleh **DataSiberLab**.
+
+## 💡 Apa itu Siberflow?
+
+Siberflow adalah platform AI untuk ngoding dan produktivitas dengan dukungan **multi-provider**, **tool calling** streaming, akses file & shell yang di-**sandbox**, query database, dan riwayat multi-sesi yang tersimpan permanen sehingga bisa kamu lanjutkan kapan saja.
+
+Satu agen, empat antarmuka:
+- 💻 **CLI** — REPL interaktif di terminal
+- 🧩 **Ekstensi VS Code** — chat AI di sidebar editor
+- 🖥️ **Aplikasi Desktop** (Electron + React) — UI standalone multi-sesi
+- 🤖 **Bot Telegram** — satu sesi Siberflow per chat/thread
+
+Semua sesi disimpan di `~/.siberflow/sessions/` dan **kompatibel antar antarmuka** — mulai di CLI, lanjut di Desktop.
 
 ## Screenshots
 
@@ -682,3 +709,51 @@ In Telegram, the enabled-tool set can be overridden at runtime from the admin we
 ## Developer Docs
 
 For technical architecture, VS Code protocol details, provider/tool development, packaging notes, and renderer internals, see [DEVELOPMENT.md](DEVELOPMENT.md).
+
+---
+
+## 🗺️ Roadmap
+
+- [x] Agent core + multi-provider + streaming tool calls
+- [x] Empat antarmuka: CLI, VS Code, Desktop, Telegram
+- [x] Document tools (Excel/Word/PDF + OCR lokal)
+- [x] Context optimization (mode `compact` berbasis LLM)
+- [ ] Web interface berbagi sesi dengan antarmuka lain
+- [ ] MCP server bawaan untuk integrasi agen eksternal
+- [ ] Plugin sistem untuk tool kustom
+
+---
+
+## 🤝 Berkontribusi
+
+Kontribusi diterima! Siberflow adalah bagian dari **ekosistem Siber**.
+
+1. Fork & clone repo ini
+2. `npm install && npm run build:core`
+3. Buat perubahanmu (jaga agar `packages/core` tetap menjadi sumber kebenaran tunggal untuk logika agen)
+4. Buka PR yang menjelaskan **apa** dan **mengapa**
+
+Untuk perubahan besar, silakan buka [issue](https://github.com/candrapwr/siberflow/issues) dulu untuk berdiskusi.
+
+---
+
+## 📄 Lisensi
+
+Dirilis di bawah **Lisensi MIT**. Lihat [LICENSE](./LICENSE).
+
+Bebas dipakai, dimodifikasi, dan didistribusikan — termasuk untuk keperluan komersial. Atribusi ke **dataSiberLab** dihargai tapi tidak diwajibkan.
+
+---
+
+## 📬 Kontak & Komunitas
+
+<div align="center">
+
+**Dibuat dengan ❤️ oleh [dataSiberLab](https://datasiber.com)** sebagai bagian dari ekosistem Siber.
+
+📧 **Kontak:** [candrapwr@datasiber.com](mailto:candrapwr@datasiber.com)
+🌐 **Website:** [datasiber.com](https://datasiber.com)
+
+Siberflow membantu? ⭐ Star repo-nya dan bagikan ke sesama builder!
+
+</div>
