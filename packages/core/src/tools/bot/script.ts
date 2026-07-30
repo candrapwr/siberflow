@@ -12,6 +12,8 @@ export const botScriptTool: Tool = {
     "Run JavaScript against the active bot host (e.g. Telegram). The host injects a global `bot` " +
     "object for sending messages/media, running polls, sharing locations, and inspecting chat info.\n\n" +
     "Write TOP-LEVEL statements that call `bot.*` directly (do not wrap in a function and forget to call it).\n\n" +
+    "IMPORTANT: invoke this as a real function/tool call with JSON arguments. Never write pseudo-call text " +
+    "like `[bot_script(\"...\")]`, `bot_script(\"...\")`, or Markdown code as the user-visible answer.\n\n" +
     "bot.chat (read-only metadata of the active chat): id, type, title, username, messageThreadId, " +
     "currentMessageId, currentUserId, currentUserUsername.\n\n" +
     "Send actions (target the active chat by default; every send accepts an optional trailing `chatId` " +
@@ -26,8 +28,10 @@ export const botScriptTool: Tool = {
       script: {
         type: "string",
         description:
-          "JavaScript to run. The `bot` global is available: bot.chat, bot.sendMessage(text), " +
-          "bot.sendPhoto(path, caption?), bot.sendDocument(path, caption?), etc.",
+          "JavaScript to run as the `script` JSON property of a real bot_script tool call. " +
+          "The `bot` global is available: bot.chat, bot.sendMessage(text), " +
+          "bot.sendPhoto(path, caption?), bot.sendDocument(path, caption?), etc. " +
+          "Do not output `[bot_script(...)]` or `bot_script(...)` as text.",
       },
     },
     required: ["script"],

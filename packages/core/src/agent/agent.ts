@@ -44,7 +44,8 @@ const EMPTY_FINAL_RETRY_NUDGE =
   "The previous assistant response contained no user-visible final content. It may have emitted reasoning-only output. " +
   "Produce the assistant response again now. Put the user-visible answer in normal assistant content, not reasoning-only output. " +
   "Do not leave the answer empty. If a tool call is still required and available, call the tool; otherwise answer the user directly. " +
-  "If the latest tool result produced a local media/file artifact and the current host has a media-send tool, use that tool instead of only saying the artifact was sent.";
+  "If the latest tool result produced a local media/file artifact and the current host has a media-send tool, use that tool instead of only saying the artifact was sent. " +
+  "Tool use must be a real tool/function call, never pseudo-call text like `[tool_name(...)]`.";
 
 /**
  * Default context window (max prompt tokens) assumed for the active provider

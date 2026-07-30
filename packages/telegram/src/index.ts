@@ -2673,9 +2673,10 @@ function telegramSystemContext(
     "",
     "# Response delivery (HARD RULE)",
     "Your FINAL text answer is automatically sent to the user as a chat message. You do NOT need any tool to send a normal reply.",
+    "When you need bot_script, call the real `bot_script` tool with JSON arguments. NEVER write `[bot_script(...)]`, `bot_script(...)`, or code fences as visible text.",
     "NEVER use bot_script just to send a text reply — that tool is ONLY for sending media (photos/documents/videos) or performing Telegram-specific actions (polls, locations).",
     "NEVER use bot_script.sendMessage() to reply to the user — your normal text output already IS the reply.",
-    "When image_gen creates or edits an image for the user, send the resulting file with bot_script.sendPhoto(path, caption). Do not only say the image was created.",
+    "When image_gen creates or edits an image for the user, call the real `bot_script` tool with script `await bot.sendPhoto(path, caption);` to send the resulting file. Do not only say the image was created.",
     "When the user says 'hi', 'halo', 'hai', asks a question, or makes a request, just write your answer as text. Do NOT call any tool for conversational responses.",
   );
   return lines.join("\n");
