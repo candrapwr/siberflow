@@ -35,11 +35,19 @@ interface StreamChunk {
   choices?: Array<{
     delta: {
       content?: string | null;
+      reasoning_content?: string | null;
       tool_calls?: DeltaToolCall[];
     };
     finish_reason: string | null;
   }>;
-  usage?: { prompt_tokens: number; completion_tokens: number };
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    completion_tokens_details?: {
+      reasoning_tokens?: number;
+      text_tokens?: number;
+    };
+  };
 }
 
 export interface OpenAICompatibleOptions {
@@ -135,15 +143,25 @@ export abstract class OpenAICompatibleProvider implements Provider {
     let rawFinish: string | null = null;
     let usage: UsageStats | undefined;
     let chunkCount = 0;
+    let reasoningContentLength = 0;
 
     for await (const chunk of parseSSE(res.body)) {
       const data = chunk as StreamChunk;
       chunkCount++;
 
       if (data.usage) {
+        const details = data.usage.completion_tokens_details;
         usage = {
           promptTokens: data.usage.prompt_tokens,
           completionTokens: data.usage.completion_tokens,
+          ...(typeof details?.reasoning_tokens === "number"
+            ? {
+                reasoningTokens: details.reasoning_tokens,
+              }
+            : {}),
+          ...(typeof details?.text_tokens === "number"
+            ? { textTokens: details.text_tokens }
+            : {}),
         };
       }
 
@@ -155,6 +173,13 @@ export abstract class OpenAICompatibleProvider implements Provider {
       if (typeof delta.content === "string" && delta.content.length > 0) {
         content += delta.content;
         yield { type: "content", delta: delta.content };
+      }
+
+      if (
+        typeof delta.reasoning_content === "string" &&
+        delta.reasoning_content.length > 0
+      ) {
+        reasoningContentLength += delta.reasoning_content.length;
       }
 
       if (delta.tool_calls) {
@@ -199,7 +224,7 @@ export abstract class OpenAICompatibleProvider implements Provider {
     debug(
       `✓ ${this.name} stream done: chunks=${chunkCount}`,
       `finish_reason(raw)=${rawFinish ?? "null"} → ${finishReason}`,
-      `contentLen=${content.length} toolCalls=${toolCalls.length}`,
+      `contentLen=${content.length} reasoningLen=${reasoningContentLength} toolCalls=${toolCalls.length}`,
       usage ? `usage=${usage.promptTokens}/${usage.completionTokens}` : "usage=none",
     );
     if (rawFinish === null) {

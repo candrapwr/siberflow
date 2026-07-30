@@ -40,6 +40,11 @@ const MAX_AUTO_CONTINUES = 4;
 const DEFAULT_MAX_CONSECUTIVE_RUN_BROWSER = 10;
 const CONTINUE_NUDGE =
   "Your previous message was cut off by the output length limit. Continue from exactly where you stopped — do not repeat anything you already wrote, and do not add a preamble.";
+const EMPTY_FINAL_RETRY_NUDGE =
+  "The previous assistant response contained no user-visible final content. It may have emitted reasoning-only output. " +
+  "Produce the assistant response again now. Put the user-visible answer in normal assistant content, not reasoning-only output. " +
+  "Do not leave the answer empty. If a tool call is still required and available, call the tool; otherwise answer the user directly. " +
+  "If the latest tool result produced a local media/file artifact and the current host has a media-send tool, use that tool instead of only saying the artifact was sent.";
 
 /**
  * Default context window (max prompt tokens) assumed for the active provider
@@ -485,6 +490,34 @@ export class Agent {
           usage = cont.usage;
         }
 
+        if (isEmptyFinalAssistant(assistant)) {
+          debug(
+            "⚠ assistant final content was empty/whitespace — retrying once",
+            usage
+              ? `usage=${usage.promptTokens}/${usage.completionTokens}` +
+                  (usage.reasoningTokens !== undefined
+                    ? ` reasoning=${usage.reasoningTokens}`
+                    : "")
+              : "usage=none",
+          );
+          const retry = await this.retryEmptyFinalAnswer(
+            requestMessages,
+            toolSchemas,
+            events,
+          );
+          assistant = retry.assistant;
+          finishReason = retry.finishReason;
+          usage = retry.usage ?? usage;
+          if (isEmptyFinalAssistant(assistant)) {
+            assistant = {
+              role: "assistant",
+              content:
+                "Maaf, model selesai tanpa mengirim jawaban yang bisa ditampilkan. Coba ulangi permintaannya.",
+            };
+            finishReason = "stop";
+          }
+        }
+
         throwIfAborted(events.signal);
         this.messages.push(assistant);
         // Track the latest prompt-token count for the compact-mode threshold
@@ -778,6 +811,19 @@ export class Agent {
     return result;
   }
 
+  private async retryEmptyFinalAnswer(
+    requestMessages: Message[],
+    toolSchemas: ReturnType<typeof toSchema>[],
+    events: AgentEvents,
+  ): Promise<{ assistant: AssistantMessage; finishReason: FinishReason; usage?: UsageStats }> {
+    throwIfAborted(events.signal);
+    const retryMessages: Message[] = [
+      ...requestMessages,
+      { role: "user", content: EMPTY_FINAL_RETRY_NUDGE },
+    ];
+    return this.runStream(retryMessages, toolSchemas, events);
+  }
+
   /**
    * Append the current task checklist to the leading system message so the
    * model always sees authoritative task state. No-op when tasks are
@@ -1002,6 +1048,13 @@ function truncateToolCallArgs(messages: Message[], toolCallId: string): void {
     }
     return;
   }
+}
+
+function isEmptyFinalAssistant(assistant: AssistantMessage): boolean {
+  return (
+    !assistant.toolCalls?.length &&
+    (assistant.content === null || assistant.content.trim().length === 0)
+  );
 }
 
 function throwIfAborted(signal?: AbortSignal): void {

@@ -46,6 +46,8 @@ export type FinishReason = "stop" | "tool_calls" | "length" | "other";
 export interface UsageStats {
   promptTokens: number;
   completionTokens: number;
+  reasoningTokens?: number;
+  textTokens?: number;
 }
 
 export type StreamEvent =

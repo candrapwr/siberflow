@@ -1507,6 +1507,8 @@ class BotRunner {
     let activeToolStatus = "";
     let toolHeartbeat: ReturnType<typeof setInterval> | null = null;
     let typingHeartbeat: ReturnType<typeof setInterval> | null = null;
+    let lastToolName = "";
+    let lastToolResult = "";
     // Per-turn tool-call step counter.
     let toolStep = 0;
     /** The tool currently running (set in onToolCallStart). Used by the
@@ -1672,7 +1674,9 @@ class BotRunner {
               }
               showToolDraft(status);
             },
-            onToolResult: () => {
+            onToolResult: (_index, name, result) => {
+              lastToolName = name;
+              lastToolResult = result;
               clearToolHeartbeat();
             },
           }),
@@ -1680,13 +1684,32 @@ class BotRunner {
 
       clearToolHeartbeat();
       clearTypingHeartbeat();
-      content = final || content || "(empty response)";
-      if (canDraft && !draftSent) {
-        await this.api.sendMessageDraft(message.chat.id, draftId, content);
-      }
       const replaceMessageId = groupStatus.promise
         ? await groupStatus.promise
         : undefined;
+      const finalText = final.trim();
+      const streamedText = content.trim();
+      content = finalText || streamedText;
+      if (!content) {
+        const recoveryHistoryNote = await this.recoverEmptyFinal(
+          runtime,
+          message,
+          lastToolName,
+          lastToolResult,
+          replaceMessageId,
+        );
+        if (recoveryHistoryNote) {
+          await this.persist(runtime, recoveryHistoryNote);
+          return;
+        }
+        content = emptyFinalFallback(lastToolName, lastToolResult);
+        await this.sendFinal(message, content, replaceMessageId);
+        await this.persist(runtime, content);
+        return;
+      }
+      if (canDraft && !draftSent) {
+        await this.api.sendMessageDraft(message.chat.id, draftId, content);
+      }
       await this.sendFinal(message, content, replaceMessageId);
       await this.persist(runtime);
     } catch (err) {
@@ -1755,7 +1778,64 @@ class BotRunner {
     }
   }
 
-  private async persist(runtime: RuntimeSession): Promise<void> {
+  private async recoverEmptyFinal(
+    runtime: RuntimeSession,
+    message: TelegramMessage,
+    lastToolName: string,
+    lastToolResult: string,
+    replaceMessageId?: number,
+  ): Promise<string | null> {
+    if (lastToolName === "image_gen") {
+      const file = imageGenResultFile(lastToolResult);
+      if (file) {
+        try {
+          const imagePath = await resolveTelegramWorkdirPath(
+            runtime.session.projectDir,
+            file,
+          );
+          await this.deleteStatusMessage(message, replaceMessageId);
+          await this.api.sendPhoto({
+            chat_id: message.chat.id,
+            path: imagePath,
+            caption: "Ini hasilnya.",
+            message_thread_id: message.message_thread_id,
+          });
+          return `[Telegram sent generated image: ${file}]`;
+        } catch (err) {
+          console.error(
+            `Telegram empty-final image recovery error: ${(err as Error).message}`,
+          );
+          return null;
+        }
+      }
+    }
+
+    if (lastToolName === "bot_script" && /bot_script completed/i.test(lastToolResult)) {
+      await this.deleteStatusMessage(message, replaceMessageId);
+      return "[Telegram media/action sent via bot_script.]";
+    }
+
+    return null;
+  }
+
+  private async deleteStatusMessage(
+    message: TelegramMessage,
+    messageId?: number,
+  ): Promise<void> {
+    if (!messageId) return;
+    await this.api
+      .deleteMessage(message.chat.id, messageId)
+      .catch((err) =>
+        console.error(
+          `Telegram status delete error: ${(err as Error).message}`,
+        ),
+      );
+  }
+
+  private async persist(
+    runtime: RuntimeSession,
+    trailingEmptyAssistantContent?: string,
+  ): Promise<void> {
     const usage = runtime.pendingUsage;
     if (usage) {
       // pendingUsage = last iteration's usage (overwritten each call), so promptTokens == contextSize.
@@ -1767,7 +1847,23 @@ class BotRunner {
           runtime.session.usage.total.completionTokens + usage.completionTokens,
       };
     }
-    runtime.session.messages = [...runtime.agent.history()];
+    const messages = [...runtime.agent.history()];
+    if (trailingEmptyAssistantContent) {
+      const lastIndex = messages.length - 1;
+      const last = messages[lastIndex];
+      const lastHasTools =
+        last?.role === "assistant" &&
+        Array.isArray(last.toolCalls) &&
+        last.toolCalls.length > 0;
+      if (
+        last?.role === "assistant" &&
+        !lastHasTools &&
+        (last.content === null || last.content.trim() === "")
+      ) {
+        messages[lastIndex] = { ...last, content: trailingEmptyAssistantContent };
+      }
+    }
+    runtime.session.messages = messages;
     runtime.session.updatedAt = new Date().toISOString();
     // Persist the known-member roster so it survives bot restarts alongside the chat history.
     if (runtime.knownMembers.size > 0) {
@@ -2579,6 +2675,7 @@ function telegramSystemContext(
     "Your FINAL text answer is automatically sent to the user as a chat message. You do NOT need any tool to send a normal reply.",
     "NEVER use bot_script just to send a text reply — that tool is ONLY for sending media (photos/documents/videos) or performing Telegram-specific actions (polls, locations).",
     "NEVER use bot_script.sendMessage() to reply to the user — your normal text output already IS the reply.",
+    "When image_gen creates or edits an image for the user, send the resulting file with bot_script.sendPhoto(path, caption). Do not only say the image was created.",
     "When the user says 'hi', 'halo', 'hai', asks a question, or makes a request, just write your answer as text. Do NOT call any tool for conversational responses.",
   );
   return lines.join("\n");
@@ -3044,6 +3141,25 @@ function chunkText(text: string, maxChars: number): string[] {
   }
   if (rest) chunks.push(rest);
   return chunks.length > 0 ? chunks : ["(empty response)"];
+}
+
+function emptyFinalFallback(lastToolName: string, lastToolResult: string): string {
+  const result = lastToolResult.trim();
+  if (result.startsWith("Error:")) {
+    return result;
+  }
+  if (lastToolName) {
+    return `Tool ${lastToolName} selesai, tapi model tidak mengirim teks final.`;
+  }
+  return "Maaf, model selesai tanpa mengirim teks. Coba ulangi.";
+}
+
+function imageGenResultFile(result: string): string | null {
+  const fileMatch = /^File:\s*(.+)$/im.exec(result);
+  if (fileMatch?.[1]?.trim()) return fileMatch[1].trim();
+  const pathMatch = /^Path:\s*(.+)$/im.exec(result);
+  if (pathMatch?.[1]?.trim()) return pathMatch[1].trim();
+  return null;
 }
 
 function withThread(messageThreadId: number | undefined): {
