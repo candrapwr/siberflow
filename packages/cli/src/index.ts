@@ -21,6 +21,7 @@ async function main(): Promise<void> {
   const provider = createProvider(config.provider, {
     apiKey: config.apiKey,
     ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
+    ...(config.providerHeaders ? { headers: config.providerHeaders } : {}),
     ...(config.customProviderName
       ? { customName: config.customProviderName }
       : {}),

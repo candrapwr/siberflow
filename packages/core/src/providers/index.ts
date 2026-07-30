@@ -1,4 +1,5 @@
 export * from "./base.js";
+export * from "./headers.js";
 export * from "./registry.js";
 export { OpenAICompatibleProvider } from "./openai-compatible.js";
 export { DeepSeekProvider } from "./deepseek.js";

@@ -164,6 +164,7 @@ interface AppConfig {
   telegramApiBase: string;
   workdirRoot: string;
   provider: Provider;
+  providerHeaders?: Record<string, string>;
   registry: ToolRegistry;
   model: string;
   requestDelayMs: number;
@@ -241,6 +242,7 @@ function loadAppConfig(): AppConfig {
   const provider = createProvider(coreConfig.provider, {
     apiKey: coreConfig.apiKey,
     ...(coreConfig.baseUrl ? { baseUrl: coreConfig.baseUrl } : {}),
+    ...(coreConfig.providerHeaders ? { headers: coreConfig.providerHeaders } : {}),
     ...(coreConfig.customProviderName
       ? { customName: coreConfig.customProviderName }
       : {}),
@@ -279,6 +281,9 @@ function loadAppConfig(): AppConfig {
       ),
     ),
     provider,
+    ...(coreConfig.providerHeaders
+      ? { providerHeaders: coreConfig.providerHeaders }
+      : {}),
     registry,
     model: coreConfig.model ?? provider.defaultModel,
     requestDelayMs: coreConfig.requestDelayMs,
@@ -477,6 +482,9 @@ class BotRunner {
       const provider = createProvider("custom", {
         apiKey: this.aiSettings.apiKey,
         baseUrl: this.aiSettings.baseUrl,
+        ...(this.config.providerHeaders
+          ? { headers: this.config.providerHeaders }
+          : {}),
         customName: this.aiSettings.customProviderName || "custom",
         customDefaultModel: this.aiSettings.customDefaultModel,
       });

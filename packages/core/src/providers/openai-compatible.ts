@@ -9,6 +9,7 @@ import type {
   UsageStats,
 } from "../agent/types.js";
 import type { Provider, ProviderConfig } from "./base.js";
+import { providerHeaders } from "./headers.js";
 import { parseSSE } from "./sse.js";
 import { debug } from "../debug.js";
 
@@ -72,6 +73,7 @@ export abstract class OpenAICompatibleProvider implements Provider {
 
   protected readonly apiKey: string;
   protected readonly baseUrl: string;
+  protected readonly headers: Record<string, string> | undefined;
   protected readonly includeUsageInStream: boolean;
 
   constructor(config: ProviderConfig, opts: OpenAICompatibleOptions) {
@@ -82,6 +84,7 @@ export abstract class OpenAICompatibleProvider implements Provider {
     this.defaultModel = opts.defaultModel;
     this.apiKey = config.apiKey;
     this.baseUrl = config.baseUrl ?? opts.defaultBaseUrl;
+    this.headers = config.headers;
     this.includeUsageInStream = opts.includeUsageInStream ?? true;
   }
 
@@ -114,7 +117,7 @@ export abstract class OpenAICompatibleProvider implements Provider {
     const res = await fetch(`${this.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
+        ...providerHeaders(this.headers),
         Authorization: `Bearer ${this.apiKey}`,
       },
       body: requestBody,

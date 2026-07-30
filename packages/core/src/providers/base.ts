@@ -9,6 +9,7 @@ export interface Provider {
 export interface ProviderConfig {
   apiKey: string;
   baseUrl?: string;
+  headers?: Record<string, string>;
   customName?: string;
   customDefaultModel?: string;
 }

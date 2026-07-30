@@ -14,6 +14,7 @@ import {
   loadSession,
   newSessionId,
   optimizeContext,
+  parseProviderHeadersEnv,
   saveOptimizedMiddleView,
   saveOptimizedView,
   saveSession,
@@ -777,7 +778,7 @@ export class AgentHost {
   }
 
   private writeOptimizedView(): void {
-    if (!this.current || !this.settings.contextOptimize) return;
+    if (!this.current || !this.settings.contextOptimize || !this.agent) return;
     const { messages: optimized } = optimizeContext(
       this.current.messages,
       this.optimizeConfig(),
@@ -806,12 +807,17 @@ export class AgentHost {
     if (!this.apiKey) {
       throw new Error("API key is not configured.");
     }
+    const headers = parseProviderHeadersEnv();
     if (settings.provider !== "custom") {
-      return { apiKey: this.apiKey };
+      return {
+        apiKey: this.apiKey,
+        ...(headers ? { headers } : {}),
+      };
     }
     return {
       apiKey: this.apiKey,
       baseUrl: settings.customProvider.baseUrl,
+      ...(headers ? { headers } : {}),
       customName: settings.customProvider.name,
       customDefaultModel: settings.customProvider.defaultModel,
     };

@@ -9,6 +9,7 @@ import type {
   UsageStats,
 } from "../agent/types.js";
 import type { Provider, ProviderConfig } from "./base.js";
+import { providerHeaders } from "./headers.js";
 import { parseSSE } from "./sse.js";
 import { debug } from "../debug.js";
 
@@ -32,6 +33,7 @@ export class OpenAIResponsesProvider implements Provider {
 
   private readonly apiKey: string;
   private readonly baseUrl: string;
+  private readonly headers: Record<string, string> | undefined;
 
   constructor(config: ProviderConfig) {
     if (!config.apiKey) {
@@ -39,6 +41,7 @@ export class OpenAIResponsesProvider implements Provider {
     }
     this.apiKey = config.apiKey;
     this.baseUrl = config.baseUrl ?? DEFAULT_BASE_URL;
+    this.headers = config.headers;
   }
 
   async *chatStream(req: ChatRequest): AsyncIterable<StreamEvent> {
@@ -64,7 +67,7 @@ export class OpenAIResponsesProvider implements Provider {
     const res = await fetch(`${this.baseUrl}/responses`, {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
+        ...providerHeaders(this.headers),
         Authorization: `Bearer ${this.apiKey}`,
       },
       body: requestBody,

@@ -19,6 +19,7 @@ import {
   saveSessionSync,
   SESSION_FORMAT_VERSION,
   optimizeContext,
+  parseProviderHeadersEnv,
   uploadsDirFor,
   type Provider,
   type ProviderConfig,
@@ -1017,12 +1018,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!this.apiKey) {
       throw new Error("API key is not configured.");
     }
+    const headers = parseProviderHeadersEnv();
     if (settings.provider !== "custom") {
-      return { apiKey: this.apiKey };
+      return {
+        apiKey: this.apiKey,
+        ...(headers ? { headers } : {}),
+      };
     }
     return {
       apiKey: this.apiKey,
       baseUrl: settings.customProvider.baseUrl,
+      ...(headers ? { headers } : {}),
       customName: settings.customProvider.name,
       customDefaultModel: settings.customProvider.defaultModel,
     };

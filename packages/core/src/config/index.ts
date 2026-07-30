@@ -1,6 +1,7 @@
 import { statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import type { ContextOptimizeConfig, OptimizeMode } from "../agent/optimize.js";
+import { parseProviderHeadersEnv } from "../providers/headers.js";
 import type { ProviderName } from "../providers/registry.js";
 import { DEFAULT_ENABLED_TOOLS } from "../tools/index.js";
 
@@ -9,6 +10,7 @@ export interface SiberflowConfig {
   model?: string;
   apiKey: string;
   baseUrl?: string;
+  providerHeaders?: Record<string, string>;
   customProviderName?: string;
   customDefaultModel?: string;
   projectDir: string;
@@ -40,6 +42,7 @@ export function loadConfigFromEnv(
 
   const subagent = env.SIBERFLOW_SUBAGENT === "true";
   const enabledTools = resolveEnabledTools(env);
+  const providerHeaders = parseProviderHeadersEnv(env);
   // The agent_general/agent_explorer factory is gated by `subagent`, but the
   // actual registration is now also filtered per-name via enabledTools. When
   // the operator opts in with SIBERFLOW_SUBAGENT=true, ensure both names are in
@@ -64,6 +67,7 @@ export function loadConfigFromEnv(
     hideTools: env.SIBERFLOW_HIDE_TOOLS === "true",
     ...(env.SIBERFLOW_MODEL ? { model: env.SIBERFLOW_MODEL } : {}),
     ...(env.SIBERFLOW_BASE_URL ? { baseUrl: env.SIBERFLOW_BASE_URL } : {}),
+    ...(providerHeaders ? { providerHeaders } : {}),
     ...(provider === "custom" && env.SIBERFLOW_CUSTOM_PROVIDER_NAME
       ? { customProviderName: env.SIBERFLOW_CUSTOM_PROVIDER_NAME }
       : {}),
