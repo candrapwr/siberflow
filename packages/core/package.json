@@ -10,7 +10,7 @@
     "./tools": "./dist/tools/index.js"
   },
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsc --build --force",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
