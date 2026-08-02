@@ -60,15 +60,26 @@ When verification was not possible, say so plainly.`;
 
 /**
  * Task checklist guidance — appended when the task_update tool is registered.
- * (Unified richer version: previously the CLI and VSCode copies had drifted
- * apart; this is the merged form.)
+ * Trimmed to match the modular Nebula form: state what the tool is for and the
+ * one invariant (one in_progress at a time), then defer to it. The host UI
+ * already shows the live checklist, so heavy repetition isn't needed.
  */
-export const TASKS_GUIDANCE = `\n\n# Task checklist — use it aggressively
-You have a \`task_update\` tool that shows the user a live checklist. For any request with 2+ distinct \
-steps, your FIRST action is a \`task_update\` call laying out the full plan (first item "in_progress", \
-rest "pending"). After each step, call it again: mark the completed item "completed" and the next \
-"in_progress" (exactly one in_progress at a time). Always send the COMPLETE list (full replacement). \
-Skip it for genuinely single-step requests (quick inspection, explanation, or factual answer).`;
+export const TASKS_GUIDANCE = `\n\n# Task checklist
+For multi-step work, use the \`task_update\` tool to show the plan and keep it updated. Send the complete \
+current list when updating it, with at most one item marked in_progress. Skip it for single-step requests, \
+explanations, and quick inspections.`;
+
+/**
+ * Tool-narration guidance — appended when any tools are registered. Tells the
+ * model to emit a short natural-language line before each tool call so the
+ * user can follow the work (Telegram streams intermediate assistant text as a
+ * draft message; a one-line lead-in makes the transcript read like a
+ * conversation instead of silent function calls).
+ */
+export const TOOL_NARRATION_GUIDANCE = `\n\n# Narrate around tool calls
+Write one short sentence before each tool call describing what you'll do, in the user's language. Don't \
+narrate after the result — just continue. For \`bot_script\`, skip the lead-in: the tool call itself carries \
+the action. This keeps the conversation natural and lets the user follow your work.`;
 
 /**
  * Summary-mode context optimization breadcrumb explanation — appended when
@@ -135,11 +146,17 @@ export interface BuildPromptOptions {
  * Assemble the full system prompt for a turn, combining the base prompt with
  * whichever guidance blocks apply to the current configuration. INTENT_GUIDANCE
  * is always included (it governs response shape, not an optional feature).
+ * Ordering mirrors the modular Nebula layout: behavioral guidance (intent,
+ * narration, tasks) first, then optimizer metadata, then the optional
+ * agent-delegation nudge. Telegram-specific runtime context + skills are
+ * appended by the host afterwards.
  */
 export function buildSystemPrompt(opts: BuildPromptOptions): string {
   const tools = opts.enabledToolNames ?? [];
   let prompt = BASE_PROMPT(opts.interface, tools);
   prompt += INTENT_GUIDANCE;
+  // Tool-narration guidance only matters when tools are actually registered.
+  if (tools.length > 0) prompt += TOOL_NARRATION_GUIDANCE;
   if (opts.tasksEnabled) prompt += TASKS_GUIDANCE;
   if (opts.summaryMode) prompt += SUMMARY_GUIDANCE;
   // Telegram-only nudge: prefer the agent helpers for research/multi-step work

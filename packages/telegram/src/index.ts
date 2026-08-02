@@ -2668,9 +2668,8 @@ function telegramSystemContext(
   );
   lines.push(
     "",
-    "# Telegram hard tool safety rules",
-    "These rules override any previous behavior or examples.",
-    "When using any tool in Telegram, never access, read, write, list, upload, send, or reference files outside the session workdir above.",
+    "# Tool safety (Telegram)",
+    "When using any tool, never access, read, write, list, upload, send, or reference files outside the session workdir above.",
   );
   if (adminShell) {
     // Admin private chat: shell (exec) is intentionally enabled for server administration.
@@ -2687,24 +2686,21 @@ function telegramSystemContext(
   }
   lines.push(
     "",
-    "# Voice/audio/video speech handling (HARD RULE)",
+    "# Voice/audio/video speech handling",
     "When the user sends a voice/audio message, use the speech_to_text tool to transcribe it.",
     "When the user sends a video and asks about spoken content, use speech_to_text to transcribe the video's audio.",
-    "Then RESPOND DIRECTLY to whatever the user actually said in the recording.",
-    "NEVER reveal, quote, or mention that a transcription happened.",
-    "NEVER show the transcript text, the words 'transcri', 'transcription', 'transkrip', 'hasil transkripsi', or similar.",
-    "NEVER explain 'artinya' or rephrase the transcript back to the user.",
-    "Treat the transcript exactly as if the user had typed those words as a normal chat message, and reply to them naturally in one short answer.",
+    "Then respond directly to whatever the user actually said in the recording.",
+    "Never reveal, quote, or mention that a transcription happened — don't show the transcript text, the words 'transcri', 'transcription', 'transkrip', 'hasil transkripsi', or similar, and don't explain 'artinya' or rephrase the transcript back.",
+    "Treat the transcript exactly as if the user had typed those words as a normal chat message, and reply naturally in one short answer.",
   );
   lines.push(
     "",
-    "# Response delivery (HARD RULE)",
-    "Your FINAL text answer is automatically sent to the user as a chat message. You do NOT need any tool to send a normal reply.",
-    "When you need bot_script, call the real `bot_script` tool with JSON arguments. NEVER write `[bot_script(...)]`, `bot_script(...)`, or code fences as visible text.",
-    "NEVER use bot_script just to send a text reply — that tool is ONLY for sending media (photos/documents/videos) or performing Telegram-specific actions (polls, locations).",
-    "NEVER use bot_script.sendMessage() to reply to the user — your normal text output already IS the reply.",
-    "When image_gen creates or edits an image for the user, call the real `bot_script` tool with script `await bot.sendPhoto(path, caption);` to send the resulting file. Do not only say the image was created.",
-    "When the user says 'hi', 'halo', 'hai', asks a question, or makes a request, just write your answer as text. Do NOT call any tool for conversational responses.",
+    "# Response delivery",
+    "Your final text answer is automatically sent to the user as a chat message — you do NOT need any tool to send a normal reply.",
+    "When you need bot_script, call the real `bot_script` tool with JSON arguments. Never write `[bot_script(...)]`, `bot_script(...)`, or code fences as visible text.",
+    "bot_script is ONLY for sending media (photos/documents/videos) or performing Telegram-specific actions (polls, locations). Never use bot_script.sendMessage() to reply — your normal text output already IS the reply.",
+    "When image_gen creates or edits an image, call `bot_script` with `await bot.sendPhoto(path, caption);` to send the resulting file. Do not only say the image was created.",
+    "For conversational responses ('hi', 'halo', questions, simple requests), just write your answer as text — do not call any tool.",
   );
   return lines.join("\n");
 }
