@@ -2709,13 +2709,13 @@ function withSystemPrompt(
   messages: Session["messages"],
   systemPrompt: string,
 ): Session["messages"] {
-  if (messages.length === 0) return [];
+  if (messages.length === 0) return [{ role: "system", content: systemPrompt }];
   const next = [...messages];
   if (next[0]?.role === "system") {
     next[0] = { ...next[0], content: systemPrompt };
     return next;
   }
-  return [{ role: "system", content: systemPrompt }, ...next];
+  return [{ role: "system", content: systemPrompt }, ...messages];
 }
 
 /** Human-readable, tool-specific status shown in the group status message / private draft while a tool runs. */
