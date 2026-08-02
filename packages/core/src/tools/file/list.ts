@@ -19,7 +19,7 @@ export const listDirTool: Tool = {
   },
   async execute(args, ctx) {
     const { path } = args as Args;
-    const full = await resolveWithin(ctx.projectDir, path ?? ".");
+    const full = await resolveWithin(ctx.projectDir, path ?? ".", ctx.skillReadRoots ?? []);
     const entries = await readdir(full, { withFileTypes: true });
     return entries
       .map((e) => `${e.isDirectory() ? "d" : "-"} ${e.name}`)

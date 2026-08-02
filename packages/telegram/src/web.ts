@@ -14,7 +14,7 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
-import { readdir, rm, stat } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import {
   deleteSession,
@@ -22,11 +22,15 @@ import {
   loadSession,
   loadOptimizedView,
   loadOptimizedMiddleView,
+  loadSkills,
+  parseSkillFile,
   type Session,
+  type Skill,
 } from "@siberflow/core";
 import type { TelegramApi } from "./index.js";
 import { ADMIN_HTML } from "./web-ui.js";
 import { LOGIN_HTML } from "./login-page.js";
+import { SKILLS_DIR } from "./skills-store.js";
 import {
   deleteImageEditPreset,
   deleteImageGenPreset,
@@ -366,6 +370,20 @@ async function handleRequest(
   if (path === "/api/tools" && req.method === "GET") {
     return handleListTools(res, ctx.getAiSettings);
   }
+  // ── Skill library (admin-managed, global) ──
+  if (path === "/api/skills" && req.method === "GET") {
+    return handleListSkills(res);
+  }
+  if (path === "/api/skills" && req.method === "POST") {
+    return handleCreateSkill(req, res);
+  }
+  const skillItemMatch = path.match(/^\/api\/skills\/([^/]+)$/);
+  if (skillItemMatch) {
+    const name = decodeURIComponent(skillItemMatch[1]!);
+    if (req.method === "GET") return handleGetSkill(res, name);
+    if (req.method === "PATCH") return handleUpdateSkill(req, res, name);
+    if (req.method === "DELETE") return handleDeleteSkill(res, name);
+  }
   if (path === "/api/image-presets" && req.method === "GET") {
     return handleListImagePresets(res);
   }
@@ -492,6 +510,126 @@ async function handleGetImagePreset(res: ServerResponse, id: string): Promise<vo
   }
   // Return the FULL preset including the real API key — no masking here.
   sendJson(res, 200, preset);
+}
+
+// ── Skill library ───────────────────────────────────────────────────────────
+
+/** Strict kebab-case — also enforces it's a safe single path component. */
+const SKILL_NAME_RE = /^[a-z0-9-]{1,64}$/;
+const SKILL_MAX_DESCRIPTION = 1024;
+
+/** Project a parsed skill into the API response shape. */
+function toApiSkill(s: Skill): {
+  name: string;
+  description: string;
+  enabled: boolean;
+  content: string;
+} {
+  return { name: s.name, description: s.description, enabled: s.enabled, content: s.body };
+}
+
+/** Serialize skill fields back to canonical `.md`: frontmatter + body. */
+function serializeSkill(name: string, description: string, enabled: boolean, body: string): string {
+  const desc = description.replace(/\r?\n/g, " ").trim();
+  const fm = [
+    "---",
+    `name: ${name}`,
+    `description: ${desc}`,
+    `enabled: ${enabled ? "true" : "false"}`,
+    "---",
+    "",
+  ].join("\n");
+  return `${fm}${body.replace(/^\s+/, "")}\n`;
+}
+
+/** GET /api/skills — list every skill + any parse errors. */
+async function handleListSkills(res: ServerResponse): Promise<void> {
+  const { skills, errors } = await loadSkills(SKILLS_DIR);
+  sendJson(res, 200, { skills: skills.map(toApiSkill), errors });
+}
+
+/** POST /api/skills — create a new skill. */
+async function handleCreateSkill(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const body = await readJsonBody(req);
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  if (!SKILL_NAME_RE.test(name)) {
+    sendJson(res, 400, { error: "name must be 1–64 lowercase kebab-case chars [a-z0-9-]" });
+    return;
+  }
+  const description = typeof body.description === "string" ? body.description.trim() : "";
+  if (description.length > SKILL_MAX_DESCRIPTION) {
+    sendJson(res, 400, { error: `description exceeds ${SKILL_MAX_DESCRIPTION} chars` });
+    return;
+  }
+  const content = typeof body.content === "string" ? body.content : "";
+  const enabled = body.enabled !== false;
+
+  const { skills: existing } = await loadSkills(SKILLS_DIR);
+  if (existing.some((s) => s.name === name)) {
+    sendJson(res, 409, { error: "A skill with that name already exists" });
+    return;
+  }
+
+  const filePath = join(SKILLS_DIR, `${name}.md`);
+  await mkdir(SKILLS_DIR, { recursive: true });
+  await writeFile(filePath, serializeSkill(name, description, enabled, content), "utf8");
+  const skill = parseSkillFile(await readFile(filePath, "utf8"), filePath, Date.now());
+  sendJson(res, 201, { skill: toApiSkill(skill) });
+}
+
+/** GET /api/skills/:name — detail one skill. */
+async function handleGetSkill(res: ServerResponse, name: string): Promise<void> {
+  const { skills } = await loadSkills(SKILLS_DIR);
+  const skill = skills.find((s) => s.name === name);
+  if (!skill) {
+    sendJson(res, 404, { error: "Skill not found" });
+    return;
+  }
+  sendJson(res, 200, { skill: toApiSkill(skill) });
+}
+
+/** PATCH /api/skills/:name — update description/content/enabled. */
+async function handleUpdateSkill(
+  req: IncomingMessage,
+  res: ServerResponse,
+  name: string,
+): Promise<void> {
+  const { skills } = await loadSkills(SKILLS_DIR);
+  const existing = skills.find((s) => s.name === name);
+  if (!existing) {
+    sendJson(res, 404, { error: "Skill not found" });
+    return;
+  }
+  const body = await readJsonBody(req);
+  const description =
+    typeof body.description === "string" ? body.description.trim() : existing.description;
+  if (description.length > SKILL_MAX_DESCRIPTION) {
+    sendJson(res, 400, { error: `description exceeds ${SKILL_MAX_DESCRIPTION} chars` });
+    return;
+  }
+  const content = typeof body.content === "string" ? body.content : existing.body;
+  const enabled = typeof body.enabled === "boolean" ? body.enabled : existing.enabled;
+  await writeFile(existing.filePath, serializeSkill(name, description, enabled, content), "utf8");
+  sendJson(res, 200, { ok: true });
+}
+
+/** DELETE /api/skills/:name — remove a skill file. */
+async function handleDeleteSkill(res: ServerResponse, name: string): Promise<void> {
+  if (!SKILL_NAME_RE.test(name)) {
+    sendJson(res, 400, { error: "Invalid skill name" });
+    return;
+  }
+  const filePath = join(SKILLS_DIR, `${name}.md`);
+  try {
+    await unlink(filePath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      sendJson(res, 404, { error: "Skill not found" });
+      return;
+    }
+    throw err;
+  }
+  sendJson(res, 200, { ok: true });
 }
 
 // ── Main provider presets ──────────────────────────────────────────────────

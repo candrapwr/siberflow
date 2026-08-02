@@ -5,6 +5,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 
 import { marked } from "marked";
 import {
   Agent,
+  buildSkillIndexPrompt,
   buildSystemPrompt,
   cliTools,
   compactConversation,
@@ -13,6 +14,7 @@ import {
   deleteSession,
   loadConfigFromEnv,
   loadSession,
+  loadSkills,
   optimizeContext,
   saveFullBackup,
   saveOptimizedMiddleView,
@@ -31,6 +33,7 @@ import {
   isDebug,
 } from "@siberflow/core";
 import { loadDotEnv } from "./env.js";
+import { SKILL_READ_ROOTS } from "./skills-store.js";
 import { startWebService } from "./web.js";
 import {
   defaultAiSettings,
@@ -746,6 +749,7 @@ class BotRunner {
         registry: active.registry,
         model: active.model,
         projectDir: runtime.session.projectDir,
+        skillReadRoots: [...SKILL_READ_ROOTS],
         imageAccessLogger: (e) => this.logImageAccess(e),
         agentAccessLogger: (e) => this.logAgentAccess(e),
         systemPrompt: oldHistory[0]?.role === "system" ? oldHistory[0].content : "",
@@ -846,7 +850,7 @@ class BotRunner {
         const changed = this.rememberMember(cached, message.from, message.chat.type);
         if (changed) {
           cached.agent.loadHistory(
-            withSystemPrompt(cached.session.messages, this.buildSystemPromptFor(message, cached)),
+            withSystemPrompt(cached.session.messages, await this.buildSystemPromptFor(message, cached)),
           );
           // Persist roster IMMEDIATELY to disk — don't wait for the turn to finish.
           const obj: Record<string, { username?: string; name?: string }> = {};
@@ -1172,12 +1176,13 @@ class BotRunner {
     };
     this.rememberMember(runtime, message.from, message.chat.type);
 
-    const systemPrompt = this.buildSystemPromptFor(message, runtime, registry, adminPrivate);
+    const systemPrompt = await this.buildSystemPromptFor(message, runtime, registry, adminPrivate);
     const agent = new Agent({
       provider: active.provider,
       registry,
       model: active.model,
       projectDir: workdir,
+      skillReadRoots: [...SKILL_READ_ROOTS],
       systemPrompt,
       contextOptimize: this.config.contextOptimize,
       tasksEnabled: false,
@@ -1245,6 +1250,7 @@ class BotRunner {
       registry: active.registry,
       model: active.model,
       projectDir: workdir,
+      skillReadRoots: [...SKILL_READ_ROOTS],
       systemPrompt,
       contextOptimize: this.config.contextOptimize,
       tasksEnabled: false,
@@ -1404,17 +1410,24 @@ class BotRunner {
 
 
   /** Build the per-session system prompt, including the known-member roster for group/supergroup chats. */
-  private buildSystemPromptFor(
+  private async buildSystemPromptFor(
     message: TelegramMessage,
     runtime: RuntimeSession,
     registry: ToolRegistry = this.config.registry,
     adminPrivate = false,
-  ): string {
+  ): Promise<string> {
     const base = buildSystemPrompt({
       interface: "telegram",
       enabledToolNames: registry.list().map((t) => t.name),
     });
-    return base + telegramSystemContext(message, runtime.session.projectDir, adminPrivate, runtime.knownMembers);
+    // Append the skill index (name + 1-line description per enabled skill).
+    // Skill bodies are NOT injected — the agent reads them on demand via
+    // read_file (granted access through skillReadRoots). Because this prompt is
+    // rebuilt every turn, any skill change takes effect on the next message
+    // with no cache invalidation needed.
+    const { skills } = await loadSkills(SKILL_READ_ROOTS[0]!);
+    const skillBlock = buildSkillIndexPrompt(skills);
+    return base + skillBlock + telegramSystemContext(message, runtime.session.projectDir, adminPrivate, runtime.knownMembers);
   }
 
   private async resetSession(message: TelegramMessage): Promise<void> {
@@ -1623,7 +1636,7 @@ class BotRunner {
     const turnRegistry = adminPrivateCtx
       ? this.createAdminRegistry()
       : activePrompt.registry;
-    const freshPrompt = this.buildSystemPromptFor(message, runtime, turnRegistry, adminPrivateCtx);
+    const freshPrompt = await this.buildSystemPromptFor(message, runtime, turnRegistry, adminPrivateCtx);
     runtime.agent.loadHistory(withSystemPrompt(runtime.session.messages, freshPrompt));
 
     try {

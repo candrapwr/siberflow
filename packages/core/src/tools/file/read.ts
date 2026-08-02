@@ -32,7 +32,7 @@ export const readFileTool: Tool = {
   },
   async execute(args, ctx) {
     const { path, offset, limit } = args as Args;
-    const full = await resolveWithin(ctx.projectDir, path);
+    const full = await resolveWithin(ctx.projectDir, path, ctx.skillReadRoots ?? []);
     const content = await readFile(full, "utf8");
     if (offset === undefined && limit === undefined) {
       // Pre-truncate: when enabled and no explicit range was requested, cap to

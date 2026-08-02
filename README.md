@@ -247,6 +247,7 @@ Only users listed in `SIBERFLOW_TELEGRAM_ADMINS` can approve a login. Non-admins
   - **Image Edit Override** — separate config for `image_gen` **edit mode**. Each field falls back to the image-gen config when empty, so you can override just a key or a whole provider. Falls back to `SIBERFLOW_IMAGE_EDIT_*` env.
   - **Multimodal Override** — `analyze_image` provider/key/model/base URL (OpenAI-compatible). Falls back to `SIBERFLOW_MULTIMODAL_*` env.
 - **🔧 Tools** — toggle which opt-in tools the bot exposes via a checkbox grid (22 tools across 11 categories). A "Load from Env" button seeds the checkboxes from `SIBERFLOW_TELEGRAM_TOOLS`. Falls back to env when off. The `exec` tool is always shown but remains **admin-private-chat-only** regardless of the override.
+- **✦ Skills** — manage a global library of reusable prompt `.md` files (see [Skills](#skills)). Admin-only create/edit/toggle/delete. Active skills are offered to the agent in every chat.
 - **📷 Image Log** — a table of every `image_gen` (generate vs. edit, separated) and `analyze_image` call: timestamp, user ID, tool+mode, model, status (OK/ERROR), and error message. In-memory, capped at 500 entries, cleared on restart.
 - **✉ Kirim Pesan** — send a text message to any chat by ID (modal popup).
 
@@ -258,6 +259,37 @@ All overrides persist to `~/.siberflow/telegram-settings.json` and survive resta
 - **History-load safety** — the system prompt + history reload happens **inside the serial queue** (at the start of each turn), not when a message arrives. This prevents a second message from corrupting an in-flight turn's history in group chats.
 - **Drop-on-delete** — deleting a session via the web panel also drops it from the in-memory cache, so the user's next message starts fresh.
 - **Workdir safety net** — the workdir is recreated on every `getRuntime` call if missing, so tools (`exec`, `image_gen`, file ops) never crash with `ENOENT` after a delete or `/reset`.
+
+### Skills
+
+> **Reusable instructions the AI reads on demand — no new tools needed.**
+
+A skill is a flat `.md` file with a small frontmatter (`name`, `description`, `enabled`) plus a markdown body of instructions. The agent sees a **compact index** (name + one-line description) in its system prompt, and reads the body on demand via the existing `read_file` tool whenever a task matches the skill's description. The philosophy: rather than keep adding tools, reuse the powerful ones already available.
+
+**Scope:** a single **global library** at `~/.siberflow/telegram-skills/<name>.md`, active for every chat (private, group, forum thread). **Management is admin-only** via the **Skills** page in the admin web service (port 7070, OTP-gated `/login`). Regular users cannot manage skills.
+
+**File format:**
+
+```markdown
+---
+name: pdf-extraction
+description: Extract text/tables from PDF. Use when a user uploads a PDF or asks to parse PDF content.
+enabled: true
+---
+# PDF Extraction
+When handling PDF files:
+1. Use pdf_script with mode="extract"...
+```
+
+- **Flat file** (one file = one skill), **flat frontmatter parser** — no YAML dependency.
+- **Validation:** `name` kebab-case `[a-z0-9-]{1,64}`, `description` ≤ 1024 chars.
+- **Read-only to the agent.** `read_file`/`list_dir` can read skill files (the sandbox is expanded for the skill directory); `write_file`/`edit_file`/`delete_file` stay sandboxed to the per-chat workdir, so the agent cannot corrupt a skill.
+- **Lazy loading.** Only the index (name + description) is injected into the system prompt; the body is fetched via `read_file` when needed, so the prompt stays lean. Because the system prompt is rebuilt on every turn, any skill change (add/edit/toggle/delete) takes effect on the next message — no restart or cache invalidation needed.
+
+**How the agent uses a skill:**
+1. The host scans the skill directory when (re)building the system prompt and injects the index.
+2. A user asks something; the agent matches the skill's description and calls `read_file <skill-dir>/<name>.md`.
+3. The agent reads the body and proceeds using the tools it already has.
 
 ## VS Code Extension
 

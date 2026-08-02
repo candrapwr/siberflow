@@ -3,4 +3,5 @@ export * from "./providers/index.js";
 export * from "./tools/index.js";
 export * from "./config/index.js";
 export * from "./session/index.js";
+export * from "./skills/index.js";
 export * from "./debug.js";

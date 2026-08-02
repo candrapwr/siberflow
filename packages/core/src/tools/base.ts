@@ -122,6 +122,14 @@ export interface ToolContext {
    * Absent in CLI/Desktop/VS Code.
    */
   agentAccessLogger?: (entry: AgentAccessLogEntry) => void;
+  /**
+   * Read-only extra directories that `read_file`/`list_dir` may resolve into,
+   * in addition to `projectDir`. Injected by the host with the skill-library
+   * directory so the model can read skill bodies on demand without the library
+   * living inside the session sandbox. Write/edit tools deliberately ignore
+   * this list — skills stay read-only to the agent.
+   */
+  skillReadRoots?: string[];
 }
 
 /** A single image-tool access log entry. See ToolContext.imageAccessLogger. */

@@ -490,6 +490,9 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     <button class="nav-item" data-page="tools" onclick="goPage('tools')">
       <span class="icon">🔧</span> Tools
     </button>
+    <button class="nav-item" data-page="skills" onclick="goPage('skills')">
+      <span class="icon">✦</span> Skills
+    </button>
     <button class="nav-item" data-page="imagelog" onclick="goPage('imagelog')">
       <span class="icon">📷</span> Image Log
     </button>
@@ -536,6 +539,13 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     <!-- Page: Tools -->
     <div class="page" id="page-tools">
       <div id="toolsWrap">
+        <div class="empty"><span class="spin"></span> Memuat...</div>
+      </div>
+    </div>
+
+    <!-- Page: Skills -->
+    <div class="page" id="page-skills">
+      <div id="skillsWrap">
         <div class="empty"><span class="spin"></span> Memuat...</div>
       </div>
     </div>
@@ -652,7 +662,7 @@ function goPage(name) {
   document.querySelectorAll(".nav-item").forEach(n => n.classList.remove("active"));
   document.getElementById("page-" + name).classList.add("active");
   document.querySelector('.nav-item[data-page="' + name + '"]').classList.add("active");
-  const titles = { sessions: "Sessions", overview: "Overview", settings: "AI Settings", tools: "Tools", imagelog: "Image Log", agentlog: "Agent Log" };
+  const titles = { sessions: "Sessions", overview: "Overview", settings: "AI Settings", tools: "Tools", skills: "Skills", imagelog: "Image Log", agentlog: "Agent Log" };
   document.getElementById("pageTitle").textContent = titles[name] || name;
   const topActions = document.getElementById("topActions");
   if (name === "sessions") {
@@ -666,6 +676,9 @@ function goPage(name) {
   } else if (name === "tools") {
     topActions.innerHTML = '';
     loadTools();
+  } else if (name === "skills") {
+    topActions.innerHTML = '<button class="primary" onclick="loadSkills()">⟳ Refresh</button>';
+    loadSkills();
   } else if (name === "imagelog") {
     topActions.innerHTML = '<button class="primary" onclick="loadImageLog()">⟳ Refresh</button>';
     loadImageLog();
@@ -1373,6 +1386,152 @@ async function persistTools() {
     } else {
       toast("Gagal: " + (d.error || "unknown"), false);
     }
+  } catch (e) {
+    toast("Gagal: " + e.message, false);
+  }
+}
+
+// ── Skills panel ──
+let skillsCache = [];
+let editingSkillName = null;
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function escapeAttr(s) {
+  return String(s).replace(/'/g, "\\'").replace(/"/g, "&quot;");
+}
+
+async function loadSkills() {
+  const wrap = document.getElementById("skillsWrap");
+  try {
+    const data = await api("/api/skills");
+    skillsCache = data.skills || [];
+    if (data.errors && data.errors.length) {
+      toast(data.errors.length + " file skill gagal dimuat.", false);
+    }
+    renderSkills();
+  } catch (e) {
+    wrap.innerHTML = '<div class="empty">Gagal memuat: ' + escapeHtml(e.message) + "</div>";
+  }
+}
+
+function renderSkills() {
+  const wrap = document.getElementById("skillsWrap");
+  let html = '<div class="section-title">Tambah / Edit Skill</div>';
+  html += '<div class="card" style="padding:12px;margin-bottom:16px">';
+  html += '<div style="display:grid;gap:8px">';
+  html += '<div><label style="font-size:11px;color:var(--muted)">Nama (kebab-case)</label>' +
+    '<input id="skName" placeholder="pdf-extraction" pattern="[a-z0-9-]{1,64}" style="width:100%;margin-top:2px"></div>';
+  html += '<div><label style="font-size:11px;color:var(--muted)">Deskripsi (kapan dipakai)</label>' +
+    '<input id="skDesc" placeholder="Extract text from PDF. Use when user uploads PDF." style="width:100%;margin-top:2px"></div>';
+  html += '<div><label style="font-size:11px;color:var(--muted)">Body (markdown instruksi)</label>' +
+    '<textarea id="skBody" rows="7" placeholder="# PDF Extraction\\nWhen handling PDF files:\\n1. Use pdf_script..." style="width:100%;margin-top:2px;font-family:monospace;font-size:12px"></textarea></div>';
+  html += '<div style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="skEnabled" checked> <span style="font-size:13px">Aktif</span></div>';
+  html += '<div style="display:flex;gap:8px;margin-top:4px">';
+  html += '<button class="primary" id="skSaveBtn" onclick="saveSkill()">Tambah Skill</button>';
+  html += '<button id="skCancelBtn" onclick="resetSkillForm()" style="display:none">Batal Edit</button>';
+  html += '</div>';
+  html += '</div>';
+  html += '</div>';
+
+  html += '<div class="section-title">Daftar Skill</div>';
+  if (!skillsCache.length) {
+    html += '<div class="empty">Belum ada skill.</div>';
+  } else {
+    html += '<table><thead><tr><th>Nama</th><th>Deskripsi</th><th>Status</th><th style="text-align:right">Aksi</th></tr></thead><tbody>';
+    for (const s of skillsCache) {
+      html += '<tr>';
+      html += '<td><code>' + escapeHtml(s.name) + '</code></td>';
+      html += '<td style="max-width:300px">' + escapeHtml(s.description || "(no description)") + '</td>';
+      html += '<td><span class="badge ' + (s.enabled ? "thread" : "") + '" style="' + (s.enabled ? "" : "background:#3d1e1e;color:#f87171") + '">' + (s.enabled ? "aktif" : "mati") + '</span></td>';
+      html += '<td style="text-align:right;white-space:nowrap">';
+      html += '<button onclick="editSkill(\'' + escapeAttr(s.name) + '\')">Edit</button> ';
+      html += '<button onclick="toggleSkill(\'' + escapeAttr(s.name) + '\',' + (s.enabled ? 0 : 1) + ')">' + (s.enabled ? "Disable" : "Enable") + '</button> ';
+      html += '<button onclick="deleteSkill(\'' + escapeAttr(s.name) + '\')" style="background:#3d1e1e;color:#f87171">Hapus</button>';
+      html += '</td>';
+      html += '</tr>';
+    }
+    html += '</tbody></table>';
+  }
+  wrap.innerHTML = html;
+  if (editingSkillName) applySkillForm();
+}
+
+function resetSkillForm() {
+  editingSkillName = null;
+  renderSkills();
+}
+
+function applySkillForm() {
+  // After renderSkills rebuilds the form, editingSkillName is kept in closure;
+  // the form fields were filled by editSkill before re-render. Nothing to do here.
+}
+
+async function saveSkill() {
+  const name = document.getElementById("skName").value.trim();
+  const description = document.getElementById("skDesc").value.trim();
+  const content = document.getElementById("skBody").value;
+  const enabled = document.getElementById("skEnabled").checked;
+  if (!/^[a-z0-9-]{1,64}$/.test(name)) {
+    toast("Nama harus kebab-case [a-z0-9-], 1–64 char.", false);
+    return;
+  }
+  try {
+    if (editingSkillName) {
+      await api("/api/skills/" + encodeURIComponent(editingSkillName), {
+        method: "PATCH",
+        body: JSON.stringify({ description, content, enabled }),
+      });
+      toast("Skill diperbarui.", true);
+    } else {
+      await api("/api/skills", {
+        method: "POST",
+        body: JSON.stringify({ name, description, content, enabled }),
+      });
+      toast("Skill ditambahkan.", true);
+    }
+    editingSkillName = null;
+    await loadSkills();
+  } catch (e) {
+    toast("Gagal: " + e.message, false);
+  }
+}
+
+function editSkill(name) {
+  const s = skillsCache.find((x) => x.name === name);
+  if (!s) return;
+  editingSkillName = s.name;
+  renderSkills();
+  document.getElementById("skName").value = s.name;
+  document.getElementById("skName").disabled = true;
+  document.getElementById("skDesc").value = s.description || "";
+  document.getElementById("skBody").value = s.content || "";
+  document.getElementById("skEnabled").checked = s.enabled === true;
+  document.getElementById("skSaveBtn").textContent = "Simpan";
+  document.getElementById("skCancelBtn").style.display = "";
+}
+
+async function toggleSkill(name, enable) {
+  try {
+    await api("/api/skills/" + encodeURIComponent(name), {
+      method: "PATCH",
+      body: JSON.stringify({ enabled: enable === 1 }),
+    });
+    toast("Status skill diperbarui.", true);
+    await loadSkills();
+  } catch (e) {
+    toast("Gagal: " + e.message, false);
+  }
+}
+
+async function deleteSkill(name) {
+  if (!confirm('Hapus skill "' + name + '"?')) return;
+  try {
+    await api("/api/skills/" + encodeURIComponent(name), { method: "DELETE" });
+    toast("Skill dihapus.", true);
+    if (editingSkillName === name) editingSkillName = null;
+    await loadSkills();
   } catch (e) {
     toast("Gagal: " + e.message, false);
   }

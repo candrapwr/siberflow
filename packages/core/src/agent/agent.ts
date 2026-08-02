@@ -123,6 +123,12 @@ export interface AgentOptions {
   botScript?: ToolContext["botScript"];
   /** Identity of the user who triggered this turn (forwarded to ToolContext). */
   userId?: ToolContext["userId"];
+  /**
+   * Read-only extra directories (e.g. the skill library) that read tools may
+   * resolve into, in addition to `projectDir`. Forwarded to ToolContext so
+   * read_file/list_dir can reach skill bodies that live outside the sandbox.
+   */
+  skillReadRoots?: string[];
   /** Optional image-tool access logger (forwarded to ToolContext). */
   imageAccessLogger?: ToolContext["imageAccessLogger"];
   /** Optional agent-tool access logger (forwarded to ToolContext). */
@@ -290,6 +296,9 @@ export class Agent {
       ...(opts.askUser ? { askUser: opts.askUser } : {}),
       ...(opts.botScript ? { botScript: opts.botScript } : {}),
       ...(opts.userId !== undefined ? { userId: opts.userId } : {}),
+      ...(opts.skillReadRoots && opts.skillReadRoots.length > 0
+        ? { skillReadRoots: opts.skillReadRoots }
+        : {}),
       ...(opts.imageAccessLogger ? { imageAccessLogger: opts.imageAccessLogger } : {}),
       ...(opts.agentAccessLogger ? { agentAccessLogger: opts.agentAccessLogger } : {}),
       ...(opts.preTruncate !== undefined ? { preTruncate: opts.preTruncate } : {}),
