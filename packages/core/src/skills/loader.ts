@@ -209,10 +209,13 @@ export function buildSkillIndexPrompt(skills: Skill[]): string {
   });
 
   return (
-    "\n\n# Skills\n" +
-    "Reusable skill files (.md) are available. When a task matches a skill's description, " +
-    "read its file first with `read_file` (path below) and follow the guidance in it, then " +
-    "proceed with the task using the tools you already have. Skills are read-only.\n\n" +
+    "\n\n# Skills (HARD RULE — takes priority over generic search tools)\n" +
+    "Reusable skill files (.md) are available. When a user request matches a skill's " +
+    "description, you MUST `read_file` that skill FIRST (path below), before calling any " +
+    "generic lookup tool (web_search, run_browser, download_file). Skills encode the correct " +
+    "endpoint/method/params for that task — a generic web search will return worse results. " +
+    "Only after reading and applying the skill may you fall back to web_search if the skill " +
+    "itself instructs you to. Do not skip this step. Skills are read-only.\n\n" +
     lines.join("\n") +
     "\n\n" +
     "Skill file paths (use these with read_file):\n" +

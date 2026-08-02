@@ -1440,11 +1440,11 @@ function renderSkills() {
   html += '<div class="card" style="padding:12px;margin-bottom:16px">';
   html += '<div style="display:grid;gap:8px">';
   html += '<div><label style="font-size:11px;color:var(--muted)">Nama (kebab-case)</label>' +
-    '<input id="skName" placeholder="pdf-extraction" pattern="[a-z0-9-]{1,64}" style="width:100%;margin-top:2px"></div>';
+    '<input id="skName" placeholder="paket-tender-indonesia" pattern="[a-z0-9-]{1,64}" style="width:100%;margin-top:2px"></div>';
   html += '<div><label style="font-size:11px;color:var(--muted)">Deskripsi (kapan dipakai)</label>' +
-    '<input id="skDesc" placeholder="Extract text from PDF. Use when user uploads PDF." style="width:100%;margin-top:2px"></div>';
+    '<input id="skDesc" placeholder="Cari tender/RUP pemerintah. WAJIB baca skill ini sebelum web_search saat user minta cari tender, paket pengadaan, atau RUP." style="width:100%;margin-top:2px"></div>';
   html += '<div><label style="font-size:11px;color:var(--muted)">Body (markdown instruksi)</label>' +
-    '<textarea id="skBody" rows="7" placeholder="# PDF Extraction\\nWhen handling PDF files:\\n1. Use pdf_script..." style="width:100%;margin-top:2px;font-family:monospace;font-size:12px"></textarea></div>';
+    '<textarea id="skBody" rows="7" placeholder="# Cari Tender\\nEndpoint SIRUP INAPROC + parameter. Ikuti langkah ini, JANGAN web_search." style="width:100%;margin-top:2px;font-family:monospace;font-size:12px"></textarea></div>';
   html += '<div style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="skEnabled" checked> <span style="font-size:13px">Aktif</span></div>';
   html += '<div style="display:flex;gap:8px;margin-top:4px">';
   html += '<button class="primary" id="skSaveBtn" onclick="saveSkill()">Tambah Skill</button>';
