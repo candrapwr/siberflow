@@ -1394,16 +1394,34 @@ async function persistTools() {
 // ── Skills panel ──
 let skillsCache = [];
 let editingSkillName = null;
+let skillsDelegationWired = false;
 
 function escapeHtml(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
-function escapeAttr(s) {
-  return String(s).replace(/'/g, "\\'").replace(/"/g, "&quot;");
+
+/** Wire a single delegated click handler on #skillsWrap for the row action
+ *  buttons. Called from loadSkills(); guarded so it only attaches once even
+ *  across re-renders (the table rows are rebuilt, but the wrapper is stable). */
+function wireSkillsDelegation() {
+  if (skillsDelegationWired) return;
+  const wrap = document.getElementById("skillsWrap");
+  if (!wrap) return;
+  wrap.addEventListener("click", (ev) => {
+    const btn = ev.target.closest("button[data-sk-action]");
+    if (!btn) return;
+    const name = btn.getAttribute("data-sk-name") || "";
+    const action = btn.getAttribute("data-sk-action");
+    if (action === "edit") editSkill(name);
+    else if (action === "toggle") toggleSkill(name, Number(btn.getAttribute("data-sk-enable")) === 1);
+    else if (action === "delete") deleteSkill(name);
+  });
+  skillsDelegationWired = true;
 }
 
 async function loadSkills() {
   const wrap = document.getElementById("skillsWrap");
+  wireSkillsDelegation();
   try {
     const data = await api("/api/skills");
     skillsCache = data.skills || [];
@@ -1446,9 +1464,9 @@ function renderSkills() {
       html += '<td style="max-width:300px">' + escapeHtml(s.description || "(no description)") + '</td>';
       html += '<td><span class="badge ' + (s.enabled ? "thread" : "") + '" style="' + (s.enabled ? "" : "background:#3d1e1e;color:#f87171") + '">' + (s.enabled ? "aktif" : "mati") + '</span></td>';
       html += '<td style="text-align:right;white-space:nowrap">';
-      html += '<button onclick="editSkill(\'' + escapeAttr(s.name) + '\')">Edit</button> ';
-      html += '<button onclick="toggleSkill(\'' + escapeAttr(s.name) + '\',' + (s.enabled ? 0 : 1) + ')">' + (s.enabled ? "Disable" : "Enable") + '</button> ';
-      html += '<button onclick="deleteSkill(\'' + escapeAttr(s.name) + '\')" style="background:#3d1e1e;color:#f87171">Hapus</button>';
+      html += '<button data-sk-action="edit" data-sk-name="' + escapeHtml(s.name) + '">Edit</button> ';
+      html += '<button data-sk-action="toggle" data-sk-name="' + escapeHtml(s.name) + '" data-sk-enable="' + (s.enabled ? 0 : 1) + '">' + (s.enabled ? "Disable" : "Enable") + '</button> ';
+      html += '<button data-sk-action="delete" data-sk-name="' + escapeHtml(s.name) + '" style="background:#3d1e1e;color:#f87171">Hapus</button>';
       html += '</td>';
       html += '</tr>';
     }
