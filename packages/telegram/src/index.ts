@@ -1425,9 +1425,15 @@ class BotRunner {
     // read_file (granted access through skillReadRoots). Because this prompt is
     // rebuilt every turn, any skill change takes effect on the next message
     // with no cache invalidation needed.
+    //
+    // The skill block is placed LAST (after the Telegram runtime context + hard
+    // rules) so it sits closest to the user message — models obey instructions
+    // near the end of the system prompt most reliably, and the skill trigger
+    // would otherwise be diluted by the tool-safety / response-delivery rules
+    // that follow it.
     const { skills } = await loadSkills(SKILL_READ_ROOTS[0]!);
     const skillBlock = buildSkillIndexPrompt(skills);
-    return base + skillBlock + telegramSystemContext(message, runtime.session.projectDir, adminPrivate, runtime.knownMembers);
+    return base + telegramSystemContext(message, runtime.session.projectDir, adminPrivate, runtime.knownMembers) + skillBlock;
   }
 
   private async resetSession(message: TelegramMessage): Promise<void> {

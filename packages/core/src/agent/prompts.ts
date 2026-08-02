@@ -11,20 +11,19 @@
 export type AgentInterface = "terminal" | "vscode" | "telegram";
 
 /**
- * Build the tool-availability sentence for the base prompt — a flat list of
- * the registered tool NAMES only. Per-tool capabilities, modes, and
- * constraints live in each tool's `description` (sent as the JSON schema), so
- * repeating them here would only bloat the prompt and risk drifting from the
- * schema. The model sees the full descriptions via the tool list; this
- * clause just frames that tools exist and notes the cross-cutting sandbox
- * scope that no single tool description conveys on its own.
+ * Build the tool-availability sentence for the base prompt. The model already
+ * receives the FULL tool list (names + descriptions) as JSON schemas in the
+ * request's `tools` field, so repeating the names here would only bloat the
+ * prompt and risk drifting from the schema. This clause just frames that tools
+ * exist and notes the cross-cutting sandbox scope that no single tool
+ * description conveys on its own.
  */
 function buildToolClause(enabledToolNames: string[]): string {
   const has = (name: string): boolean => enabledToolNames.includes(name);
   const any = (...names: string[]): boolean => names.some(has);
 
   const toolsClause = enabledToolNames.length > 0
-    ? `You have tools available: ${enabledToolNames.join(", ")}.`
+    ? "You have access to the tools provided for this session."
     : "You currently have no tools registered.";
 
   // Cross-cutting sandbox scope — only mention what's relevant to the active
