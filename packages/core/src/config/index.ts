@@ -3,6 +3,7 @@ import { isAbsolute, resolve } from "node:path";
 import type { ContextOptimizeConfig, OptimizeMode } from "../agent/optimize.js";
 import { parseProviderHeadersEnv } from "../providers/headers.js";
 import type { ProviderName } from "../providers/registry.js";
+import type { ReasoningEffort } from "../providers/base.js";
 import { DEFAULT_ENABLED_TOOLS } from "../tools/index.js";
 
 export interface SiberflowConfig {
@@ -11,6 +12,8 @@ export interface SiberflowConfig {
   apiKey: string;
   baseUrl?: string;
   providerHeaders?: Record<string, string>;
+  /** Reasoning effort forwarded to the custom gateway. Default: none. */
+  reasoningEffort: ReasoningEffort;
   customProviderName?: string;
   customDefaultModel?: string;
   projectDir: string;
@@ -61,6 +64,7 @@ export function loadConfigFromEnv(
     autoContinue: env.SIBERFLOW_AUTO_CONTINUE !== "false",
     maxIterations: resolveMaxIterations(env),
     requestDelayMs: resolveRequestDelay(env),
+    reasoningEffort: resolveReasoningEffort(env),
     enabledTools,
     preTruncate: env.SIBERFLOW_PRE_TRUNCATE !== "false",
     subagent,
@@ -78,6 +82,22 @@ export function loadConfigFromEnv(
         }
       : {}),
   };
+}
+
+function resolveReasoningEffort(env: NodeJS.ProcessEnv): ReasoningEffort {
+  const raw = env.SIBERFLOW_REASONING_EFFORT?.trim().toLowerCase();
+  if (
+    raw === "none" ||
+    raw === "minimal" ||
+    raw === "low" ||
+    raw === "medium" ||
+    raw === "high" ||
+    raw === "xhigh" ||
+    raw === "max"
+  ) {
+    return raw;
+  }
+  return "none";
 }
 
 function resolveContextOptimize(env: NodeJS.ProcessEnv): ContextOptimizeConfig {

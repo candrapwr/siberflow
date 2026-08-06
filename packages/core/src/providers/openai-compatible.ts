@@ -8,7 +8,7 @@ import type {
   ToolSchema,
   UsageStats,
 } from "../agent/types.js";
-import type { Provider, ProviderConfig } from "./base.js";
+import type { Provider, ProviderConfig, ReasoningEffort } from "./base.js";
 import { providerHeaders } from "./headers.js";
 import { parseSSE } from "./sse.js";
 import { debug } from "../debug.js";
@@ -75,6 +75,7 @@ export abstract class OpenAICompatibleProvider implements Provider {
   protected readonly baseUrl: string;
   protected readonly headers: Record<string, string> | undefined;
   protected readonly includeUsageInStream: boolean;
+  protected readonly reasoningEffort: ReasoningEffort;
 
   constructor(config: ProviderConfig, opts: OpenAICompatibleOptions) {
     if (!config.apiKey) {
@@ -86,6 +87,7 @@ export abstract class OpenAICompatibleProvider implements Provider {
     this.baseUrl = config.baseUrl ?? opts.defaultBaseUrl;
     this.headers = config.headers;
     this.includeUsageInStream = opts.includeUsageInStream ?? true;
+    this.reasoningEffort = config.reasoningEffort ?? "none";
   }
 
   protected requestBodyExtras(): Record<string, unknown> {

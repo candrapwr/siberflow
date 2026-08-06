@@ -39,6 +39,11 @@ class CustomProvider extends OpenAICompatibleProvider {
       },
     );
   }
+
+  /** The gateway owns mapping this standard field to its backend model. */
+  protected requestBodyExtras(): Record<string, unknown> {
+    return { reasoning_effort: this.reasoningEffort };
+  }
 }
 
 export function createProvider(

@@ -168,6 +168,7 @@ interface AppConfig {
   workdirRoot: string;
   provider: Provider;
   providerHeaders?: Record<string, string>;
+  reasoningEffort: ReturnType<typeof loadConfigFromEnv>["reasoningEffort"];
   registry: ToolRegistry;
   model: string;
   requestDelayMs: number;
@@ -252,6 +253,7 @@ function loadAppConfig(): AppConfig {
     ...(coreConfig.customDefaultModel
       ? { customDefaultModel: coreConfig.customDefaultModel }
       : {}),
+    reasoningEffort: coreConfig.reasoningEffort,
   });
 
   // Startup registry (used as the fallback when no fresh registry is needed).
@@ -287,6 +289,7 @@ function loadAppConfig(): AppConfig {
     ...(coreConfig.providerHeaders
       ? { providerHeaders: coreConfig.providerHeaders }
       : {}),
+    reasoningEffort: coreConfig.reasoningEffort,
     registry,
     model: coreConfig.model ?? provider.defaultModel,
     requestDelayMs: coreConfig.requestDelayMs,
@@ -490,6 +493,7 @@ class BotRunner {
           : {}),
         customName: this.aiSettings.customProviderName || "custom",
         customDefaultModel: this.aiSettings.customDefaultModel,
+        reasoningEffort: this.config.reasoningEffort,
       });
       const registry = createDefaultRegistry({
         enabledTools: this.getPublicEnabledTools(),

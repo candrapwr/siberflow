@@ -81,9 +81,12 @@ SIBERFLOW_BASE_URL=https://api.example.com/v1
 SIBERFLOW_CUSTOM_DEFAULT_MODEL=model-name
 # opsional:
 SIBERFLOW_CUSTOM_PROVIDER_NAME=my-provider
+SIBERFLOW_REASONING_EFFORT=none
 ```
 
 Jika ingin memakai model yang sama sebagai override eksplisit, `SIBERFLOW_MODEL` juga bisa dipakai. Base URL jangan diisi sampai path `/chat/completions`; cukup root API seperti `/v1`.
+
+Untuk custom gateway, `SIBERFLOW_REASONING_EFFORT` diteruskan sebagai field request standar `reasoning_effort`. Default-nya `none`; gateway yang menentukan pemetaan ke model backend yang dipilih. Siberflow tidak mendeteksi nama model atau melakukan mapping provider khusus.
 
 ### Install global (Ubuntu / macOS)
 

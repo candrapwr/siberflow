@@ -113,6 +113,7 @@ SIBERFLOW_BASE_URL=https://api.example.com/v1
 SIBERFLOW_CUSTOM_DEFAULT_MODEL=model-name
 # optional:
 SIBERFLOW_CUSTOM_PROVIDER_NAME=my-provider
+SIBERFLOW_REASONING_EFFORT=none
 SIBERFLOW_PROVIDER_USER_AGENT="Siberflow/0.1 my-gateway"
 SIBERFLOW_PROVIDER_CLIENT_NAME=siberflow
 SIBERFLOW_PROVIDER_CLIENT_VERSION=0.1
@@ -121,6 +122,8 @@ SIBERFLOW_PROVIDER_HEADERS='{"X-Gateway-Route":"coding"}'
 ```
 
 `SIBERFLOW_MODEL` can also be used when you want an explicit model override. Do not include `/chat/completions` in `SIBERFLOW_BASE_URL`; use the API root, such as `/v1`.
+
+For a custom gateway, `SIBERFLOW_REASONING_EFFORT` is forwarded as the standard `reasoning_effort` request field. It defaults to `none`; the gateway is responsible for mapping it to whichever backend model it selects. No model-name detection or provider-specific mapping is done in Siberflow.
 
 Main LLM provider requests include coding-client style headers by default: `User-Agent`, `X-Client-Name`, `X-Client-Version`, and `X-App-Name`. Override them with `SIBERFLOW_PROVIDER_USER_AGENT`, `SIBERFLOW_PROVIDER_CLIENT_NAME`, `SIBERFLOW_PROVIDER_CLIENT_VERSION`, and `SIBERFLOW_PROVIDER_APP_NAME`; use `SIBERFLOW_PROVIDER_HEADERS` for extra gateway/proxy headers. `Authorization` and `Content-Type` cannot be overridden through `SIBERFLOW_PROVIDER_HEADERS`; use the dedicated API key and base URL settings for those. Use honest client identifiers for your own gateway/proxy instead of impersonating another product.
 

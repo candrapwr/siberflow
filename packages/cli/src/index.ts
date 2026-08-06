@@ -28,6 +28,7 @@ async function main(): Promise<void> {
     ...(config.customDefaultModel
       ? { customDefaultModel: config.customDefaultModel }
       : {}),
+    reasoningEffort: config.reasoningEffort,
   });
   const registry = createDefaultRegistry({
     enabledTools: config.enabledTools,
