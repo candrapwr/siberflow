@@ -19,7 +19,8 @@ export interface ImageGenRequest {
   apiKey: string;
   model: string;
   baseUrl: string;
-  size?: string;
+  aspect_ratio?: string;
+  resolution?: string;
 }
 
 /** Request for an edit call (adds the source image path). */
@@ -142,7 +143,8 @@ export const openaiProvider: ImageGenProvider = {
         model: req.model,
         prompt: req.prompt,
         n: 1,
-        ...(req.size ? { size: req.size } : {}),
+        ...(req.aspect_ratio ? { aspect_ratio: req.aspect_ratio } : {}),
+        ...(req.resolution ? { resolution: req.resolution } : {}),
       }),
     });
     if (!res.ok) throw new Error(`OpenAI images/generations HTTP ${res.status}: ${await readError(res)}`);
@@ -188,7 +190,8 @@ export const generalProvider: ImageGenProvider = {
         model: req.model,
         prompt: req.prompt,
         n: 1,
-        ...(req.size ? { size: req.size } : {}),
+        ...(req.aspect_ratio ? { aspect_ratio: req.aspect_ratio } : {}),
+        ...(req.resolution ? { resolution: req.resolution } : {}),
       }),
     });
     if (!res.ok) throw new Error(`General images/generations HTTP ${res.status}: ${await readError(res)}`);
@@ -206,7 +209,8 @@ export const generalProvider: ImageGenProvider = {
         model: req.model,
         prompt: req.prompt,
         n: 1,
-        ...(req.size ? { size: req.size } : {}),
+        ...(req.aspect_ratio ? { aspect_ratio: req.aspect_ratio } : {}),
+        ...(req.resolution ? { resolution: req.resolution } : {}),
         image: imageData.toString("base64"),
       }),
     });
@@ -232,7 +236,8 @@ export const deepinfraProvider: ImageGenProvider = {
       body: JSON.stringify({
         model: req.model,
         prompt: req.prompt,
-        ...(req.size ? { size: req.size } : {}),
+        ...(req.aspect_ratio ? { aspect_ratio: req.aspect_ratio } : {}),
+        ...(req.resolution ? { resolution: req.resolution } : {}),
       }),
     });
     if (!res.ok) throw new Error(`DeepInfra images/generations HTTP ${res.status}: ${await readError(res)}`);
@@ -277,7 +282,12 @@ export const novitaProvider: ImageGenProvider = {
     const res = await fetchWithTimeout(url, {
       method: "POST",
       headers: { authorization: authHeader(req.apiKey), "content-type": "application/json" },
-      body: JSON.stringify({ prompt: req.prompt, watermark: false }),
+      body: JSON.stringify({
+        prompt: req.prompt,
+        aspect_ratio: req.aspect_ratio,
+        ...(req.resolution ? { resolution: req.resolution } : {}),
+        watermark: false,
+      }),
     });
     if (!res.ok) throw new Error(`Novita HTTP ${res.status}: ${await readError(res)}`);
     const json = (await res.json()) as NovitaResponse;
@@ -295,7 +305,13 @@ export const novitaProvider: ImageGenProvider = {
     const res = await fetchWithTimeout(url, {
       method: "POST",
       headers: { authorization: authHeader(req.apiKey), "content-type": "application/json" },
-      body: JSON.stringify({ prompt: req.prompt, image: base64, watermark: false }),
+      body: JSON.stringify({
+        prompt: req.prompt,
+        image: base64,
+        aspect_ratio: req.aspect_ratio,
+        ...(req.resolution ? { resolution: req.resolution } : {}),
+        watermark: false,
+      }),
     });
     if (!res.ok) throw new Error(`Novita edit HTTP ${res.status}: ${await readError(res)}`);
     const json = (await res.json()) as NovitaResponse;
@@ -358,7 +374,11 @@ async function qwenSynthesis(
   const body: Record<string, unknown> = {
     model: req.model,
     input,
-    parameters: { size: req.size?.replace("x", "*") ?? "1024*1024", n: 1 },
+    parameters: {
+      ...(req.aspect_ratio ? { aspect_ratio: req.aspect_ratio } : {}),
+      ...(req.resolution ? { resolution: req.resolution } : {}),
+      n: 1,
+    },
   };
   const res = await fetchWithTimeout(url, { method: "POST", headers, body: JSON.stringify(body) });
   if (!res.ok) throw new Error(`Qwen synthesis HTTP ${res.status}: ${await readError(res)}`);

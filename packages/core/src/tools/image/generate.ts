@@ -27,10 +27,23 @@ interface ImageGenArgs {
   prompt: string;
   image?: string;
   outputPath?: string;
-  size?: string;
+  aspect_ratio: string;
+  resolution?: string;
 }
 
-const VALID_SIZES = ["1024x1024", "1792x1024", "1024x1792"] as const;
+const VALID_ASPECT_RATIOS = [
+  "16:9",
+  "9:16",
+  "1:1",
+  "4:3",
+  "3:4",
+  "3:2",
+  "2:3",
+  "21:9",
+] as const;
+
+const DEFAULT_ASPECT_RATIO = "16:9";
+const VALID_RESOLUTIONS = ["1k", "2k"] as const;
 
 export const imageGenTool: Tool = {
   name: "image_gen",
@@ -41,8 +54,10 @@ export const imageGenTool: Tool = {
     "mode. Omit to generate a brand-new image.\n" +
     "- `outputPath` (optional): output path inside the workdir. Defaults to " +
     "generated-images/<timestamp>-<slug>.png.\n" +
-    "- `size` (optional): 1024x1024 (default), 1792x1024, or 1024x1792. " +
-    "Provider support varies.\n\n",
+    "- `aspect_ratio` (optional): 16:9 (default), 9:16, 1:1, 4:3, 3:4, 3:2, 2:3, or 21:9. " +
+    "Provider support varies.\n" +
+    "- `resolution` (optional): 1k or 2k. Omit unless the user asks for high quality; use 2k when they do. " +
+    "When omitted, the provider default is 1k.\n\n",
   parameters: {
     type: "object",
     properties: {
@@ -62,10 +77,16 @@ export const imageGenTool: Tool = {
           "Optional output path inside the project workdir (e.g. my-image.png). " +
           "Defaults to generated-images/<timestamp>-<slug>.png.",
       },
-      size: {
+      aspect_ratio: {
         type: "string",
-        enum: VALID_SIZES,
-        description: "Image dimensions. Default 1024x1024.",
+        enum: VALID_ASPECT_RATIOS,
+        description: "Image aspect ratio. Default 16:9.",
+      },
+      resolution: {
+        type: "string",
+        enum: VALID_RESOLUTIONS,
+        description:
+          "Image resolution. Omit unless the user asks for high quality; use 2k when they do. Default 1k when omitted.",
       },
     },
     required: ["prompt"],
@@ -134,7 +155,8 @@ export const imageGenTool: Tool = {
       apiKey,
       model,
       baseUrl,
-      ...(args.size ? { size: args.size } : {}),
+      aspect_ratio: args.aspect_ratio,
+      ...(args.resolution ? { resolution: args.resolution } : {}),
     };
 
     // ── Run generation or edit ──
@@ -196,15 +218,27 @@ function parseArgs(raw: unknown): ImageGenArgs {
   if (typeof args.prompt !== "string" || args.prompt.trim().length === 0) {
     throw new Error("`prompt` is required and must be a non-empty string.");
   }
-  const out: ImageGenArgs = { prompt: args.prompt.trim() };
+  const out: ImageGenArgs = {
+    prompt: args.prompt.trim(),
+    aspect_ratio: DEFAULT_ASPECT_RATIO,
+  };
   if (typeof args.image === "string" && args.image.trim()) {
     out.image = args.image.trim();
   }
   if (typeof args.outputPath === "string" && args.outputPath.trim()) {
     out.outputPath = args.outputPath.trim();
   }
-  if (typeof args.size === "string" && (VALID_SIZES as readonly string[]).includes(args.size)) {
-    out.size = args.size;
+  if (
+    typeof args.aspect_ratio === "string" &&
+    (VALID_ASPECT_RATIOS as readonly string[]).includes(args.aspect_ratio)
+  ) {
+    out.aspect_ratio = args.aspect_ratio;
+  }
+  if (
+    typeof args.resolution === "string" &&
+    (VALID_RESOLUTIONS as readonly string[]).includes(args.resolution)
+  ) {
+    out.resolution = args.resolution;
   }
   return out;
 }
