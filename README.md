@@ -246,7 +246,7 @@ Only users listed in `SIBERFLOW_TELEGRAM_ADMINS` can approve a login. Non-admins
 - **📊 Overview** — stat cards (total sessions, private/group/thread counts, total messages) + recent sessions.
 - **⚙ AI Settings** — runtime overrides (no restart, no `.env` edit needed). Each override is independent and has its own **preset store** (save/load/delete named configurations; API keys are stored in full locally, masked in the UI list, and loaded via a single-preset endpoint that returns the real key).
   - **Override Provider** — custom OpenAI-compatible main model (name, base URL, API key, default model). Falls back to `SIBERFLOW_TELEGRAM_*` env when off.
-  - **Image Generator Override** — `image_gen` provider/key/model/base URL (5 providers: openai, deepinfra, novita, qwen, grok). Falls back to `SIBERFLOW_IMAGE_GEN_*` env.
+  - **Image Generator Override** — `image_gen` provider/key/model/base URL (7 providers: sibergate, openai, general, deepinfra, novita, qwen, grok). Falls back to `SIBERFLOW_IMAGE_GEN_*` env.
   - **Image Edit Override** — separate config for `image_gen` **edit mode**. Each field falls back to the image-gen config when empty, so you can override just a key or a whole provider. Falls back to `SIBERFLOW_IMAGE_EDIT_*` env.
   - **Multimodal Override** — `analyze_image` provider/key/model/base URL (OpenAI-compatible). Falls back to `SIBERFLOW_MULTIMODAL_*` env.
 - **🔧 Tools** — toggle which opt-in tools the bot exposes via a checkbox grid (22 tools across 11 categories). A "Load from Env" button seeds the checkboxes from `SIBERFLOW_TELEGRAM_TOOLS`. Falls back to env when off. The `exec` tool is always shown but remains **admin-private-chat-only** regardless of the override.
@@ -661,17 +661,27 @@ It supports two modes:
 
 | Provider | Generation | Edit | Default model | Default base URL |
 |---|---|---|---|---|
+| `sibergate` *(recommended)* | ✓ (canonical JSON) | ✓ (canonical `image` field) | `image-fast` *(route id)* | `http://localhost:8787/v1` |
 | `openai` | ✓ (`/images/generations`) | ✓ (`/images/edits`, multipart) | `gpt-image-1` | `https://api.openai.com/v1` |
 | `deepinfra` | ✓ (OpenAI-compatible) | ✓ | `black-forest-labs/FLUX-1-schnell` | `https://api.deepinfra.com/v1` |
 | `novita` | ✓ (Seedream) | ✓ (base64 image) | `seedream-5.0-lite` | `https://api.novita.ai` |
 | `qwen` | ✓ (Wanxiang, async task) | ✓ (img2img) | `wanx2.1-turbo` | `https://dashscope.aliyuncs.com` |
 | `grok` | ✓ (FLUX-based) | — | `grok-2-image` | `https://api.x.ai/v1` |
 
-Qwen is asynchronous: the tool submits a task and polls until it completes, which can take several seconds.
+**`sibergate`** points the tool at a [SiberGate](https://github.com/candrapwr/sibergate) gateway, which does the cross-vendor mapping server-side: the tool always sends ONE canonical OpenAI-Images-superset request (`model` = route id, `prompt`, `aspect_ratio`, `resolution`, `negative_prompt`, and an `image` data-URL for edit mode), and the gateway translates it to whichever vendor the route target lands on — Kling (`model_name`/`aspect_ratio`), Qwen-Image/Wan (`input.messages` + params), or OpenAI (auto-redirect to `/v1/images/edits` multipart when an image is present). Responses always come back in OpenAI format; async task providers (Kling/Qwen/Wan) are polled by the gateway behind the scenes. Set the route's targets to **auto-map** in the SiberGate dashboard to enable the translation.
+
+Direct providers (openai/qwen/novita/…) still work unchanged for setups without a gateway. Qwen direct is asynchronous: the tool submits a task and polls until it completes, which can take several seconds.
 
 ### Configuration
 
 ```bash
+# Recommended — via a SiberGate gateway (model = route id configured there):
+SIBERFLOW_IMAGE_GEN_PROVIDER=sibergate
+SIBERFLOW_IMAGE_GEN_API_KEY=sg_live_...
+# SIBERFLOW_IMAGE_GEN_MODEL=image-fast          # SiberGate route id
+# SIBERFLOW_IMAGE_GEN_BASE_URL=http://localhost:8787/v1
+
+# Direct to a vendor (no gateway):
 SIBERFLOW_IMAGE_GEN_PROVIDER=openai
 SIBERFLOW_IMAGE_GEN_API_KEY=...
 # optional per-provider overrides:
@@ -686,7 +696,7 @@ SIBERFLOW_TOOLS=...,image_gen
 SIBERFLOW_TELEGRAM_TOOLS=run_browser,bot_script,image_gen
 ```
 
-The tool accepts `prompt` (required), `image` (optional path for edit mode), `outputPath` (optional), and `size` (`1024x1024` / `1792x1024` / `1024x1792`). Provider support for `size` varies. The result is written to `generated-images/<timestamp>-<slug>.png` by default.
+The tool accepts `prompt` (required), `image` (optional path for edit mode), `outputPath` (optional), `aspect_ratio` (default `16:9`; also `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3`, `21:9`), `resolution` (`1k`/`2k`), and `negative_prompt` (things to avoid). Provider support varies; with the `sibergate` provider all of them are translated to the target vendor's native form. The result is written to `generated-images/<timestamp>-<slug>.png` by default.
 
 ## Bot Script Tool (`bot_script`)
 

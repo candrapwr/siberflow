@@ -9,8 +9,9 @@
  *
  * Config (env, prefix SIBERFLOW_IMAGE_GEN_):
  * - SIBERFLOW_IMAGE_GEN_API_KEY  (required at call time)
- * - SIBERFLOW_IMAGE_GEN_PROVIDER  openai | general | deepinfra | novita | qwen | grok
- * - SIBERFLOW_IMAGE_GEN_MODEL     model id (default per provider)
+ * - SIBERFLOW_IMAGE_GEN_PROVIDER  sibergate | openai | general | deepinfra | novita | qwen | grok
+ * - SIBERFLOW_IMAGE_GEN_MODEL     model id (default per provider; for the
+ *                                 `sibergate` provider this is a ROUTE ID)
  * - SIBERFLOW_IMAGE_GEN_BASE_URL  API root (default per provider)
  */
 import { mkdir, writeFile } from "node:fs/promises";
@@ -29,6 +30,7 @@ interface ImageGenArgs {
   outputPath?: string;
   aspect_ratio: string;
   resolution?: string;
+  negative_prompt?: string;
 }
 
 const VALID_ASPECT_RATIOS = [
@@ -57,7 +59,9 @@ export const imageGenTool: Tool = {
     "- `aspect_ratio` (optional): 16:9 (default), 9:16, 1:1, 4:3, 3:4, 3:2, 2:3, or 21:9. " +
     "Provider support varies.\n" +
     "- `resolution` (optional): 1k or 2k. Omit unless the user asks for high quality; use 2k when they do. " +
-    "When omitted, the provider default is 1k.\n\n",
+    "When omitted, the provider default is 1k.\n" +
+    "- `negative_prompt` (optional): things to avoid in the image (e.g. 'blur, text, " +
+    "extra fingers'). Supported providers only; ignored otherwise.\n\n",
   parameters: {
     type: "object",
     properties: {
@@ -87,6 +91,12 @@ export const imageGenTool: Tool = {
         enum: VALID_RESOLUTIONS,
         description:
           "Image resolution. Omit unless the user asks for high quality; use 2k when they do. Default 1k when omitted.",
+      },
+      negative_prompt: {
+        type: "string",
+        description:
+          "Things to AVOID in the image (e.g. 'blur, text, extra fingers'). " +
+          "Forwarded to providers that support it; ignored otherwise.",
       },
     },
     required: ["prompt"],
@@ -157,6 +167,7 @@ export const imageGenTool: Tool = {
       baseUrl,
       aspect_ratio: args.aspect_ratio,
       ...(args.resolution ? { resolution: args.resolution } : {}),
+      ...(args.negative_prompt ? { negativePrompt: args.negative_prompt } : {}),
     };
 
     // ── Run generation or edit ──
@@ -239,6 +250,9 @@ function parseArgs(raw: unknown): ImageGenArgs {
     (VALID_RESOLUTIONS as readonly string[]).includes(args.resolution)
   ) {
     out.resolution = args.resolution;
+  }
+  if (typeof args.negative_prompt === "string" && args.negative_prompt.trim()) {
+    out.negative_prompt = args.negative_prompt.trim();
   }
   return out;
 }

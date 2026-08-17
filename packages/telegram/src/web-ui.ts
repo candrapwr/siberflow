@@ -814,6 +814,7 @@ function renderSettings() {
           (presetCards ? '<div class="preset-list">' + presetCards + '</div>' : '<div class="form-help" style="margin-bottom:16px">Belum ada preset tersimpan. Isi field di bawah lalu klik "Simpan Config" untuk menyimpan.</div>') +
           '<div class="form-field"><label>Provider</label>' +
             '<select id="setIgProvider" ' + igDisabled + '>' +
+              '<option value="sibergate"' + (s.imageGenProvider === 'sibergate' ? ' selected' : '') + '>sibergate (gateway, recommended)</option>' +
               '<option value="openai"' + (s.imageGenProvider === 'openai' ? ' selected' : '') + '>openai (gpt-image)</option>' +
               '<option value="general"' + (s.imageGenProvider === 'general' ? ' selected' : '') + '>general (JSON base64 edit)</option>' +
               '<option value="deepinfra"' + (s.imageGenProvider === 'deepinfra' ? ' selected' : '') + '>deepinfra (FLUX)</option>' +
@@ -915,6 +916,7 @@ function renderSettings() {
           (iePresetCards ? '<div class="preset-list">' + iePresetCards + '</div>' : '<div class="form-help" style="margin-bottom:16px">Belum ada preset tersimpan.</div>') +
           '<div class="form-field"><label>Provider</label>' +
             '<select id="setIeProvider" ' + ieDisabled + '>' +
+              '<option value="sibergate"' + (s.imageEditProvider === 'sibergate' ? ' selected' : '') + '>sibergate (gateway, recommended)</option>' +
               '<option value="openai"' + (s.imageEditProvider === 'openai' ? ' selected' : '') + '>openai (gpt-image)</option>' +
               '<option value="general"' + (s.imageEditProvider === 'general' ? ' selected' : '') + '>general (JSON base64 edit)</option>' +
               '<option value="deepinfra"' + (s.imageEditProvider === 'deepinfra' ? ' selected' : '') + '>deepinfra (FLUX)</option>' +

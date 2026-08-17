@@ -6,9 +6,11 @@
  * and response parsing. All providers return a raw image {@link Buffer} plus a
  * format hint so the tool can pick the right file extension.
  *
- * Providers: openai, general (OpenAI-like JSON endpoint), deepinfra
- * (OpenAI-compatible endpoint), novita (Seedream), qwen (Tongyi Wanxiang,
- * async task), grok (FLUX-based). grok has no public edit endpoint.
+ * Providers: sibergate (RECOMMENDED — canonical OpenAI Images superset via a
+ * SiberGate gateway, which does all cross-vendor mapping server-side), openai,
+ * general (OpenAI-like JSON endpoint), deepinfra (OpenAI-compatible endpoint),
+ * novita (Seedream), qwen (Tongyi Wanxiang, async task), grok (FLUX-based).
+ * grok has no public edit endpoint.
  */
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
@@ -21,6 +23,8 @@ export interface ImageGenRequest {
   baseUrl: string;
   aspect_ratio?: string;
   resolution?: string;
+  /** Things to avoid in the image (canonical SiberGate superset field). */
+  negativePrompt?: string;
 }
 
 /** Request for an edit call (adds the source image path). */
@@ -427,11 +431,92 @@ export const grokProvider: ImageGenProvider = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Provider: sibergate  (SiberGate gateway — canonical OpenAI Images superset)
+//
+// The RECOMMENDED provider: SiberGate (https://github.com/candrapwr/sibergate)
+// does the cross-vendor mapping server-side. This adapter speaks ONE shape —
+// the gateway's canonical superset — and the gateway translates it to
+// whichever vendor the route target lands on (Kling model_name/aspect_ratio,
+// Qwen-Image input.messages, Wan params, OpenAI incl. auto-redirect to
+// /v1/images/edits multipart when an image is present).
+//
+//   request  : {model: <route-id>, prompt, n, aspect_ratio?, resolution?,
+//               negative_prompt?, image? (data-URL, edit mode)}  — always JSON
+//   response : always OpenAI {created, data:[{url|b64_json}]} — the gateway
+//               polls async task providers (Kling/Qwen/Wan) and converts
+//               non-OpenAI shapes behind the scenes.
+//
+// `model` is a SiberGate ROUTE ID (not an upstream model). Point the route's
+// target(s) at the real vendors and set mapping=auto-map in the dashboard.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** SiberGate holds the client connection open while polling async upstreams
+ *  (Kling/Qwen tasks can take minutes) — allow a generous budget. */
+const SIBERGATE_TIMEOUT_MS = 300_000;
+
+export const sibergateProvider: ImageGenProvider = {
+  name: "sibergate",
+  async generate(req: ImageGenRequest): Promise<ImageGenResult> {
+    const url = `${cleanBaseUrl(req.baseUrl)}/images/generations`;
+    const res = await fetchWithTimeout(
+      url,
+      {
+        method: "POST",
+        headers: { authorization: authHeader(req.apiKey), "content-type": "application/json" },
+        body: JSON.stringify(canonicalBody(req)),
+      },
+      SIBERGATE_TIMEOUT_MS,
+    );
+    if (!res.ok) throw new Error(`SiberGate images/generations HTTP ${res.status}: ${await readError(res)}`);
+    const json = (await res.json()) as { data?: { url?: string; b64_json?: string }[] };
+    if (!json.data?.[0]) throw new Error("SiberGate returned no image data.");
+    return fromOpenAiData(json.data[0]);
+  },
+  async edit(req: ImageEditRequest): Promise<ImageGenResult> {
+    // Edit mode = SAME canonical endpoint + an `image` field (data-URL).
+    // SiberGate decides what it becomes upstream: OpenAI → /v1/images/edits
+    // multipart; Kling/Qwen/Wan → native image/image-base64 param. No local
+    // multipart building needed anymore.
+    const url = `${cleanBaseUrl(req.baseUrl)}/images/generations`;
+    const imageData = await readFile(req.imagePath);
+    const res = await fetchWithTimeout(
+      url,
+      {
+        method: "POST",
+        headers: { authorization: authHeader(req.apiKey), "content-type": "application/json" },
+        body: JSON.stringify({
+          ...canonicalBody(req),
+          image: `data:${mimeFor(req.imagePath)};base64,${imageData.toString("base64")}`,
+        }),
+      },
+      SIBERGATE_TIMEOUT_MS,
+    );
+    if (!res.ok) throw new Error(`SiberGate image edit HTTP ${res.status}: ${await readError(res)}`);
+    const json = (await res.json()) as { data?: { url?: string; b64_json?: string }[] };
+    if (!json.data?.[0]) throw new Error("SiberGate edit returned no image data.");
+    return fromOpenAiData(json.data[0]);
+  },
+};
+
+/** Build the canonical SiberGate request body (without the edit image). */
+function canonicalBody(req: ImageGenRequest): Record<string, unknown> {
+  return {
+    model: req.model,
+    prompt: req.prompt,
+    n: 1,
+    ...(req.aspect_ratio ? { aspect_ratio: req.aspect_ratio } : {}),
+    ...(req.resolution ? { resolution: req.resolution } : {}),
+    ...(req.negativePrompt ? { negative_prompt: req.negativePrompt } : {}),
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Registry
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Map of provider name → adapter. The tool looks up by env-configured name. */
 export const IMAGE_GEN_PROVIDERS: Record<string, ImageGenProvider> = {
+  sibergate: sibergateProvider,
   openai: openaiProvider,
   general: generalProvider,
   deepinfra: deepinfraProvider,
@@ -442,6 +527,9 @@ export const IMAGE_GEN_PROVIDERS: Record<string, ImageGenProvider> = {
 
 /** Default base URL + model per provider (used when env doesn't override). */
 export const PROVIDER_DEFAULTS: Record<string, { baseUrl: string; model: string }> = {
+  // model = SiberGate route id (configure the route + auto-map in the gateway
+  // dashboard; point its targets at the real vendors).
+  sibergate: { baseUrl: "http://localhost:8787/v1", model: "image-fast" },
   openai: { baseUrl: "https://api.openai.com/v1", model: "gpt-image-1" },
   general: { baseUrl: "https://api.openai.com/v1", model: "gpt-image-1" },
   deepinfra: { baseUrl: "https://api.deepinfra.com/v1", model: "black-forest-labs/FLUX-1-schnell" },
