@@ -841,37 +841,6 @@ class BotRunner {
     if (message.chat.type === "channel") return;
     const messageText = message.text ?? message.caption ?? "";
 
-    // Record this user into the group's member roster BEFORE any routing gates.
-    if (
-      (message.chat.type === "group" || message.chat.type === "supergroup") &&
-      message.from &&
-      !message.from.is_bot
-    ) {
-      const sessId = sessionIdFor(message);
-      const cached = this.sessions.get(sessId);
-      if (cached) {
-        // Session already in memory — update roster directly.
-        const changed = this.rememberMember(cached, message.from, message.chat.type);
-        if (changed) {
-          cached.agent.loadHistory(
-            withSystemPrompt(cached.session.messages, await this.buildSystemPromptFor(message, cached)),
-          );
-          // Persist roster IMMEDIATELY to disk — don't wait for the turn to finish.
-          const obj: Record<string, { username?: string; name?: string }> = {};
-          for (const [uid, rec] of cached.knownMembers) obj[String(uid)] = rec;
-          cached.session.knownMembers = obj;
-          void saveSession(cached.session).catch(() => { /* best-effort */ });
-        }
-      } else {
-        // Session not yet loaded — load it just to record the member, then re-cache.
-        try {
-          await this.getRuntime(message);
-        } catch {
-          // If session load fails, don't block message processing.
-        }
-      }
-    }
-
     // Voice/audio messages are ALWAYS processed — in private chats, in groups, and even without a caption or mention.
     const hasVoice = !!(message.voice || message.audio);
     const hasMedia = !hasVoice && !!resolveMediaFile(message);
@@ -884,6 +853,12 @@ class BotRunner {
     ) {
       return;
     }
+
+    let initialGroupStatus: Promise<number | undefined> | undefined;
+    const clearInitialGroupStatus = async (): Promise<void> => {
+      const messageId = initialGroupStatus ? await initialGroupStatus : undefined;
+      if (messageId) await this.deleteStatusMessage(message, messageId);
+    };
 
     try {
       if (isCommand(messageText, "start")) {
@@ -912,9 +887,28 @@ class BotRunner {
           console.error(`Telegram typing error: ${(err as Error).message}`),
         );
 
+      // Groups do not support live drafts. Show a real message immediately so
+      // users can see that the bot is processing while the session/skills load.
+      if (message.chat.type !== "private") {
+        initialGroupStatus = this.api
+          .sendMessage({
+            chat_id: message.chat.id,
+            text: "⏳ Memproses...",
+            message_thread_id: message.message_thread_id,
+          })
+          .then((sent) => sent.message_id)
+          .catch((err) => {
+            console.error(`Telegram initial status error: ${(err as Error).message}`);
+            return undefined;
+          });
+      }
+
       const runtime = await this.getRuntime(message);
       let input = await this.withReplyContext(message, baseInput, runtime.session.projectDir);
-      if (!input) return;
+      if (!input) {
+        await clearInitialGroupStatus();
+        return;
+      }
 
       // Prepend sender metadata so the AI always knows WHO is talking in a group chat.
       if (message.chat.type !== "private" && message.from && !message.from.is_bot) {
@@ -929,10 +923,13 @@ class BotRunner {
       input = `[${formatTimestamp(message.date)}]\n${input}`;
 
       // Serial execution per session: never run two turns in parallel on the same Agent/session.
-      this.enqueueTurn(runtime, message, input);
+      this.enqueueTurn(runtime, message, input, initialGroupStatus);
     } catch (err) {
       // Surface pre-turn errors (session load failure, image context, etc.) to the user instead of silently swallowing them.
       console.error(`Telegram handleUpdate error: ${(err as Error).message}`);
+      await clearInitialGroupStatus().catch(() => {
+        // Best-effort cleanup; notifyError below is still more important.
+      });
       await this.notifyError(message, err).catch(() => {
         // notifyError itself can fail (network down) — best-effort, never throw.
       });
@@ -944,14 +941,16 @@ class BotRunner {
     runtime: RuntimeSession,
     message: TelegramMessage,
     input: string,
+    initialGroupStatus?: Promise<number | undefined>,
   ): void {
     const sessionId = sessionIdFor(message);
-    const prev = this.turnQueues.get(sessionId) ?? Promise.resolve();
+    const previousTurn = this.turnQueues.get(sessionId);
+    const prev = previousTurn ?? Promise.resolve();
     const next = prev
       .catch(() => {
         // Swallow the previous turn's rejection so the chain keeps going.
       })
-      .then(() => this.runTurn(runtime, message, input))
+      .then(() => this.runTurn(runtime, message, input, initialGroupStatus))
       .catch((err) => {
         // Defensive: runTurn is expected to catch its own errors, but if something escapes, log it so the queue stays healthy.
         console.error(`Telegram turn error: ${(err as Error).message}`);
@@ -965,7 +964,7 @@ class BotRunner {
     });
 
     // Keep the typing indicator alive WHILE this turn waits behind the previous one in the serial queue.
-    if (prev !== Promise.resolve()) {
+    if (previousTurn) {
       const typingTimer = setInterval(() => {
         void this.api
           .sendChatAction(message.chat.id, "typing", message.message_thread_id)
@@ -1528,6 +1527,7 @@ class BotRunner {
     runtime: RuntimeSession,
     message: TelegramMessage,
     input: string,
+    initialGroupStatus?: Promise<number | undefined>,
   ): Promise<void> {
     runtime.pendingUsage = undefined;
     let content = "";
@@ -1548,6 +1548,9 @@ class BotRunner {
     const groupStatus: {
       promise?: Promise<number | undefined>;
     } = {};
+    if (!canDraft && initialGroupStatus) {
+      groupStatus.promise = initialGroupStatus;
+    }
 
     const sendDraft = (text: string): void => {
       if (!canDraft) return;
