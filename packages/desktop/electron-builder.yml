@@ -24,6 +24,10 @@ publish:
   repo: siberflow
 mac:
   category: public.app-category.developer-tools
+  # This is a JavaScript directory from puppeteer-extra-plugin-stealth,
+  # not a real macOS application bundle. Do not pass it to codesign.
+  signIgnore:
+    - 'puppeteer-extra-plugin-stealth/evasions/.*\.app'
   target:
     - dmg
   icon: resources/icon.icns

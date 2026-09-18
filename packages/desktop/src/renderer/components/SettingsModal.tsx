@@ -1,35 +1,68 @@
 // Settings modal: provider selection, API key (safeStorage-backed), agent config.
 
-import { memo, useState } from "react";
+import { memo, useState, type ReactNode } from "react";
 import { ipc } from "../ipc.js";
 import { DEFAULT_SETTINGS, type SettingsValues } from "@shared/protocol";
 
-/** Tool toggle entries. task_update is excluded — it's gated by the `tasks`
- * checkbox above (the task-checklist feature flag), not a per-tool toggle. */
+/** Tools that can be enabled for the agent. */
 const TOGGLE_TOOLS = [
-  { name: "read_file", label: "read_file", group: "File" },
-  { name: "write_file", label: "write_file", group: "File" },
-  { name: "edit_file", label: "edit_file", group: "File" },
-  { name: "copy_file", label: "copy_file", group: "File" },
-  { name: "list_dir", label: "list_dir", group: "File" },
-  { name: "delete_file", label: "delete_file", group: "File" },
-  { name: "grep", label: "grep", group: "File" },
-  { name: "exec", label: "exec", group: "Shell" },
-  { name: "db_query", label: "db_query", group: "Database" },
-  { name: "ssh_exec", label: "ssh_exec", group: "SSH" },
-  { name: "sftp", label: "sftp", group: "SSH" },
-  { name: "excel_script", label: "excel_script", group: "Excel" },
-  { name: "docx_script", label: "docx_script", group: "Document" },
-  { name: "pdf_script", label: "pdf_script", group: "Document" },
-  { name: "run_browser", label: "run_browser", group: "Browser" },
-  { name: "analyze_image", label: "analyze_image", group: "Image" },
-  { name: "web_search", label: "web_search", group: "Search" },
+  { name: "read_file", label: "Read files", group: "File" },
+  { name: "write_file", label: "Create files", group: "File" },
+  { name: "edit_file", label: "Edit files", group: "File" },
+  { name: "copy_file", label: "Copy files", group: "File" },
+  { name: "list_dir", label: "Browse folders", group: "File" },
+  { name: "delete_file", label: "Delete files", group: "File" },
+  { name: "grep", label: "Search in files", group: "File" },
+  { name: "exec", label: "Run shell commands", group: "Shell" },
+  { name: "db_query", label: "Query databases", group: "Database" },
+  { name: "ssh_exec", label: "Run SSH commands", group: "SSH" },
+  { name: "sftp", label: "Transfer over SFTP", group: "SSH" },
+  { name: "excel_script", label: "Work with Excel", group: "Excel" },
+  { name: "docx_script", label: "Work with Word", group: "Document" },
+  { name: "pdf_script", label: "Read PDFs", group: "Document" },
+  { name: "run_browser", label: "Control browser", group: "Browser" },
+  { name: "analyze_image", label: "Analyze images", group: "Image" },
+  { name: "web_search", label: "Search the web", group: "Search" },
 ] as const;
+
+const TOOL_GROUPS = ["File", "Shell", "Database", "SSH", "Excel", "Document", "Browser", "Image", "Search"] as const;
+const TOOL_GROUP_META: Record<string, { title: string; description: string }> = {
+  File: { title: "Files & folders", description: "Read, create, edit, and organize files in the workspace." },
+  Shell: { title: "Terminal", description: "Run commands on this computer. Use only if you trust the request." },
+  Database: { title: "Databases", description: "Run read-only database queries when database access is configured." },
+  SSH: { title: "Remote access", description: "Connect to remote machines and transfer files over SSH/SFTP." },
+  Excel: { title: "Spreadsheets", description: "Inspect and update Excel workbooks." },
+  Document: { title: "Documents", description: "Create or inspect Word and PDF documents." },
+  Browser: { title: "Browser automation", description: "Use your installed browser to visit and interact with websites." },
+  Image: { title: "Image understanding", description: "Let the assistant inspect images using the multimodal provider." },
+  Search: { title: "Web search", description: "Search the web using your Exa API key." },
+};
+
+const SETTINGS_TABS = [
+  { id: "provider", label: "AI & providers", description: "Model, API keys, and integrations" },
+  { id: "agent", label: "Agent behavior", description: "How the assistant works" },
+  { id: "context", label: "Conversation", description: "Context and memory limits" },
+  { id: "tools", label: "Tools", description: "What the assistant can access" },
+  { id: "developer", label: "Developer", description: "Diagnostics and troubleshooting" },
+] as const;
+type SettingsTab = (typeof SETTINGS_TABS)[number]["id"];
 
 const CUSTOM_PROVIDER_DEFAULT = {
   name: "custom",
   baseUrl: "",
   defaultModel: "",
+};
+
+const PROVIDER_LABELS: Record<SettingsValues["provider"], string> = {
+  deepseek: "DeepSeek",
+  gemini: "Gemini",
+  openai: "OpenAI (Chat Completions)",
+  "openai-responses": "OpenAI (Responses API)",
+  grok: "Grok (xAI)",
+  qwen: "Qwen (Alibaba)",
+  zai: "GLM (Z.AI)",
+  claude: "Claude (Anthropic)",
+  custom: "Custom (OpenAI-compatible)",
 };
 
 interface SettingsModalProps {
@@ -41,6 +74,25 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
+interface SettingsCardProps {
+  title: string;
+  description?: string;
+  children: ReactNode;
+  className?: string;
+}
+
+function SettingsCard({ title, description, children, className = "" }: SettingsCardProps) {
+  return (
+    <section className={`settings-card${className ? ` ${className}` : ""}`}>
+      <div className="settings-card-heading">
+        <div className="settings-card-title">{title}</div>
+        {description && <div className="settings-card-description">{description}</div>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
 export const SettingsModal = memo(function SettingsModal({
   values,
   hasApiKey,
@@ -49,6 +101,7 @@ export const SettingsModal = memo(function SettingsModal({
   mustConfigure,
   onClose,
 }: SettingsModalProps) {
+  const [activeTab, setActiveTab] = useState<SettingsTab>("provider");
   const [form, setForm] = useState<SettingsValues>({
     ...DEFAULT_SETTINGS,
     ...values,
@@ -61,6 +114,7 @@ export const SettingsModal = memo(function SettingsModal({
   const [multimodalApiKey, setMultimodalApiKey] = useState("");
   const [exaApiKey, setExaApiKey] = useState("");
   const [error, setError] = useState("");
+
   const set = <K extends keyof SettingsValues>(key: K, val: SettingsValues[K]) =>
     setForm((f) => ({ ...f, [key]: val }));
   const setCustomProvider = <K extends keyof SettingsValues["customProvider"]>(
@@ -71,7 +125,6 @@ export const SettingsModal = memo(function SettingsModal({
       ...f,
       customProvider: { ...f.customProvider, [key]: val },
     }));
-  /** Toggle a tool name in/out of the enabledTools array. */
   const toggleTool = (name: string) =>
     setForm((f) => ({
       ...f,
@@ -83,7 +136,8 @@ export const SettingsModal = memo(function SettingsModal({
   const save = () => {
     if (form.provider === "custom") {
       if (!form.customProvider.baseUrl.trim() || !form.customProvider.defaultModel.trim()) {
-        setError("Custom provider needs a base URL and default model.");
+        setError("Add a base URL and default model before saving the custom provider.");
+        setActiveTab("provider");
         return;
       }
     }
@@ -91,9 +145,7 @@ export const SettingsModal = memo(function SettingsModal({
     void ipc().saveSettings(
       {
         ...form,
-        // For the custom provider the "Default model" field above is the
-        // authoritative model — clear any stale model override so it can't
-        // silently shadow the custom default model the user just configured.
+        // The custom provider's default model is authoritative.
         ...(form.provider === "custom" ? { model: "" } : {}),
         customProvider: {
           name: form.customProvider.name.trim() || "custom",
@@ -112,290 +164,314 @@ export const SettingsModal = memo(function SettingsModal({
     onClose();
   };
 
+  const enabledToolCount = form.enabledTools.length;
+  const providerName = form.provider === "custom" ? form.customProvider.name || "Custom provider" : PROVIDER_LABELS[form.provider];
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h3>Siberflow settings</h3>
-        <div className="modal-subtitle">Configure your provider and agent behavior.</div>
+      <div className="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" onClick={(e) => e.stopPropagation()}>
+        <header className="settings-header">
+          <div>
+            <div className="settings-eyebrow">Preferences</div>
+            <h3 id="settings-title">Settings</h3>
+            <div className="modal-subtitle">Set up your AI connection and choose what Siberflow can do.</div>
+          </div>
+          <button className="settings-close" type="button" onClick={onClose} aria-label="Close settings">×</button>
+        </header>
+
         {mustConfigure && (
           <div className="must-configure">
-            An API key is required before you can chat. Fill in the form below.
+            <strong>One more step before you start</strong>
+            <span>Add an API key in AI &amp; providers to begin chatting.</span>
           </div>
         )}
 
-        <div className="form-section">
-          <div className="form-section-title">Provider</div>
-          <div className="form-row">
-            <label>Provider</label>
-            <select value={form.provider} onChange={(e) => set("provider", e.target.value as SettingsValues["provider"])}>
-              <option value="deepseek">deepseek</option>
-              <option value="gemini">gemini</option>
-              <option value="openai">openai (chat completions)</option>
-              <option value="openai-responses">openai-responses (/v1/responses)</option>
-              <option value="grok">grok (xAI)</option>
-              <option value="qwen">qwen (Alibaba)</option>
-              <option value="zai">zai (GLM / Z.AI)</option>
-              <option value="claude">claude (Anthropic)</option>
-              <option value="custom">custom (OpenAI-compatible)</option>
-            </select>
-          </div>
-          {form.provider === "custom" && (
-            <>
-              <div className="form-row">
-                <label>Custom provider name</label>
-                <input
-                  type="text"
-                  value={form.customProvider.name}
-                  onChange={(e) => setCustomProvider("name", e.target.value)}
-                  placeholder="custom"
-                />
-              </div>
-              <div className="form-row">
-                <label>Base URL</label>
-                <input
-                  type="text"
-                  value={form.customProvider.baseUrl}
-                  onChange={(e) => setCustomProvider("baseUrl", e.target.value)}
-                  placeholder="https://api.example.com/v1"
-                />
-                <div className="form-help">OpenAI-compatible root URL. Siberflow appends /chat/completions.</div>
-              </div>
-              <div className="form-row">
-                <label>Default model</label>
-                <input
-                  type="text"
-                  value={form.customProvider.defaultModel}
-                  onChange={(e) => setCustomProvider("defaultModel", e.target.value)}
-                  placeholder="model-name"
-                />
-                <div className="form-help">The model used for this custom provider. This is the authoritative model — the general "Model override" below is hidden for custom providers.</div>
-              </div>
-            </>
-          )}
-          <div className="form-row">
-            <label>API key</label>
-            <input
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder={hasApiKey ? "(stored — leave blank to keep)" : "paste your key"}
-              autoComplete="off"
-            />
-            <div className="form-help">Stored encrypted via OS keychain (safeStorage).</div>
-          </div>
-          {error && <div className="form-help form-error">{error}</div>}
-          {form.provider !== "custom" && (
-            <div className="form-row">
-              <label>Model override</label>
-              <input
-                type="text"
-                value={form.model}
-                onChange={(e) => set("model", e.target.value)}
-                placeholder="(leave empty for provider default)"
-              />
-              <div className="form-help">Optional. Overrides the provider's default model when non-empty.</div>
+        <div className="settings-layout">
+          <nav className="settings-nav" aria-label="Settings categories">
+            {SETTINGS_TABS.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                className={`settings-nav-item${activeTab === tab.id ? " active" : ""}`}
+                onClick={() => setActiveTab(tab.id)}
+              >
+                <span className="settings-nav-item-title">{tab.label}</span>
+                <span className="settings-nav-item-description">{tab.description}</span>
+                {tab.id === "tools" && <span className="settings-nav-badge">{enabledToolCount}</span>}
+              </button>
+            ))}
+            <div className="settings-nav-summary">
+              <span className="settings-summary-label">Current setup</span>
+              <strong>{providerName}</strong>
+              <span>{hasApiKey ? "API key saved" : "API key not set"}</span>
             </div>
-          )}
-        </div>
+          </nav>
 
-        <div className="form-section">
-          <div className="form-section-title">Agent</div>
-          <div className="form-row inline">
-            <label>Auto-continue cut-off responses</label>
-            <input type="checkbox" checked={form.autoContinue} onChange={(e) => set("autoContinue", e.target.checked)} />
-          </div>
-          <div className="form-row inline">
-            <label>Hide tool call details</label>
-            <input type="checkbox" checked={form.hideTools} onChange={(e) => set("hideTools", e.target.checked)} />
-          </div>
-          <div className="form-row inline">
-            <label>Pre-truncate large tool output (read_file, exec, write_file)</label>
-            <input type="checkbox" checked={form.preTruncate} onChange={(e) => set("preTruncate", e.target.checked)} />
-          </div>
-          <div className="form-row">
-            <label>Max iterations per turn</label>
-            <input
-              type="number"
-              min={1}
-              max={500}
-              value={form.maxIterations}
-              onChange={(e) => set("maxIterations", Number(e.target.value))}
-            />
-          </div>
-          <div className="form-row">
-            <label>Request delay (ms)</label>
-            <input
-              type="number"
-              min={0}
-              max={60000}
-              value={form.requestDelayMs}
-              onChange={(e) => set("requestDelayMs", Number(e.target.value))}
-            />
-            <div className="form-help">Jeda sebelum setiap request ke AI (anti rate-limit / block). 0 = tanpa delay. Default 1500 (1.5 detik).</div>
-          </div>
-        </div>
-
-        <div className="form-section">
-          <div className="form-section-title">Multimodal image analysis</div>
-          <div className="form-row">
-            <label>Base URL</label>
-            <input
-              type="text"
-              value={form.multimodalProvider.baseUrl}
-              onChange={(e) => set("multimodalProvider", { ...form.multimodalProvider, baseUrl: e.target.value })}
-              placeholder="https://api.openai.com/v1"
-            />
-            <div className="form-help">OpenAI-compatible root URL. analyze_image appends /chat/completions.</div>
-          </div>
-          <div className="form-row">
-            <label>Model</label>
-            <input
-              type="text"
-              value={form.multimodalProvider.model}
-              onChange={(e) => set("multimodalProvider", { ...form.multimodalProvider, model: e.target.value })}
-              placeholder="gpt-4o-mini"
-            />
-          </div>
-          <div className="form-row">
-            <label>API key</label>
-            <input
-              type="password"
-              value={multimodalApiKey}
-              onChange={(e) => setMultimodalApiKey(e.target.value)}
-              placeholder={hasMultimodalApiKey ? "(stored — leave blank to keep)" : "paste your key"}
-              autoComplete="off"
-            />
-            <div className="form-help">Used only by analyze_image. Enable analyze_image in Tools.</div>
-          </div>
-        </div>
-
-        <div className="form-section">
-          <div className="form-section-title">Web search (Exa)</div>
-          <div className="form-row">
-            <label>API key</label>
-            <input
-              type="password"
-              value={exaApiKey}
-              onChange={(e) => setExaApiKey(e.target.value)}
-              placeholder={hasExaApiKey ? "(stored — leave blank to keep)" : "paste your key"}
-              autoComplete="off"
-            />
-            <div className="form-help">
-              Used only by web_search. The web_search toggle in Tools is disabled until this key is set.
-            </div>
-          </div>
-        </div>
-
-        <div className="form-section">
-          <div className="form-section-title">Context optimization</div>
-          <div className="form-row inline">
-            <label>Context optimization (drop/summary/recent)</label>
-            <input type="checkbox" checked={form.contextOptimize} onChange={(e) => set("contextOptimize", e.target.checked)} />
-          </div>
-          <div className="form-row">
-            <label>Context optimize mode</label>
-            <select
-              value={form.contextOptimizeMode}
-              onChange={(e) =>
-                set(
-                  "contextOptimizeMode",
-                  e.target.value as "drop" | "summary" | "recent" | "compact",
-                )
-              }
-            >
-              <option value="drop">drop</option>
-              <option value="summary">summary</option>
-              <option value="recent">recent</option>
-              <option value="compact">compact (AI summary)</option>
-            </select>
-          </div>
-          {form.contextOptimizeMode === "compact" && (
-            <>
-              <div className="form-row">
-                <label>Context window (max tokens)</label>
-                <input
-                  type="number"
-                  min={1000}
-                  step={1000}
-                  value={form.contextWindow}
-                  onChange={(e) => set("contextWindow", Number(e.target.value))}
-                />
-              </div>
-              <div className="form-row">
-                <label>Compact threshold (0.1–1)</label>
-                <input
-                  type="number"
-                  min={0.1}
-                  max={1}
-                  step={0.05}
-                  value={form.compactThreshold}
-                  onChange={(e) => set("compactThreshold", Number(e.target.value))}
-                />
-              </div>
-              <div className="form-row">
-                <label>Keep recent turns</label>
-                <input
-                  type="number"
-                  min={0}
-                  max={20}
-                  value={form.compactKeepRecent}
-                  onChange={(e) => set("compactKeepRecent", Number(e.target.value))}
-                />
-              </div>
-            </>
-          )}
-        </div>
-
-        <div className="form-section">
-          <div className="form-section-title">
-            Tools <span className="form-section-hint">(disabled tools aren't sent to the AI)</span>
-          </div>
-          <div className="tools-grid">
-            {TOGGLE_TOOLS.map((t) => {
-              // Tools that depend on a separately-stored API key are disabled
-              // (and forced off) until that key exists, so the model never gets
-              // a tool it can't actually call. Currently: web_search needs Exa.
-              const needsExaKey = t.name === "web_search";
-              const exaLocked = needsExaKey && !hasExaApiKey;
-              const disabled = exaLocked;
-              const checked = exaLocked ? false : form.enabledTools.includes(t.name);
-              return (
-                <label key={t.name} className={`tool-toggle${disabled ? " tool-toggle-disabled" : ""}`}>
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    disabled={disabled}
-                    onChange={() => !disabled && toggleTool(t.name)}
-                  />
-                  <span className="tool-toggle-name">{t.label}</span>
-                  <span className="tool-toggle-group">
-                    {exaLocked ? `${t.group} — set API key first` : t.group}
+          <div className="settings-content">
+            {activeTab === "provider" && (
+              <div className="settings-page">
+                <div className="settings-page-heading">
+                  <div>
+                    <h4>AI &amp; providers</h4>
+                    <p>Choose the service that powers the assistant. API keys are stored securely in your OS keychain.</p>
+                  </div>
+                  <span className={`settings-connection-status ${hasApiKey ? "connected" : "needs-setup"}`}>
+                    <span className="settings-status-dot" />
+                    {hasApiKey ? "Ready to chat" : "Needs API key"}
                   </span>
-                </label>
-              );
-            })}
-          </div>
-          <div className="form-help">
-            Default: file operations only. Enable exec/db/ssh/excel as needed.
-            Task checklist (task_update) is controlled by the checkbox above and
-            can't be disabled individually.
+                </div>
+
+                <SettingsCard title="Primary AI provider" description="Used for chat, reasoning, and tool calls.">
+                  <div className="settings-field">
+                    <label htmlFor="settings-provider">Provider</label>
+                    <select id="settings-provider" value={form.provider} onChange={(e) => set("provider", e.target.value as SettingsValues["provider"])}>
+                      <option value="deepseek">DeepSeek</option>
+                      <option value="gemini">Gemini</option>
+                      <option value="openai">OpenAI (Chat Completions)</option>
+                      <option value="openai-responses">OpenAI (Responses API)</option>
+                      <option value="grok">Grok (xAI)</option>
+                      <option value="qwen">Qwen (Alibaba)</option>
+                      <option value="zai">GLM (Z.AI)</option>
+                      <option value="claude">Claude (Anthropic)</option>
+                      <option value="custom">Custom (OpenAI-compatible)</option>
+                    </select>
+                    <span className="settings-help">The provider selected here handles your normal conversations.</span>
+                  </div>
+
+                  {form.provider === "custom" && (
+                    <div className="settings-nested-card">
+                      <div className="settings-nested-title">Custom provider details</div>
+                      <div className="settings-field">
+                        <label htmlFor="custom-provider-name">Display name</label>
+                        <input id="custom-provider-name" type="text" value={form.customProvider.name} onChange={(e) => setCustomProvider("name", e.target.value)} placeholder="My AI provider" />
+                      </div>
+                      <div className="settings-field">
+                        <label htmlFor="custom-provider-url">Base URL</label>
+                        <input id="custom-provider-url" type="text" value={form.customProvider.baseUrl} onChange={(e) => setCustomProvider("baseUrl", e.target.value)} placeholder="https://api.example.com/v1" />
+                        <span className="settings-help">OpenAI-compatible root URL. Siberflow adds <code>/chat/completions</code>.</span>
+                      </div>
+                      <div className="settings-field">
+                        <label htmlFor="custom-provider-model">Default model</label>
+                        <input id="custom-provider-model" type="text" value={form.customProvider.defaultModel} onChange={(e) => setCustomProvider("defaultModel", e.target.value)} placeholder="model-name" />
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="settings-field">
+                    <div className="settings-field-title-row">
+                      <label htmlFor="settings-api-key">API key</label>
+                      <span className={`settings-inline-status ${hasApiKey ? "saved" : ""}`}>{hasApiKey ? "Saved securely" : "Required"}</span>
+                    </div>
+                    <input id="settings-api-key" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder={hasApiKey ? "Leave blank to keep the saved key" : "Paste your API key"} autoComplete="off" />
+                    <span className="settings-help">Your key is encrypted and stored by the operating system. It is never shown here.</span>
+                  </div>
+
+                  {form.provider !== "custom" && (
+                    <div className="settings-field">
+                      <label htmlFor="settings-model">Model override <span className="settings-optional">Optional</span></label>
+                      <input id="settings-model" type="text" value={form.model} onChange={(e) => set("model", e.target.value)} placeholder="Use the provider default" />
+                      <span className="settings-help">Leave this empty unless you need a specific model.</span>
+                    </div>
+                  )}
+                  {error && <div className="settings-error">{error}</div>}
+                </SettingsCard>
+
+                <SettingsCard title="Image understanding" description="Allow Siberflow to inspect images attached to a conversation.">
+                  <div className="settings-field settings-field-grid">
+                    <div>
+                      <label htmlFor="multimodal-url">Image AI base URL</label>
+                      <input id="multimodal-url" type="text" value={form.multimodalProvider.baseUrl} onChange={(e) => set("multimodalProvider", { ...form.multimodalProvider, baseUrl: e.target.value })} placeholder="https://api.openai.com/v1" />
+                    </div>
+                    <div>
+                      <label htmlFor="multimodal-model">Image model</label>
+                      <input id="multimodal-model" type="text" value={form.multimodalProvider.model} onChange={(e) => set("multimodalProvider", { ...form.multimodalProvider, model: e.target.value })} placeholder="gpt-4o-mini" />
+                    </div>
+                  </div>
+                  <div className="settings-field">
+                    <div className="settings-field-title-row">
+                      <label htmlFor="multimodal-api-key">Image AI API key</label>
+                      <span className={`settings-inline-status ${hasMultimodalApiKey ? "saved" : ""}`}>{hasMultimodalApiKey ? "Saved securely" : "Not set"}</span>
+                    </div>
+                    <input id="multimodal-api-key" type="password" value={multimodalApiKey} onChange={(e) => setMultimodalApiKey(e.target.value)} placeholder={hasMultimodalApiKey ? "Leave blank to keep the saved key" : "Paste a key for the image provider"} autoComplete="off" />
+                    <span className="settings-help">This key is only used when the <strong>Analyze images</strong> tool is enabled.</span>
+                  </div>
+                </SettingsCard>
+
+                <SettingsCard title="Web search" description="Connect Exa so the assistant can look up current information online.">
+                  <div className="settings-field">
+                    <div className="settings-field-title-row">
+                      <label htmlFor="exa-api-key">Exa API key</label>
+                      <span className={`settings-inline-status ${hasExaApiKey ? "saved" : ""}`}>{hasExaApiKey ? "Saved securely" : "Not set"}</span>
+                    </div>
+                    <input id="exa-api-key" type="password" value={exaApiKey} onChange={(e) => setExaApiKey(e.target.value)} placeholder={hasExaApiKey ? "Leave blank to keep the saved key" : "Paste your Exa API key"} autoComplete="off" />
+                    <span className="settings-help">After saving, enable <strong>Search the web</strong> from the Tools tab.</span>
+                  </div>
+                </SettingsCard>
+              </div>
+            )}
+
+            {activeTab === "agent" && (
+              <div className="settings-page">
+                <div className="settings-page-heading">
+                  <div>
+                    <h4>Agent behavior</h4>
+                    <p>Control how much independence the assistant has while completing a request.</p>
+                  </div>
+                </div>
+
+                <SettingsCard title="Assistant behavior" description="These options affect every new request.">
+                  <label className="settings-switch">
+                    <span className="settings-switch-copy"><strong>Continue long responses</strong><small>Automatically continue when the provider stops before the answer is complete.</small></span>
+                    <input type="checkbox" checked={form.autoContinue} onChange={(e) => set("autoContinue", e.target.checked)} />
+                    <span className="settings-switch-track"><span /></span>
+                  </label>
+                  <label className="settings-switch">
+                    <span className="settings-switch-copy"><strong>Hide technical tool details</strong><small>Keep tool calls collapsed so the conversation is easier to read.</small></span>
+                    <input type="checkbox" checked={form.hideTools} onChange={(e) => set("hideTools", e.target.checked)} />
+                    <span className="settings-switch-track"><span /></span>
+                  </label>
+                  <label className="settings-switch">
+                    <span className="settings-switch-copy"><strong>Trim oversized tool output</strong><small>Reduce very large file and terminal results before sending them back to the AI.</small></span>
+                    <input type="checkbox" checked={form.preTruncate} onChange={(e) => set("preTruncate", e.target.checked)} />
+                    <span className="settings-switch-track"><span /></span>
+                  </label>
+                </SettingsCard>
+
+                <SettingsCard title="Request limits" description="Higher limits can help complex tasks but may use more time or tokens.">
+                  <div className="settings-field-grid">
+                    <div className="settings-field">
+                      <label htmlFor="max-iterations">Max steps per request</label>
+                      <input id="max-iterations" type="number" min={1} max={500} value={form.maxIterations} onChange={(e) => set("maxIterations", Number(e.target.value))} />
+                      <span className="settings-help">Default: 50</span>
+                    </div>
+                    <div className="settings-field">
+                      <label htmlFor="request-delay">Delay between requests</label>
+                      <div className="settings-input-suffix"><input id="request-delay" type="number" min={0} max={60000} value={form.requestDelayMs} onChange={(e) => set("requestDelayMs", Number(e.target.value))} /><span>ms</span></div>
+                      <span className="settings-help">Use a delay to avoid rate limits. 0 turns it off.</span>
+                    </div>
+                  </div>
+                </SettingsCard>
+              </div>
+            )}
+
+            {activeTab === "context" && (
+              <div className="settings-page">
+                <div className="settings-page-heading">
+                  <div>
+                    <h4>Conversation &amp; context</h4>
+                    <p>Keep long conversations useful by deciding how older messages are handled.</p>
+                  </div>
+                </div>
+
+                <SettingsCard title="Context optimization" description="Siberflow can reduce older context when a conversation gets large.">
+                  <label className="settings-switch">
+                    <span className="settings-switch-copy"><strong>Optimize long conversations</strong><small>Automatically manage older messages so the assistant stays within the model's context window.</small></span>
+                    <input type="checkbox" checked={form.contextOptimize} onChange={(e) => set("contextOptimize", e.target.checked)} />
+                    <span className="settings-switch-track"><span /></span>
+                  </label>
+                  <div className="settings-field">
+                    <label htmlFor="context-mode">Optimization strategy</label>
+                    <select id="context-mode" value={form.contextOptimizeMode} onChange={(e) => set("contextOptimizeMode", e.target.value as SettingsValues["contextOptimizeMode"]) }>
+                      <option value="compact">Compact with an AI summary (recommended)</option>
+                      <option value="summary">Keep a short summary</option>
+                      <option value="recent">Keep only recent messages</option>
+                      <option value="drop">Drop older messages</option>
+                    </select>
+                    <span className="settings-help">Compact mode preserves the most useful history while using fewer tokens.</span>
+                  </div>
+                </SettingsCard>
+
+                {form.contextOptimizeMode === "compact" && (
+                  <SettingsCard title="Compact mode details" description="These advanced values are only used with the recommended compact strategy.">
+                    <div className="settings-field-grid settings-field-grid-three">
+                      <div className="settings-field">
+                        <label htmlFor="context-window">Context window</label>
+                        <div className="settings-input-suffix"><input id="context-window" type="number" min={1000} step={1000} value={form.contextWindow} onChange={(e) => set("contextWindow", Number(e.target.value))} /><span>tokens</span></div>
+                      </div>
+                      <div className="settings-field">
+                        <label htmlFor="compact-threshold">Compact at</label>
+                        <div className="settings-input-suffix"><input id="compact-threshold" type="number" min={0.1} max={1} step={0.05} value={form.compactThreshold} onChange={(e) => set("compactThreshold", Number(e.target.value))} /><span>ratio</span></div>
+                      </div>
+                      <div className="settings-field">
+                        <label htmlFor="recent-turns">Recent turns kept</label>
+                        <input id="recent-turns" type="number" min={0} max={20} value={form.compactKeepRecent} onChange={(e) => set("compactKeepRecent", Number(e.target.value))} />
+                      </div>
+                    </div>
+                  </SettingsCard>
+                )}
+              </div>
+            )}
+
+            {activeTab === "tools" && (
+              <div className="settings-page">
+                <div className="settings-page-heading">
+                  <div>
+                    <h4>Tools &amp; permissions</h4>
+                    <p>Choose the actions the assistant may use. Start with safe file tools and enable extra access only when needed.</p>
+                  </div>
+                  <span className="settings-tool-count">{enabledToolCount} enabled</span>
+                </div>
+
+                <div className="settings-tool-groups">
+                  {TOOL_GROUPS.map((group) => {
+                    const meta = TOOL_GROUP_META[group]!;
+                    const groupTools = TOGGLE_TOOLS.filter((tool) => tool.group === group);
+                    return (
+                      <section className="settings-tool-group" key={group}>
+                        <div className="settings-tool-group-heading">
+                          <div>
+                            <h5>{meta.title}</h5>
+                            <p>{meta.description}</p>
+                          </div>
+                          <span>{groupTools.filter((tool) => form.enabledTools.includes(tool.name)).length}/{groupTools.length}</span>
+                        </div>
+                        <div className="settings-tool-list">
+                          {groupTools.map((tool) => {
+                            const exaLocked = tool.name === "web_search" && !hasExaApiKey;
+                            const checked = exaLocked ? false : form.enabledTools.includes(tool.name);
+                            return (
+                              <label key={tool.name} className={`settings-tool-toggle${exaLocked ? " disabled" : ""}`}>
+                                <input type="checkbox" checked={checked} disabled={exaLocked} onChange={() => !exaLocked && toggleTool(tool.name)} />
+                                <span className="settings-tool-check" />
+                                <span className="settings-tool-copy"><strong>{tool.label}</strong><small>{exaLocked ? "Add an Exa API key first" : tool.name}</small></span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </section>
+                    );
+                  })}
+                </div>
+                <div className="settings-info-callout">Tools are only made available to the assistant when enabled here. You can change these permissions at any time.</div>
+              </div>
+            )}
+
+            {activeTab === "developer" && (
+              <div className="settings-page">
+                <div className="settings-page-heading">
+                  <div>
+                    <h4>Developer options</h4>
+                    <p>Diagnostic controls for troubleshooting. Most users can leave these settings unchanged.</p>
+                  </div>
+                </div>
+                <SettingsCard title="Diagnostics" description="Debug output is written to the desktop process stderr, not shown in your chat.">
+                  <label className="settings-switch">
+                    <span className="settings-switch-copy"><strong>Enable debug logging</strong><small>Include extra technical details in logs when investigating a problem.</small></span>
+                    <input type="checkbox" checked={form.debug} onChange={(e) => set("debug", e.target.checked)} />
+                    <span className="settings-switch-track"><span /></span>
+                  </label>
+                </SettingsCard>
+                <div className="settings-info-callout">If you are reporting a problem, turn this on, reproduce the issue, then include the relevant log output with your report.</div>
+              </div>
+            )}
           </div>
         </div>
 
-        <div className="form-section">
-          <div className="form-section-title">Developer</div>
-          <div className="form-row inline">
-            <label>Debug logging (stderr)</label>
-            <input type="checkbox" checked={form.debug} onChange={(e) => set("debug", e.target.checked)} />
-          </div>
-        </div>
-
-        <div className="modal-actions">
-          {!mustConfigure && (
-            <button className="btn-secondary" onClick={onClose}>Cancel</button>
-          )}
-          <button className="btn-primary" onClick={save}>Save</button>
-        </div>
+        <footer className="modal-actions settings-actions">
+          <span className="settings-footer-hint">Changes are applied when you save.</span>
+          {!mustConfigure && <button className="btn-secondary" type="button" onClick={onClose}>Cancel</button>}
+          <button className="btn-primary" type="button" onClick={save}>Save settings</button>
+        </footer>
       </div>
     </div>
   );

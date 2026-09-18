@@ -188,6 +188,8 @@ export interface AgentEvents {
   onToolBatchStart?: (count: number) => void;
   /** Fires right AFTER a tool-call batch completes (mirrors onToolBatchStart). */
   onToolBatchEnd?: () => void;
+  /** Fires after all tools in the current assistant iteration have completed. */
+  onToolRoundEnd?: () => void;
   /**
    * Fires right BEFORE the "compact" mode makes an LLM summarization call
    * (start-of-turn `generateSummaryIncremental` or mid-loop
@@ -613,6 +615,7 @@ export class Agent {
               if (batchCount >= 2) {
                 events.onToolBatchEnd?.();
               }
+              events.onToolRoundEnd?.();
               return stopAnswer.assistant.content ?? "";
             } else {
               result = await this.registry.execute(
@@ -659,6 +662,7 @@ export class Agent {
         if (batchCount >= 2) {
           events.onToolBatchEnd?.();
         }
+        events.onToolRoundEnd?.();
 
         // Mid-turn sliding-window compaction: if context filled up DURING
         // this iteration loop, fold the oldest current-turn tool results

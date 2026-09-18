@@ -1,7 +1,8 @@
 // Renders a single message bubble. Assistant turns render an ordered list of
 // text + tool content blocks in the exact order they streamed.
 
-import { memo, useState, type ComponentPropsWithoutRef } from "react";
+import { memo, useEffect, useState, type ComponentPropsWithoutRef } from "react";
+import { ipc } from "../ipc.js";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Highlight, themes } from "prism-react-renderer";
@@ -280,14 +281,107 @@ interface UserMessageProps {
   content: string;
 }
 
+interface ParsedUserContent {
+  text: string;
+  images: string[];
+  files: string[];
+}
+
+function fileName(path: string): string {
+  const parts = path.replace(/\\/g, "/").split("/").filter(Boolean);
+  return parts[parts.length - 1] ?? path;
+}
+
+function visibleToolArgs(name: string, args: string): string {
+  if (name !== "analyze_image") return args;
+  try {
+    const parsed = JSON.parse(args) as Record<string, unknown>;
+    if (typeof parsed.image === "string") {
+      parsed.image = "<attached image>";
+      return JSON.stringify(parsed, null, 2);
+    }
+  } catch {
+    // Keep malformed tool arguments visible for diagnostics.
+  }
+  return args;
+}
+
+/** Hide internal attachment paths while keeping their semantic sections. */
+function parseUserContent(content: string): ParsedUserContent {
+  if (!content.includes("Attached files:\n") && !content.includes("Attached images (use analyze_image):\n")) {
+    return { text: content, images: [], files: [] };
+  }
+
+  const images: string[] = [];
+  const files: string[] = [];
+  const visible: string[] = [];
+  let section: "images" | "files" | null = null;
+  for (const line of content.split("\n")) {
+    if (line === "Attached images (use analyze_image):") {
+      section = "images";
+      continue;
+    }
+    if (line === "Attached files:") {
+      section = "files";
+      continue;
+    }
+    if (section && line.startsWith("- ")) {
+      const path = line.slice(2).trim();
+      if (path) (section === "images" ? images : files).push(path);
+      continue;
+    }
+    if (section && line.trim() === "") {
+      section = null;
+      continue;
+    }
+    section = null;
+    visible.push(line);
+  }
+
+  return { text: visible.join("\n").trim(), images, files };
+}
+
+const ImageAttachment = memo(function ImageAttachment({ path }: { path: string }) {
+  const [src, setSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSrc(null);
+    void ipc().getImagePreview(path).then((preview) => {
+      if (!cancelled) setSrc(preview);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [path]);
+
+  if (!src) {
+    return <div className="user-image-attachment unavailable">Gambar tidak tersedia</div>;
+  }
+  return <img className="user-image-attachment" src={src} alt={fileName(path)} />;
+});
+
 export const UserMessage = memo(function UserMessage({ content }: UserMessageProps) {
+  const parsed = parseUserContent(content);
   return (
     <div className="msg user">
       <div className="role-label">
         <span className="dot" />
         You
       </div>
-      <div className="body">{content}</div>
+      <div className="body">
+        {(parsed.images.length > 0 || parsed.files.length > 0) && (
+          <div className="user-attachments">
+            {parsed.images.map((path) => <ImageAttachment key={path} path={path} />)}
+            {parsed.files.map((path) => (
+              <div className="user-file-attachment" key={path} title={fileName(path)}>
+                {fileName(path)}
+              </div>
+            ))}
+          </div>
+        )}
+        {parsed.text && <div className="user-message-text">{parsed.text}</div>}
+      </div>
     </div>
   );
 });
@@ -297,6 +391,7 @@ export const UserMessage = memo(function UserMessage({ content }: UserMessagePro
 interface AssistantMessageProps {
   turn: AssistantTurn;
   hideTools: boolean;
+  waitingForAssistant?: boolean;
   showActions: boolean;
   onRegenerate: () => void;
   onEdit: () => void;
@@ -305,15 +400,46 @@ interface AssistantMessageProps {
 export const AssistantMessage = memo(function AssistantMessage({
   turn,
   hideTools,
+  waitingForAssistant = false,
   showActions,
   onRegenerate,
   onEdit,
 }: AssistantMessageProps) {
+  const [showWork, setShowWork] = useState(false);
   const visibleBlocks = turn.blocks.filter(
     (b) => !(b.kind === "tool" && b.tool.name === "__hidden__"),
   );
   const renderable = groupBlocks(visibleBlocks);
+  // For restored history, the last text block is the final answer. Everything
+  // before it is the turn's work: intermediate assistant content plus tools.
+  // Keeping those blocks together preserves the real iteration order when the
+  // user expands "Show work".
+  const finalText = turn.historical
+    ? [...renderable].reverse().find((blk) => blk.kind === "text")
+    : undefined;
+  const workBlocks = turn.historical && finalText
+    ? renderable.filter((blk) => blk !== finalText)
+    : turn.historical
+      ? renderable
+      : [];
+  const toolCount = visibleBlocks.filter((blk) => blk.kind === "tool").length;
   const isEmpty = visibleBlocks.length === 0;
+
+  const renderBlock = (blk: RenderableBlock) => {
+    if (blk.kind === "text") {
+      return (
+        <div className="seg" key={blk.id}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+            {blk.text}
+          </ReactMarkdown>
+        </div>
+      );
+    }
+    if (blk.kind === "tool-group") {
+      return <ToolGroupCard key={blk.key} tools={blk.tools} compact={hideTools} />;
+    }
+    return <ToolBlock key={blk.id} name={blk.tool.name} args={blk.tool.args} result={blk.tool.result} compact={hideTools} />;
+  };
 
   return (
     <div className="msg assistant">
@@ -322,35 +448,43 @@ export const AssistantMessage = memo(function AssistantMessage({
         Siberflow
       </div>
       <div className="body">
-        {renderable.map((blk) => {
-          if (blk.kind === "text") {
-            return (
-              <div className="seg" key={blk.id}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                  {blk.text}
-                </ReactMarkdown>
+        {turn.historical ? (
+          <>
+            {workBlocks.length > 0 && (
+              <button
+                type="button"
+                className="work-toggle"
+                onClick={() => setShowWork((value) => !value)}
+                aria-expanded={showWork}
+              >
+                <ChevronDownIcon size={10} className={showWork ? "" : "rotated"} />
+                {showWork
+                  ? "Hide work"
+                  : toolCount > 0
+                    ? `Show work · ${toolCount} tool call${toolCount === 1 ? "" : "s"}`
+                    : "Show earlier work"}
+              </button>
+            )}
+            {showWork && workBlocks.length > 0 && (
+              <div className="historical-work">
+                {workBlocks.map(renderBlock)}
               </div>
-            );
-          }
-          if (blk.kind === "tool-group") {
-            return (
-              <ToolGroupCard
-                key={blk.key}
-                tools={blk.tools}
-                compact={hideTools}
-              />
-            );
-          }
-          return (
-            <ToolBlock
-              key={blk.id}
-              name={blk.tool.name}
-              args={blk.tool.args}
-              result={blk.tool.result}
-              compact={hideTools}
-            />
-          );
-        })}
+            )}
+            {finalText && renderBlock(finalText)}
+          </>
+        ) : (
+          renderable.map(renderBlock)
+        )}
+        {waitingForAssistant && (
+          <div className="iteration-loading" role="status" aria-live="polite">
+            <span>Menunggu respons AI</span>
+            <span className="thinking-dots">
+              <span />
+              <span />
+              <span />
+            </span>
+          </div>
+        )}
         {isEmpty && (
           <span className="thinking-dots">
             <span />
@@ -406,7 +540,7 @@ function ToolBlock({ name, args, result, compact = false }: ToolBlockProps) {
       </div>
       {!compact && open && !running && (
         <div className="tool-content">
-          {args && <pre>{args}</pre>}
+          {args && <pre>{visibleToolArgs(name, args)}</pre>}
           {result && (
             <div className="tool-result">
               <pre>{result.length > 400 ? result.slice(0, 400) + "…" : result}</pre>

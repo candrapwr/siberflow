@@ -2,8 +2,8 @@
 // streaming events to the renderer via MainEvent. This is the desktop
 // equivalent of the VSCode extension's ChatViewProvider (chat-panel.ts).
 
-import { copyFile, mkdir, stat } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { copyFile, mkdir, readFile, realpath, stat } from "node:fs/promises";
+import { basename, extname, join, relative, isAbsolute } from "node:path";
 import {
   Agent,
   buildSystemPrompt,
@@ -30,7 +30,7 @@ import {
 import type {
   BannerInfo,
   CurrentSessionInfo,
-  DocKind,
+  AttachmentKind,
   HistoryEntry,
   MainEvent,
   PickedFile,
@@ -41,14 +41,33 @@ import type {
 import { getApiKey, setApiKey as storeApiKey, deleteApiKey, MULTIMODAL_SECRET_KEY, EXA_SECRET_KEY } from "./secrets.js";
 import { loadSettings, saveSettings as persistSettings } from "./settings.js";
 
-/** Omit system + tool messages, keeping only user/assistant content for display. */
+/** Project the full persisted message history into renderer-safe history data. */
 function filterHistory(messages: Session["messages"]): HistoryEntry[] {
   const out: HistoryEntry[] = [];
   for (const m of messages) {
     if (m.role === "user") {
       out.push({ role: "user", content: m.content });
-    } else if (m.role === "assistant" && m.content) {
-      out.push({ role: "assistant", content: m.content });
+    } else if (m.role === "assistant") {
+      out.push({
+        role: "assistant",
+        content: m.content,
+        ...(m.toolCalls && m.toolCalls.length > 0
+          ? {
+              toolCalls: m.toolCalls.map((call) => ({
+                id: call.id,
+                name: call.name,
+                arguments: call.arguments,
+              })),
+            }
+          : {}),
+      });
+    } else if (m.role === "tool") {
+      out.push({
+        role: "tool",
+        toolCallId: m.toolCallId,
+        name: m.name,
+        content: m.content,
+      });
     }
   }
   return out;
@@ -104,20 +123,38 @@ function deriveSessionName(input: string): string {
 /**
  * Sanitize an uploaded filename for safe storage inside the project sandbox:
  * keep alphanumerics, dot, dash, underscore; collapse everything else to a
- * dash; de-duplicate against `used` by appending `-2`, `-3`, … before `.xlsx`.
+ * dash; de-duplicate against `used` by appending `-2`, `-3`, … before the
+ * original extension.
  */
 function sanitizeFileName(original: string, used: Set<string>): string {
   const lower = original.toLowerCase();
   const dot = lower.lastIndexOf(".");
   const stem = dot > 0 ? lower.slice(0, dot) : lower;
+  const extension = dot > 0 ? lower.slice(dot) : ".bin";
   const cleanedStem = stem.replace(/[^a-z0-9._-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "file";
-  let candidate = `${cleanedStem}.xlsx`;
+  let candidate = `${cleanedStem}${extension}`;
   let n = 2;
   while (used.has(candidate)) {
-    candidate = `${cleanedStem}-${n}.xlsx`;
+    candidate = `${cleanedStem}-${n}${extension}`;
     n++;
   }
   return candidate;
+}
+
+function mimeForImage(path: string): string | null {
+  switch (extname(path).toLowerCase()) {
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".png":
+      return "image/png";
+    case ".webp":
+      return "image/webp";
+    case ".gif":
+      return "image/gif";
+    default:
+      return null;
+  }
 }
 
 export class AgentHost {
@@ -336,14 +373,15 @@ export class AgentHost {
     const modelOverride = this.settings.model.trim();
     const model = modelOverride.length > 0 ? modelOverride : this.provider.defaultModel;
     const systemPrompt = buildSystemPrompt({
-      interface: "vscode",
+      interface: "desktop",
+      tasksEnabled: true,
       summaryMode: this.summaryModeActive(),
       enabledToolNames: this.registry.list().map((t) => t.name),
     });
     const workdir = this.current?.projectDir;
-    // uploadDir is the per-session tmp dir where uploaded Excels live. Pass it
-    // so excel_script can whitelist reads from there even though it's outside
-    // the project sandbox.
+    // uploadDir is the per-session tmp dir where uploaded attachments live.
+    // Pass it so document and image tools can whitelist reads from there even
+    // though it's outside the project sandbox.
     const uploadDir = this.current ? uploadsDirFor(this.current.id) : undefined;
     return new Agent({
       provider: this.provider,
@@ -518,12 +556,11 @@ export class AgentHost {
    * Copy a list of source file paths into the session's per-session upload dir
    * in the OS tmp folder (NOT the project dir — keeps the workspace clean and
    * out of git). Filenames are sanitized; collisions are de-duplicated with a
-   * short suffix. Accepted: `.xlsx`, `.docx`, `.pdf`. Returns metadata with the
-   * absolute destination path + `kind` (derived from extension) so the renderer
-   * can pick the right chip icon and the prompt builder can name the matching
-   * tool (`excel_script` / `docx_script` / `pdf_script`), which whitelists this
-   * dir via the agent's `uploadDir` option. The folder is removed automatically
-   * when the session is deleted.
+   * short suffix. Accepted: `.xlsx`, `.docx`, `.pdf`, `.png`, `.jpg`, `.jpeg`,
+   * `.webp`, and `.gif`. Returns metadata with the absolute destination path +
+   * `kind` (derived from extension) so the renderer can pick the right chip icon
+   * and prompt builder. The folder is removed automatically when the session is
+   * deleted.
    */
   async copyUploads(srcPaths: string[]): Promise<PickedFile[]> {
     if (!this.current) {
@@ -539,11 +576,12 @@ export class AgentHost {
     for (const src of srcPaths) {
       const original = basename(src);
       const lower = original.toLowerCase();
-      let kind: DocKind;
+      let kind: AttachmentKind;
       if (lower.endsWith(".xlsx")) kind = "excel";
       else if (lower.endsWith(".docx")) kind = "docx";
       else if (lower.endsWith(".pdf")) kind = "pdf";
-      else throw new Error(`File "${original}" bukan .xlsx/.docx/.pdf. Hanya dokumen yang didukung.`);
+      else if ([".png", ".jpg", ".jpeg", ".webp", ".gif"].some((ext) => lower.endsWith(ext))) kind = "image";
+      else throw new Error(`File "${original}" bukan format dokumen atau gambar yang didukung.`);
       const safe = sanitizeFileName(original, usedNames);
       usedNames.add(safe);
       const dest = join(destDir, safe);
@@ -555,6 +593,29 @@ export class AgentHost {
       out.push({ name: original, kind, relPath: dest, bytes: stats.size });
     }
     return out;
+  }
+
+  /**
+   * Read an uploaded image as a data URL for the desktop chat preview.
+   * Resolve and validate both paths so the renderer cannot use this IPC method
+   * to read arbitrary files from the machine.
+   */
+  async getImagePreview(imagePath: string): Promise<string | null> {
+    const session = this.current;
+    if (!session || !isAbsolute(imagePath)) return null;
+    const uploadDir = uploadsDirFor(session.id);
+    try {
+      const [uploadReal, imageReal] = await Promise.all([realpath(uploadDir), realpath(imagePath)]);
+      const rel = relative(uploadReal, imageReal);
+      if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return null;
+      const mime = mimeForImage(imageReal);
+      if (!mime) return null;
+      const file = await readFile(imageReal);
+      if (file.byteLength > 20 * 1024 * 1024) return null;
+      return `data:${mime};base64,${file.toString("base64")}`;
+    } catch {
+      return null;
+    }
   }
 
   async deleteSessionById(id: string): Promise<void> {
@@ -685,6 +746,7 @@ export class AgentHost {
           // Close the current iteration so the next one opens a fresh bubble.
           this.emit({ type: "iteration-end" });
         },
+        onToolRoundEnd: () => this.emit({ type: "tool-round-end" }),
         onToolCallStart: (index, name) =>
           this.emit({ type: "tool-call-start", index, name }),
         onToolCallArgs: (index, delta) =>
@@ -846,7 +908,7 @@ export class AgentHost {
       this.emit({ type: "history", messages: filterHistory(this.current.messages) });
     }
     if (this.agent) {
-      this.emit({ type: "tasks", tasks: this.agent.getTasks() as Task[] });
+      this.emit({ type: "tasks", tasks: this.agent.getTasks() as Task[], restored: true });
     }
     this.emitUsage();
   }

@@ -53,6 +53,7 @@ export const CheckIcon = svg(<><path d="M20 6L9 17l-5-5" strokeWidth={2.5} /></>
 export const SearchIcon = svg(<><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></>);
 export const PaperclipIcon = svg(<><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" /></>);
 export const XIcon = svg(<><path d="M18 6 6 18" /><path d="m6 6 12 12" /></>);
+export const MoreHorizontalIcon = svg(<><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none" /></>);
 /** Spreadsheet document icon — used for .xlsx attachments. */
 export const FileExcelIcon = svg(
   <>
@@ -78,5 +79,13 @@ export const FilePdfIcon = svg(
     <path d="M14 2v6h6" />
     <path d="M8.5 13v5h1.5a1.5 1.5 0 0 0 0-3H8.5" />
     <path d="M13 13v5h1.5a1.5 1.5 0 0 0 1.5-1.5v-2a1.5 1.5 0 0 0-1.5-1.5H13z" />
+  </>,
+);
+/** Image icon — used for image attachments. */
+export const FileImageIcon = svg(
+  <>
+    <rect x="3" y="3" width="18" height="18" rx="2" />
+    <circle cx="8.5" cy="8.5" r="1.5" />
+    <path d="m3 17 4.5-4.5a2 2 0 0 1 2.8 0L12 14.2l1.2-1.2a2 2 0 0 1 2.8 0L21 18" />
   </>,
 );

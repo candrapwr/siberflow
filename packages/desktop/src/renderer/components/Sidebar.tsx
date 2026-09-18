@@ -13,6 +13,7 @@ import {
   EditIcon,
   FolderIcon,
   SearchIcon,
+  MoreHorizontalIcon,
 } from "./icons.js";
 
 interface SidebarProps {
@@ -24,6 +25,12 @@ interface SidebarProps {
   onRename: (id: string, name: string) => void;
   onNewChat: () => void;
   onOpenSettings: () => void;
+  sessionsLoading: boolean;
+  sessionsRefreshing: boolean;
+  sessionsError: string | null;
+  onRetrySessions: () => void;
+  busySessionId: string | null;
+  busyAction: "opening" | "deleting" | null;
 }
 
 type TimeGroup = "today" | "yesterday" | "earlier";
@@ -68,10 +75,17 @@ export const Sidebar = memo(function Sidebar({
   onRename,
   onNewChat,
   onOpenSettings,
+  sessionsLoading,
+  sessionsRefreshing,
+  sessionsError,
+  onRetrySessions,
+  busySessionId,
+  busyAction,
 }: SidebarProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -127,16 +141,40 @@ export const Sidebar = memo(function Sidebar({
         setSearchQuery("");
         searchRef.current?.blur();
       }
+      if (e.key === "Escape" && openMenuId) {
+        setOpenMenuId(null);
+      }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [searchQuery]);
+  }, [openMenuId, searchQuery]);
 
-  const renderSession = (s: SessionSummary) => (
+  // Close a session menu when clicking anywhere outside that session row.
+  useEffect(() => {
+    const handler = (e: PointerEvent) => {
+      const target = e.target;
+      if (target instanceof Element && !target.closest(".session-item")) {
+        setOpenMenuId(null);
+      }
+    };
+    window.addEventListener("pointerdown", handler);
+    return () => window.removeEventListener("pointerdown", handler);
+  }, []);
+
+  const renderSession = (s: SessionSummary) => {
+    const isBusy = busySessionId === s.id;
+    const busyLabel = busyAction === "deleting" ? "Deleting…" : "Opening…";
+
+    return (
     <div
       key={s.id}
-      className={`session-item ${s.id === activeId ? "active" : ""}`}
-      onClick={() => onSelect(s.id)}
+      className={`session-item ${s.id === activeId ? "active" : ""}${openMenuId === s.id ? " menu-open" : ""}${isBusy ? " busy" : ""}`}
+      onClick={() => !isBusy && onSelect(s.id)}
+      aria-busy={isBusy}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        if (!isBusy) setOpenMenuId(s.id);
+      }}
     >
       {editingId === s.id ? (
         <input
@@ -162,33 +200,53 @@ export const Sidebar = memo(function Sidebar({
           >
             {s.name ?? `Chat ${s.id.slice(0, 8)}`}
           </span>
-          <span className="session-time">{relativeTime(s.updatedAt)}</span>
+          <span className="session-time">{isBusy ? busyLabel : relativeTime(s.updatedAt)}</span>
           <div className="session-actions">
             <button
-              className="icon-btn session-edit"
+              className="icon-btn session-more"
+              aria-label={`Actions for ${s.name ?? "this chat"}`}
+              aria-expanded={openMenuId === s.id}
               onClick={(e) => {
                 e.stopPropagation();
-                startEdit(s);
+                if (!isBusy) setOpenMenuId((id) => (id === s.id ? null : s.id));
               }}
-              title="Rename"
+              title="Chat actions"
             >
-              <EditIcon size={10} />
-            </button>
-            <button
-              className="icon-btn session-delete"
-              onClick={(e) => {
-                e.stopPropagation();
-                onDelete(s.id);
-              }}
-              title="Delete"
-            >
-              <TrashIcon size={11} />
+              <MoreHorizontalIcon size={14} />
             </button>
           </div>
+          {openMenuId === s.id && (
+            <div className="session-context-menu" role="menu" onClick={(e) => e.stopPropagation()}>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setOpenMenuId(null);
+                  startEdit(s);
+                }}
+              >
+                <EditIcon size={12} />
+                Rename
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="danger"
+                onClick={() => {
+                  setOpenMenuId(null);
+                  onDelete(s.id);
+                }}
+              >
+                <TrashIcon size={12} />
+                Delete
+              </button>
+            </div>
+          )}
         </>
       )}
     </div>
-  );
+    );
+  };
 
   const hasAny = sessions.length > 0;
   const hasFiltered = filtered.length > 0;
@@ -234,15 +292,41 @@ export const Sidebar = memo(function Sidebar({
         </div>
       )}
 
-      <div className="session-list">
-        {!hasAny && (
+      <div className="session-list" aria-busy={sessionsLoading || busySessionId !== null}>
+        {sessionsLoading && (
+          <div className="session-loading" aria-label="Loading chat history">
+            <div className="session-loading-title">Loading chats</div>
+            <div className="session-skeleton" />
+            <div className="session-skeleton short" />
+            <div className="session-skeleton" />
+          </div>
+        )}
+        {!sessionsLoading && sessionsError && !hasAny && (
+          <div className="session-state session-state-error">
+            <div className="session-state-icon">!</div>
+            <strong>Couldn’t load your chats</strong>
+            <span>{sessionsError}</span>
+            <button type="button" onClick={onRetrySessions}>Try again</button>
+          </div>
+        )}
+        {!sessionsLoading && !sessionsError && !hasAny && (
           <div className="session-empty">
             <NewChatIcon size={22} />
             <div>No chats yet</div>
             <div className="session-empty-hint">Click + to start a conversation</div>
           </div>
         )}
-        {hasAny && !hasFiltered && (
+        {!sessionsLoading && sessionsError && hasAny && (
+          <div className="session-state session-state-error compact">
+            <strong>Chat list needs attention</strong>
+            <span>{sessionsError}</span>
+            <button type="button" onClick={onRetrySessions}>Retry</button>
+          </div>
+        )}
+        {sessionsRefreshing && !sessionsLoading && (
+          <div className="session-refreshing"><span className="session-spinner" /> Updating chats…</div>
+        )}
+        {!sessionsLoading && !sessionsError && hasAny && !hasFiltered && (
           <div className="session-empty">
             <SearchIcon size={18} />
             <div>No sessions match &ldquo;{searchQuery}&rdquo;</div>
@@ -251,7 +335,7 @@ export const Sidebar = memo(function Sidebar({
             </div>
           </div>
         )}
-        {hasAny &&
+        {!sessionsLoading && !sessionsError && hasAny &&
           hasFiltered &&
           GROUP_ORDER.map((g) =>
             buckets[g].length > 0 ? (

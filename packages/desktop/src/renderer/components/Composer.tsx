@@ -1,13 +1,12 @@
 // Chat input: textarea + send/stop button. Enter to send, Shift+Enter newline.
-// Also hosts the document (.xlsx/.docx/.pdf) attachment picker: a paperclip
-// button opens a native file dialog, chosen files are copied into the session
-// upload dir by the main process, and the resulting paths are folded into the
-// outgoing prompt so the agent reads them via the matching *_script tool.
+// Also hosts the document/image attachment picker: a paperclip button opens a
+// native file dialog, chosen files are copied into the session upload dir by
+// the main process, and the resulting paths are folded into the outgoing prompt.
 
 import { memo, useEffect, useRef, useState } from "react";
 import { ipc } from "../ipc.js";
-import type { DocKind, PickedFile, UsageInfo } from "@shared/protocol";
-import { FileDocIcon, FileExcelIcon, FilePdfIcon, PaperclipIcon, SendIcon, StopIcon, XIcon } from "./icons.js";
+import type { AttachmentKind, PickedFile, UsageInfo } from "@shared/protocol";
+import { FileDocIcon, FileExcelIcon, FileImageIcon, FilePdfIcon, PaperclipIcon, SendIcon, StopIcon, XIcon } from "./icons.js";
 
 interface ComposerProps {
   busy: boolean;
@@ -21,12 +20,12 @@ interface ComposerProps {
   prefill?: string;
   /** Whether the active session has a working directory. Upload is disabled
    * (and attachments cleared) when false, since there's no sandbox to copy
-   * files into and the *_script tools wouldn't be registered anyway. */
+   * files into and local file tools wouldn't be registered anyway. */
   hasWorkdir?: boolean;
-  /** Whether ANY document tool is enabled in settings. The upload button is
-   * disabled (with a tooltip hint) when none are, since uploaded files can't
-   * be read. */
+  /** Whether ANY document tool is enabled in settings. */
   docEnabled?: boolean;
+  /** Whether image analysis is enabled in settings. */
+  imageEnabled?: boolean;
   /** Latest token usage for the active session (drives the context bar). */
   usage?: UsageInfo | null;
   /** Compact-mode context window budget, in tokens. */
@@ -49,13 +48,14 @@ function fmtTokens(n: number): string {
 }
 
 /** Pick the right chip icon for a document kind. */
-function docIcon(kind: DocKind) {
+function attachmentIcon(kind: AttachmentKind) {
   if (kind === "docx") return FileDocIcon;
   if (kind === "pdf") return FilePdfIcon;
+  if (kind === "image") return FileImageIcon;
   return FileExcelIcon;
 }
 
-export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, prefill, hasWorkdir = true, docEnabled = true, usage = null, contextWindow = 200000, compactThreshold = 0.8, optimizeMode = "compact", summarizing = false, subagentPhase = null }: ComposerProps) {
+export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, prefill, hasWorkdir = true, docEnabled = true, imageEnabled = false, usage = null, contextWindow = 200000, compactThreshold = 0.8, optimizeMode = "compact", summarizing = false, subagentPhase = null }: ComposerProps) {
   const [value, setValue] = useState("");
   const [attachments, setAttachments] = useState<PickedFile[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -103,11 +103,11 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
     if (!hasWorkdir) setAttachments([]);
   }, [hasWorkdir]);
 
-  const onPickDoc = async () => {
+  const onPickFiles = async () => {
     if (busy || uploading || !hasWorkdir) return;
     setUploading(true);
     try {
-      const result = await ipc().pickDocFiles();
+      const result = await ipc().pickFiles();
       if ("error" in result) {
         // Surface as a transient alert; the host already returns a localized
         // message (e.g. "Pilih folder project dulu…").
@@ -152,21 +152,22 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
     }
   };
 
-  const uploadDisabled = busy || uploading || !hasWorkdir || !docEnabled;
+  const fileEnabled = docEnabled || imageEnabled;
+  const uploadDisabled = busy || uploading || !hasWorkdir || !fileEnabled;
   const uploadTitle = !hasWorkdir
     ? "Pilih folder project dulu sebelum upload"
-    : !docEnabled
-      ? "Aktifkan salah satu tool dokumen (excel_script/docx_script/pdf_script) di Tools settings untuk upload"
+    : !fileEnabled
+      ? "Aktifkan tool dokumen atau Analyze images di Tools settings untuk upload"
       : uploading
         ? "Menyalin file…"
-        : "Upload file dokumen (.xlsx/.docx/.pdf)";
+        : "Upload file dokumen atau gambar";
 
   return (
     <div className="composer">
       {attachments.length > 0 && (
         <div className="composer-attachments">
           {attachments.map((f, i) => {
-            const Icon = docIcon(f.kind);
+            const Icon = attachmentIcon(f.kind);
             return (
               <span className="attach-chip" key={`${f.relPath}:${i}`} title={f.relPath}>
                 <Icon size={13} className="attach-chip-icon" />
@@ -189,10 +190,10 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
         <button
           type="button"
           className="upload-btn"
-          onClick={onPickDoc}
+          onClick={onPickFiles}
           disabled={uploadDisabled}
           title={uploadTitle}
-          aria-label="Upload file dokumen"
+          aria-label="Upload file dokumen atau gambar"
         >
           <PaperclipIcon size={15} />
         </button>
@@ -243,16 +244,23 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
 });
 
 /**
- * Fold staged attachments into the prompt sent to the agent. Short and
- * type-agnostic: just lists the file paths under a one-line header, then the
- * user's typed instruction (or a generic default if they typed nothing). The
- * agent picks the right `*_script` tool itself based on each file's extension.
+ * Fold staged attachments into the prompt sent to the agent. Images and
+ * documents use separate headers so the agent knows image paths should be
+ * handled by `analyze_image` while documents use their matching script tool.
  *
  * Kept in sync with the VSCode webview's equivalent helper.
  */
 export function buildPromptWithAttachments(text: string, files: PickedFile[]): string {
   if (files.length === 0) return text;
-  const fileList = files.map((f) => `- ${f.relPath}`).join("\n");
-  const instr = text.length > 0 ? text : "Read these files and summarize their contents.";
-  return `Attached files:\n${fileList}\n\n${instr}`;
+  const docs = files.filter((f) => f.kind !== "image");
+  const images = files.filter((f) => f.kind === "image");
+  const sections: string[] = [];
+  if (docs.length > 0) sections.push(`Attached files:\n${docs.map((f) => `- ${f.relPath}`).join("\n")}`);
+  if (images.length > 0) sections.push(`Attached images (use analyze_image):\n${images.map((f) => `- ${f.relPath}`).join("\n")}`);
+  const instr = text.length > 0
+    ? text
+    : images.length > 0 && docs.length === 0
+      ? "Analyze these images and describe what they contain."
+      : "Read these files and summarize their contents.";
+  return `${sections.join("\n\n")}\n\n${instr}`;
 }

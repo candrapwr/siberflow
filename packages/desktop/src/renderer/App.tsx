@@ -273,6 +273,12 @@ export default function App() {
           onRename={(id, name) => void renameSession(id, name)}
           onNewChat={newChat}
           onOpenSettings={openSettings}
+          sessionsLoading={sessions.loading}
+          sessionsRefreshing={sessions.refreshing}
+          sessionsError={sessions.error}
+          onRetrySessions={() => void sessions.refresh()}
+          busySessionId={sessions.busySessionId}
+          busyAction={sessions.busyAction}
         />
         <div className="sidebar-resizer" onMouseDown={startDrag} title="Drag to resize" />
       </div>
@@ -331,6 +337,7 @@ export default function App() {
                         key={i}
                         turn={m}
                         hideTools={state.hideTools}
+                        waitingForAssistant={isLast && state.waitingForAssistant}
                         showActions={isLast && state.showActions && !state.busy}
                         onRegenerate={onRegenerate}
                         onEdit={onEdit}
@@ -371,7 +378,11 @@ export default function App() {
 
         {/* Floating task panel — top-right of the chat area (only with active session) */}
         {state.session && state.tasks.length > 0 && (
-          <TaskPanel tasks={state.tasks} taskPlan={state.taskPlan} />
+          <TaskPanel
+            tasks={state.tasks}
+            taskPlan={state.taskPlan}
+            restored={state.tasksRestored}
+          />
         )}
 
         {showJump && state.session && (
@@ -397,6 +408,7 @@ export default function App() {
                 state.enabledTools.includes("docx_script") ||
                 state.enabledTools.includes("pdf_script")
               }
+              imageEnabled={state.enabledTools.includes("analyze_image")}
               usage={state.usage}
               contextWindow={state.settingsValues?.contextWindow ?? 200000}
               compactThreshold={state.settingsValues?.compactThreshold ?? 0.8}

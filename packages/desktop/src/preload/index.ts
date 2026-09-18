@@ -18,7 +18,8 @@ const api: RendererCalls = {
     ipcRenderer.invoke("siberflow:listSessions", projectDir),
   pickFolder: () => ipcRenderer.invoke("siberflow:pickFolder"),
   setWorkdir: (folderPath) => ipcRenderer.invoke("siberflow:setWorkdir", folderPath),
-  pickDocFiles: () => ipcRenderer.invoke("siberflow:pickDocFiles"),
+  pickFiles: () => ipcRenderer.invoke("siberflow:pickFiles"),
+  getImagePreview: (path) => ipcRenderer.invoke("siberflow:getImagePreview", path),
   answerUser: (id, status, answer) =>
     ipcRenderer.invoke("siberflow:answerUser", id, status, answer),
   getSettings: () => ipcRenderer.invoke("siberflow:getSettings"),

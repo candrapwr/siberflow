@@ -76,18 +76,19 @@ export function registerIpc(): void {
     host!.setWorkdir(folderPath);
   });
 
-  ipcMain.handle("siberflow:pickDocFiles", async () => {
+  ipcMain.handle("siberflow:pickFiles", async () => {
     if (!host!.getWorkdir()) {
       return { error: "Pilih folder project dulu sebelum upload file." } as const;
     }
     const focused = BrowserWindow.getFocusedWindow() ?? mainWindow;
     const result = await dialog.showOpenDialog(focused!, {
-      title: "Pilih file dokumen",
+      title: "Pilih file dokumen atau gambar",
       filters: [
-        { name: "Dokumen", extensions: ["xlsx", "docx", "pdf"] },
+        { name: "Dokumen dan gambar", extensions: ["xlsx", "docx", "pdf", "png", "jpg", "jpeg", "webp", "gif"] },
         { name: "Excel Workbook", extensions: ["xlsx"] },
         { name: "Word Document", extensions: ["docx"] },
         { name: "PDF Document", extensions: ["pdf"] },
+        { name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif"] },
       ],
       properties: ["openFile", "multiSelections"],
     });
@@ -100,6 +101,10 @@ export function registerIpc(): void {
     } catch (err) {
       return { error: (err as Error).message } as const;
     }
+  });
+
+  ipcMain.handle("siberflow:getImagePreview", async (_e, path: string) => {
+    return host!.getImagePreview(path);
   });
 
   ipcMain.handle("siberflow:getSettings", () => {

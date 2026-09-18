@@ -1,12 +1,15 @@
 // Collapsible task checklist with a progress bar and plan overview.
 
-import { memo, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import type { Task } from "@siberflow/core";
+import { XIcon } from "./icons.js";
 
 interface TaskPanelProps {
   tasks: Task[];
   /** Snapshot of the initial task plan (set once per turn via task-plan event). */
   taskPlan: Task[] | null;
+  /** Restored task lists are available for context but stay hidden on load. */
+  restored?: boolean;
 }
 
 /**
@@ -30,8 +33,23 @@ function mergePlanWithStatus(
 export const TaskPanel = memo(function TaskPanel({
   tasks,
   taskPlan,
+  restored = false,
 }: TaskPanelProps) {
   const [collapsed, setCollapsed] = useState(false);
+  const [closed, setClosed] = useState(restored);
+
+  useEffect(() => {
+    if (restored) setClosed(true);
+  }, [restored]);
+
+  // A new plan starts a fresh visible panel. Closing the current panel only
+  // dismisses it for this task run; an empty task list resets that dismissal.
+  useEffect(() => {
+    if (taskPlan && taskPlan.length > 0) setClosed(false);
+  }, [taskPlan]);
+  useEffect(() => {
+    if (tasks.length === 0) setClosed(false);
+  }, [tasks.length]);
 
   // Use plan if available (gives stable ordering), else fall back to live tasks.
   const displayTasks = useMemo(() => {
@@ -41,7 +59,7 @@ export const TaskPanel = memo(function TaskPanel({
     return tasks;
   }, [taskPlan, tasks]);
 
-  if (displayTasks.length === 0) return null;
+  if (displayTasks.length === 0 || closed) return null;
 
   const done = displayTasks.filter((t) => t.status === "completed").length;
   const active = displayTasks.find((t) => t.status === "in_progress");
@@ -62,6 +80,18 @@ export const TaskPanel = memo(function TaskPanel({
         <div className="task-progress">
           <div className="task-progress-fill" style={{ width: `${pct}%` }} />
         </div>
+        <button
+          type="button"
+          className="task-close"
+          aria-label="Tutup daftar task"
+          title="Tutup daftar task"
+          onClick={(event) => {
+            event.stopPropagation();
+            setClosed(true);
+          }}
+        >
+          <XIcon size={12} />
+        </button>
       </div>
 
       {!collapsed && (

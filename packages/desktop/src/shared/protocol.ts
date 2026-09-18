@@ -108,24 +108,28 @@ export interface UsageInfo {
   total: { promptTokens: number; completionTokens: number };
 }
 
-/** A rendered history message for initial load. */
-export interface HistoryEntry {
-  role: "user" | "assistant";
-  content: string;
-}
+/** A history message projected to the renderer for initial session load. */
+export type HistoryEntry =
+  | { role: "user"; content: string }
+  | {
+      role: "assistant";
+      content: string | null;
+      toolCalls?: Array<{ id: string; name: string; arguments: string }>;
+    }
+  | { role: "tool"; toolCallId: string; name: string; content: string };
 
 /**
  * An uploaded document file after it has been copied into the per-session upload
- * dir (OS tmp, NOT the project dir). `excel_script` / `docx_script` /
- * `pdf_script` whitelists this location via the agent's `uploadDir` option.
+ * dir (OS tmp, NOT the project dir). Document tools and `analyze_image`
+ * whitelist this location via the agent's `uploadDir` option.
  */
-export type DocKind = "excel" | "docx" | "pdf";
+export type AttachmentKind = "excel" | "docx" | "pdf" | "image";
 
 export interface PickedFile {
   /** Display name (original filename). */
   name: string;
-  /** Document kind, derived from extension — drives chip icon + prompt tool. */
-  kind: DocKind;
+  /** Attachment kind, derived from extension — drives chip icon + prompt tool. */
+  kind: AttachmentKind;
   /**
    * Absolute path to the copied file in the OS tmp dir. Despite the field
    * name (kept for protocol stability), this is an absolute path, not
@@ -149,11 +153,12 @@ export type MainEvent =
   | { type: "assistant-content"; delta: string }
   | { type: "iteration-end" }
   | { type: "assistant-end" }
+  | { type: "tool-round-end" }
   | { type: "tool-call-start"; index: number; name: string }
   | { type: "tool-call-args"; index: number; delta: string }
   | { type: "tool-result"; index: number; name: string; result: string }
   | { type: "task-plan"; tasks: Task[] }
-  | { type: "tasks"; tasks: Task[] }
+  | { type: "tasks"; tasks: Task[]; restored?: boolean }
   | { type: "context-optimized"; bytesSaved: number }
   | { type: "context-compacting" }
   | { type: "context-compacted"; turnsSummarized: number; summaryChars: number }
@@ -179,12 +184,15 @@ export interface RendererCalls {
   pickFolder: () => Promise<string | null>;
   setWorkdir: (folderPath: string) => Promise<void>;
   /**
-   * Open a native multi-select file picker filtered to .xlsx/.docx/.pdf, copy
-   * each chosen file into the current session's upload sandbox dir, and return
-   * the copied file metadata (with `kind` per file). Returns `{ error }` if the
-   * session has no workdir or the copy failed; `{ files: [] }` if cancelled.
+   * Open a native multi-select file picker filtered to supported documents and
+   * images, copy each chosen file into the current session's upload sandbox
+   * dir, and return the copied file metadata (with `kind` per file).
+   * Returns `{ error }` if the session has no workdir or the copy failed;
+   * `{ files: [] }` if cancelled.
    */
-  pickDocFiles: () => Promise<{ files: PickedFile[] } | { error: string }>;
+  pickFiles: () => Promise<{ files: PickedFile[] } | { error: string }>;
+  /** Return a data URL preview for an image in the active session upload dir. */
+  getImagePreview: (path: string) => Promise<string | null>;
   /**
    * Respond to an ask_user prompt. `status` is "answer" (user picked/typed)
    * or "cancel" (user dismissed). Resolves once the host has unblocked the

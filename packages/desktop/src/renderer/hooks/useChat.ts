@@ -8,6 +8,7 @@ import type {
   BannerInfo,
   CurrentSessionInfo,
   MainEvent,
+  HistoryEntry,
   SettingsValues,
   UsageInfo,
 } from "@shared/protocol";
@@ -26,12 +27,14 @@ export interface ToolCall {
  */
 export type ContentBlock =
   | { kind: "text"; id: number; text: string }
-  | { kind: "tool"; id: number; tool: ToolCall };
+  | { kind: "tool"; id: number; streamIndex?: number; tool: ToolCall };
 
 /** An assistant turn is an ordered list of content blocks. */
 export interface AssistantTurn {
   role: "assistant";
   blocks: ContentBlock[];
+  /** True when rebuilt from persisted history; its work is collapsed by default. */
+  historical?: boolean;
 }
 
 /** A plain user message. */
@@ -58,6 +61,8 @@ interface ChatState {
   tasks: Task[];
   /** Snapshot of the initial task plan (set once per turn via task-plan event). */
   taskPlan: Task[] | null;
+  /** True when the visible task list came from a restored session. */
+  tasksRestored: boolean;
   /** Tool names currently enabled in settings (drives composer upload toggle). */
   enabledTools: string[];
   /** Active ask_user prompt from the agent (renders a modal); null when none. */
@@ -73,6 +78,8 @@ interface ChatState {
    * mode start-of-turn or mid-loop fold). Drives a "Summarizing context…"
    * indicator in the composer. Cleared by assistant-start/assistant-end. */
   summarizing: boolean;
+  /** True while completed tool output is being sent back to the LLM. */
+  waitingForAssistant: boolean;
   /** When non-null, a subagent tool is running and this holds its latest
    * progress label (e.g. "calling read_file…"). Shown as a nested indicator
    * inside the subagent tool block. */
@@ -100,10 +107,12 @@ const initial: ChatState = {
   messages: [],
   tasks: [],
   taskPlan: null,
+  tasksRestored: false,
   enabledTools: ["read_file", "write_file", "edit_file", "copy_file", "list_dir", "delete_file", "grep"],
   askUserPrompt: null,
   busy: false,
   summarizing: false,
+  waitingForAssistant: false,
   subagentPhase: null,
   stopping: false,
   notices: [],
@@ -131,7 +140,7 @@ export function isAssistantTurn(m: DisplayMessage): m is AssistantTurn {
 
 /** Deep-ish clone of an assistant turn so React sees a new reference. */
 function cloneTurn(turn: AssistantTurn): AssistantTurn {
-  return { role: "assistant", blocks: turn.blocks.map((b) => ({ ...b })) };
+  return { ...turn, blocks: turn.blocks.map((b) => ({ ...b })) };
 }
 
 /** Immutably update the last message in the list, if it's an assistant turn. */
@@ -163,6 +172,67 @@ function dropTrailingEmptyAssistantTurn(msgs: DisplayMessage[]): DisplayMessage[
     (b) => !(b.kind === "tool" && b.tool.name === "__hidden__"),
   );
   return hasVisible ? msgs : msgs.slice(0, -1);
+}
+
+/**
+ * Rebuild the same text/tool blocks used by live streaming from persisted
+ * history. A persisted user message starts one display turn; every assistant
+ * iteration and its tool results up to the next user message belong to that
+ * same turn. This keeps intermediate content and the final answer together,
+ * instead of grouping only the tool calls.
+ */
+function restoreHistory(entries: HistoryEntry[]): DisplayMessage[] {
+  const messages: DisplayMessage[] = [];
+  const toolBlocks = new Map<string, Extract<ContentBlock, { kind: "tool" }>>();
+  let currentTurn: AssistantTurn | null = null;
+
+  const flushTurn = () => {
+    if (!currentTurn) return;
+    const hasVisible = currentTurn.blocks.some(
+      (b) => !(b.kind === "tool" && b.tool.name === "__hidden__"),
+    );
+    if (hasVisible) messages.push(currentTurn);
+    currentTurn = null;
+  };
+
+  for (const entry of entries) {
+    if (entry.role === "user") {
+      flushTurn();
+      messages.push({ role: "user", content: entry.content });
+      continue;
+    }
+
+    if (entry.role === "assistant") {
+      if (!currentTurn) {
+        currentTurn = { role: "assistant", blocks: [], historical: true };
+      }
+      const blocks: ContentBlock[] = [];
+      if (entry.content) {
+        blocks.push({ kind: "text", id: ++blockSeq, text: entry.content });
+      }
+      for (const call of entry.toolCalls ?? []) {
+        const block: Extract<ContentBlock, { kind: "tool" }> = {
+          kind: "tool",
+          id: ++blockSeq,
+          tool: {
+            name: call.name === "task_update" ? "__hidden__" : call.name,
+            args: call.arguments,
+            result: null,
+          },
+        };
+        blocks.push(block);
+        toolBlocks.set(call.id, block);
+      }
+      currentTurn.blocks.push(...blocks);
+      continue;
+    }
+
+    const block = toolBlocks.get(entry.toolCallId);
+    if (block) block.tool.result = entry.content;
+  }
+
+  flushTurn();
+  return messages;
 }
 
 function reducer(state: ChatState, action: Action): ChatState {
@@ -252,6 +322,9 @@ function reducer(state: ChatState, action: Action): ChatState {
         enabledTools: e.enabledTools,
         messages: [],
         tasks: [],
+        taskPlan: null,
+        tasksRestored: false,
+        waitingForAssistant: false,
         // Clear notices on session load so stale error toasts from a previous
         // session don't linger on screen. (ready fires on app start AND on
         // every session switch via loadSessionById → postReady.)
@@ -299,29 +372,35 @@ function reducer(state: ChatState, action: Action): ChatState {
     case "history":
       return {
         ...state,
-        messages: e.messages.map((m) =>
-          m.role === "user"
-            ? { role: "user", content: m.content }
-            : { role: "assistant", blocks: [{ kind: "text", id: ++blockSeq, text: m.content }] },
-        ),
+        messages: restoreHistory(e.messages),
         showActions: e.messages.some((m) => m.role === "assistant"),
       };
 
     case "assistant-start":
-      // Begin a new assistant turn with an empty block list.
-      return {
-        ...state,
-        busy: true,
-        summarizing: false,
-        stopping: false,
-        showActions: false,
-        messages: [...state.messages, { role: "assistant", blocks: [] }],
-      };
+      // A user turn may contain several assistant/tool iterations. Keep them
+      // in one display turn so live streaming has the same shape as restored
+      // history. A new assistant turn is only needed after a user message.
+      {
+        const last = state.messages[state.messages.length - 1];
+        const messages: DisplayMessage[] =
+          last?.role === "assistant" && !last.historical
+            ? state.messages
+            : [...state.messages, { role: "assistant", blocks: [] } as AssistantTurn];
+        return {
+          ...state,
+          busy: true,
+          summarizing: false,
+          stopping: false,
+          showActions: false,
+          messages,
+        };
+      }
 
     case "assistant-content":
       // Append text deltas to the last text block, or create one.
       return {
         ...state,
+        waitingForAssistant: false,
         messages: updateLastTurn(state.messages, (turn) => {
           const last = turn.blocks[turn.blocks.length - 1];
           if (last && last.kind === "text") {
@@ -342,10 +421,12 @@ function reducer(state: ChatState, action: Action): ChatState {
       }
       return {
         ...state,
+        waitingForAssistant: false,
         messages: updateLastTurn(msgs, (turn) => {
           turn.blocks.push({
             kind: "tool",
-            id: e.index,
+            id: ++blockSeq,
+            streamIndex: e.index,
             tool: {
               name: e.name === "task_update" ? "__hidden__" : e.name,
               args: "",
@@ -361,9 +442,9 @@ function reducer(state: ChatState, action: Action): ChatState {
       return {
         ...state,
         messages: updateLastTurn(state.messages, (turn) => {
-          const blk = turn.blocks.find(
-            (b) => b.kind === "tool" && b.id === e.index,
-          );
+          const blk = [...turn.blocks]
+            .reverse()
+            .find((b) => b.kind === "tool" && b.streamIndex === e.index);
           if (blk && blk.kind === "tool" && blk.tool.name !== "__hidden__") {
             blk.tool.args += e.delta;
           }
@@ -375,9 +456,9 @@ function reducer(state: ChatState, action: Action): ChatState {
       return {
         ...state,
         messages: updateLastTurn(state.messages, (turn) => {
-          const blk = turn.blocks.find(
-            (b) => b.kind === "tool" && b.id === e.index,
-          );
+          const blk = [...turn.blocks]
+            .reverse()
+            .find((b) => b.kind === "tool" && b.streamIndex === e.index);
           if (blk && blk.kind === "tool" && blk.tool.name !== "__hidden__") {
             blk.tool.result = e.result;
           }
@@ -385,12 +466,9 @@ function reducer(state: ChatState, action: Action): ChatState {
       };
 
     case "iteration-end":
-      // iteration-end fires after each assistant message in a tool-call loop;
-      // the next assistant-start will push a fresh turn. If the just-finished
-      // turn is empty (e.g. the model only emitted hidden `task_update` calls
-      // and no text), drop it so its thinking-dots placeholder doesn't linger
-      // and stack across iterations. A non-empty turn (has visible text or
-      // tool blocks) is kept as-is.
+      // iteration-end fires after each assistant message in a tool-call loop.
+      // All non-empty iterations remain in the same assistant display turn.
+      // Remove a turn only when it contains hidden task bookkeeping alone.
       return {
         ...state,
         messages: dropTrailingEmptyAssistantTurn(state.messages),
@@ -401,15 +479,23 @@ function reducer(state: ChatState, action: Action): ChatState {
         ...state,
         busy: false,
         summarizing: false,
+        waitingForAssistant: false,
         stopping: false,
         showActions: !state.stopping,
       };
 
+    case "tool-round-end":
+      return { ...state, waitingForAssistant: true };
+
     case "task-plan":
-      return { ...state, taskPlan: e.tasks };
+      return { ...state, taskPlan: e.tasks, tasksRestored: false };
 
     case "tasks":
-      return { ...state, tasks: e.tasks };
+      return {
+        ...state,
+        tasks: e.tasks,
+        tasksRestored: e.restored === true,
+      };
 
     case "context-optimized":
       return state;

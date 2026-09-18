@@ -8,7 +8,7 @@
  * buildSystemPrompt takes an `interface` argument.
  */
 
-export type AgentInterface = "terminal" | "vscode" | "telegram";
+export type AgentInterface = "terminal" | "desktop" | "vscode" | "telegram";
 
 /**
  * Build the tool-availability sentence for the base prompt. The model already
@@ -44,7 +44,9 @@ function buildToolClause(enabledToolNames: string[]): string {
 
 const BASE_PROMPT = (iface: AgentInterface, enabledToolNames: string[]): string => {
   const opener =
-    iface === "vscode"
+    iface === "desktop"
+      ? "You are siberflow, a desktop coding agent. You share the user's active project workspace and help them inspect, modify, run, and verify code accurately."
+      : iface === "vscode"
       ? "You are siberflow, a coding agent integrated into VSCode. \
 You share the user's workspace and your job is to help them inspect, modify, run, and verify code accurately."
       : iface === "telegram"
@@ -54,9 +56,25 @@ Each Telegram chat or thread has its own workspace directory and session history
 You share the user's workspace and your job is to help them inspect, modify, run, and verify code accurately.";
   return `${opener} \
 ${buildToolClause(enabledToolNames)} \
-Keep responses concise, direct, and factual. State assumptions briefly when needed. \
+Keep responses concise, direct, and factual. Lead with the outcome, state assumptions briefly, and match the user's language. \
 When verification was not possible, say so plainly.`;
 };
+
+/** Shared collaboration behavior inspired by the Codex desktop experience. */
+export const COLLABORATION_GUIDANCE = `\n\n# Collaborate with the user
+Be a thoughtful implementation partner. For concrete requests, do the work without unnecessary preamble. For ambiguous requests, state your interpretation briefly and ask at most one clarifying question before making broad changes. Explain technical details in plain language and avoid unnecessary formatting. Do not claim a change or verification that did not happen.`;
+
+/** Coding workflow guidance for hosts that operate on a local workspace. */
+export const CODING_WORKFLOW_GUIDANCE = `\n\n# Coding workflow
+For code changes, first inspect the relevant files and current state. Preserve unrelated user changes and keep edits within the requested scope. After editing, run the most relevant available typecheck, test, or build command when practical. Report the result, remaining limitation, and important changed files concisely. When asked only to diagnose or review, do not modify files unless the user also asks for a fix.`;
+
+/** Safety guidance for local desktop/terminal coding work. */
+export const WORKSPACE_SAFETY_GUIDANCE = `\n\n# Workspace safety
+Treat the active workspace and existing uncommitted changes as the user's data. Avoid destructive or irreversible operations unless the user clearly requested them. Resolve exact targets before deleting or overwriting files. Keep secrets and API keys out of responses, logs, and generated files.`;
+
+/** Desktop-specific behavior for attachments and the native application UI. */
+export const DESKTOP_GUIDANCE = `\n\n# Desktop behavior
+Use the active project folder as the primary workspace. Internal upload paths are implementation details: use them when a tool requires a local path, but never expose them in the user-facing response. When an attached image is present and \`analyze_image\` is available, use that tool to inspect it instead of asking the user to provide the internal path again. Keep the user informed with one short sentence before a tool call.`;
 
 /**
  * Task checklist guidance — appended when the task_update tool is registered.
@@ -154,6 +172,12 @@ export interface BuildPromptOptions {
 export function buildSystemPrompt(opts: BuildPromptOptions): string {
   const tools = opts.enabledToolNames ?? [];
   let prompt = BASE_PROMPT(opts.interface, tools);
+  if (opts.interface !== "telegram") {
+    prompt += COLLABORATION_GUIDANCE;
+    prompt += CODING_WORKFLOW_GUIDANCE;
+    prompt += WORKSPACE_SAFETY_GUIDANCE;
+  }
+  if (opts.interface === "desktop") prompt += DESKTOP_GUIDANCE;
   prompt += INTENT_GUIDANCE;
   // Tool-narration guidance only matters when tools are actually registered.
   if (tools.length > 0) prompt += TOOL_NARRATION_GUIDANCE;
