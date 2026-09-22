@@ -30,6 +30,12 @@ export interface Session {
   /** Task checklist (present when task tracking is/was used). */
   tasks?: Task[];
   /**
+   * Ephemeral context for the next resumed turn when the previous turn failed
+   * after side effects/history were already committed. The host consumes this
+   * as a system notice; it is not rendered as a chat message.
+   */
+  pendingTurnNotice?: string;
+  /**
    * Known chat members for group/supergroup Telegram sessions. Maps Telegram
    * user id (as string) → a compact member record (username, display name).
    * Built incrementally as members send messages; persisted so it survives bot

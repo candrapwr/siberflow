@@ -159,10 +159,18 @@ export interface AgentOptions {
   preTruncate?: boolean;
   /** Max iterations for subagents (defaults to parent's maxIterations). */
   subagentMaxIterations?: number;
+  /** Keep completed history when a host aborts an in-progress turn. */
+  preservePartialHistoryOnAbort?: boolean;
 }
 
 export interface AgentEvents {
   signal?: AbortSignal;
+  /**
+   * Ephemeral system context for the first request of a resumed turn. It is
+   * intentionally not appended to conversation history as a fake user or
+   * assistant message.
+   */
+  continuationNotice?: string;
   onAssistantStart?: () => void;
   onContent?: (delta: string) => void;
   onAssistantEnd?: (
@@ -204,6 +212,8 @@ export interface AgentEvents {
   onContextCompacting?: () => void;
   /** Fires when a subagent reports progress (phase: thinking|tool|tool_done|done, detail: tool name/preview). */
   onSubagentUpdate?: (phase: string, detail?: string) => void;
+  /** Fires after the in-memory conversation history changes. */
+  onHistoryChanged?: () => void;
 }
 
 export class Agent {
@@ -222,6 +232,7 @@ export class Agent {
   private readonly autoContinue: boolean;
   /** Cap for subagent iterations; falls back to this.maxIterations when unset. */
   private readonly subagentMaxIterations: number;
+  private readonly preservePartialHistoryOnAbort: boolean;
   /** In-flight send() events, used by subagentProgress callback to forward to UI. */
   private currentEvents: AgentEvents | null = null;
   private readonly taskStore = new TaskStore();
@@ -296,6 +307,8 @@ export class Agent {
     this.tasksEnabled = opts.tasksEnabled ?? false;
     this.autoContinue = opts.autoContinue ?? true;
     this.subagentMaxIterations = opts.subagentMaxIterations ?? this.maxIterations;
+    this.preservePartialHistoryOnAbort =
+      opts.preservePartialHistoryOnAbort ?? false;
     this.ctx = {
       projectDir: opts.projectDir ?? process.cwd(),
       ...(opts.execShellMode ? { execShellMode: opts.execShellMode } : {}),
@@ -423,6 +436,8 @@ export class Agent {
     // Reset the mid-turn fold dedupe gate so a fresh turn can fold again.
     this.lastMidTurnFoldUpTo = -1;
     this.messages.push({ role: "user", content: userInput });
+    events.onHistoryChanged?.();
+    const continuationNotice = events.continuationNotice?.trim();
 
     try {
       throwIfAborted(events.signal);
@@ -466,7 +481,11 @@ export class Agent {
         // Re-inject current task list each iteration so the model always sees
         // authoritative state (survives context optimization, reflects updates
         // the model just made via task_update mid-turn).
-        const requestMessages = this.withTasks(base);
+        const taskMessages = this.withTasks(base);
+        const requestMessages =
+          i === 0 && continuationNotice
+            ? this.withContinuationNotice(taskMessages, continuationNotice)
+            : taskMessages;
 
         let { assistant, finishReason, usage } = await this.runStream(
           requestMessages,
@@ -538,6 +557,7 @@ export class Agent {
 
         throwIfAborted(events.signal);
         this.messages.push(assistant);
+        events.onHistoryChanged?.();
         // Track the latest prompt-token count for the compact-mode threshold
         // trigger. The LAST successful iteration's prompt size is the best
         // proxy for "how full is context right now" — it reflects the actual
@@ -612,6 +632,7 @@ export class Agent {
               // turn's final text (breaking out of the tool-call loop for good).
               const stopAnswer = await this.forceFinalAnswer(requestMessages, toolSchemas, events, call);
               this.messages.push(stopAnswer.assistant);
+              events.onHistoryChanged?.();
               events.onAssistantEnd?.(stopAnswer.assistant, {
                 finishReason: stopAnswer.finishReason,
                 ...(stopAnswer.usage ? { usage: stopAnswer.usage } : {}),
@@ -640,10 +661,6 @@ export class Agent {
             );
           }
 
-          events.onToolResult?.(idx, call.name, result);
-          if (this.tasksEnabled && call.name === "task_update") {
-            events.onTasksUpdated?.(this.taskStore.get());
-          }
           const toolMsg: ToolResultMessage = {
             role: "tool",
             toolCallId: call.id,
@@ -662,6 +679,14 @@ export class Agent {
           ) {
             truncateToolCallArgs(this.messages, call.id);
           }
+          // The history checkpoint must happen after the tool result and task
+          // state are both committed. This lets a host survive a stop/error
+          // between tool calls without losing completed side effects.
+          events.onToolResult?.(idx, call.name, result);
+          if (this.tasksEnabled && call.name === "task_update") {
+            events.onTasksUpdated?.(this.taskStore.get());
+          }
+          events.onHistoryChanged?.();
         }
 
         // Close the tool-call batch group opened above.
@@ -709,14 +734,67 @@ export class Agent {
       events.onMaxIterations?.(this.maxIterations);
       return `(stopped after ${this.maxIterations} iterations without final answer)`;
     } catch (err) {
+      const preservePartial =
+        !isAbortError(err) || this.preservePartialHistoryOnAbort;
+      if (preservePartial) {
+        this.finalizeInterruptedToolCalls(baseMessageCount, events);
+      }
       if (isAbortError(err)) {
-        this.messages.length = baseMessageCount;
-        this.taskStore.set(baseTasks);
+        if (!preservePartial) {
+          this.messages.length = baseMessageCount;
+          this.taskStore.set(baseTasks);
+        }
         throw createAbortError();
       }
       throw err;
     } finally {
       this.currentEvents = null;
+    }
+  }
+
+  /**
+   * Ensure a partially interrupted tool batch remains valid conversation
+   * history. Providers require one tool result for every tool call before the
+   * next request; calls that never started get an explicit synthetic result.
+   */
+  private finalizeInterruptedToolCalls(
+    baseMessageCount: number,
+    events: AgentEvents,
+  ): void {
+    let assistantIndex = -1;
+    for (let i = this.messages.length - 1; i >= baseMessageCount; i--) {
+      if (this.messages[i]?.role === "assistant") {
+        assistantIndex = i;
+        break;
+      }
+    }
+    if (assistantIndex === -1) return;
+
+    const assistant = this.messages[assistantIndex];
+    if (assistant?.role !== "assistant" || !assistant.toolCalls?.length) {
+      return;
+    }
+
+    const completed = new Set<string>();
+    for (let i = assistantIndex + 1; i < this.messages.length; i++) {
+      const message = this.messages[i];
+      if (message?.role === "tool") completed.add(message.toolCallId);
+    }
+
+    const interrupted =
+      "Tool execution was interrupted before this call completed. " +
+      "The turn was stopped; continue from the available results.";
+    for (let index = 0; index < assistant.toolCalls.length; index++) {
+      const call = assistant.toolCalls[index]!;
+      if (completed.has(call.id)) continue;
+      this.messages.push({
+        role: "tool",
+        toolCallId: call.id,
+        name: call.name,
+        content: interrupted,
+      });
+      events.onToolResult?.(index, call.name, interrupted);
+      events.onHistoryChanged?.();
     }
   }
 
@@ -852,6 +930,22 @@ export class Agent {
   private withTasks(messages: Message[]): Message[] {
     if (!this.tasksEnabled || this.taskStore.size === 0) return messages;
     const block = `\n\n# Active task list (maintain via task_update)\n${renderTaskList(this.taskStore.get())}`;
+    const result = [...messages];
+    if (result[0]?.role === "system") {
+      result[0] = { role: "system", content: result[0].content + block };
+    } else {
+      result.unshift({ role: "system", content: block.trimStart() });
+    }
+    return result;
+  }
+
+  /**
+   * Add resume context to the request without polluting persisted history.
+   * Keeping it in the leading system message avoids creating a fake user turn
+   * and remains valid for providers that require tool results to stay paired.
+   */
+  private withContinuationNotice(messages: Message[], notice: string): Message[] {
+    const block = `\n\n# Previous turn status\n${notice}`;
     const result = [...messages];
     if (result[0]?.role === "system") {
       result[0] = { role: "system", content: result[0].content + block };
@@ -1093,7 +1187,8 @@ function createAbortError(): Error {
  * Promise-based delay that can be cancelled mid-flight via an AbortSignal.
  * Used to throttle LLM requests (anti rate-limit) without blocking Stop /
  * Ctrl+C: if the user aborts while we're sleeping, the promise rejects with
- * an AbortError so the turn rollbacks immediately.
+ * an AbortError so the host can stop the turn immediately. Whether the
+ * partial history is rolled back is decided by the Agent host configuration.
  */
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {

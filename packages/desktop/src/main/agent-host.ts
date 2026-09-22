@@ -403,6 +403,9 @@ export class AgentHost {
       preTruncate: this.settings.preTruncate,
       maxIterations: this.settings.maxIterations,
       requestDelayMs: this.settings.requestDelayMs,
+      // Desktop persists checkpoints while a turn is running, so keep the
+      // completed part of an aborted turn available for resume.
+      preservePartialHistoryOnAbort: true,
       // Seed the compact-mode threshold trigger with the resumed session's
       // last prompt size (contextSize = last iteration's prompt, accurate
       // context window — not the turn-accumulated promptTokens).
@@ -732,6 +735,9 @@ export class AgentHost {
     const initialTaskCount = this.agent.getTasks().length;
     let turnAddPrompt = 0;
     let turnAddCompletion = 0;
+    let usageApplied = false;
+    let agentCompleted = false;
+    const continuationNotice = this.current?.pendingTurnNotice?.trim();
     // Track the LAST iteration's prompt size so usage.last.contextSize
     // reflects the actual context the model saw (not the turn accumulation).
     let lastIterPrompt = 0;
@@ -739,6 +745,7 @@ export class AgentHost {
     try {
       await this.agent.send(input, {
         signal: abort.signal,
+        ...(continuationNotice ? { continuationNotice } : {}),
         onAssistantStart: () => this.emit({ type: "assistant-start" }),
         onContent: (delta) => this.emit({ type: "assistant-content", delta }),
         onAssistantEnd: (_msg, meta) => {
@@ -790,23 +797,38 @@ export class AgentHost {
           this.emit({ type: "subagent-update", phase, detail }),
         onMaxIterations: (limit) =>
           this.emit({ type: "max-iterations", limit }),
+        onHistoryChanged: () => this.persistCheckpointSync(),
       });
 
-      if (this.current) {
-        // usage.last.promptTokens = AKUMULASI seluruh iterasi pada turn terakhir
-        // (semua tool loops digabung) — info billing. contextSize = prompt size
-        // iterasi TERAKHIR — itu context window asli yg dilihat model, dipakai
-        // context bar & compact threshold saat resume.
-        this.current.usage.last = {
-          promptTokens: turnAddPrompt,
-          completionTokens: turnAddCompletion,
-          contextSize: lastIterPrompt,
-        };
-        this.current.usage.total.promptTokens += turnAddPrompt;
-        this.current.usage.total.completionTokens += turnAddCompletion;
-      }
+      agentCompleted = true;
+      if (this.current) delete this.current.pendingTurnNotice;
+      this.applyTurnUsage(turnAddPrompt, turnAddCompletion, lastIterPrompt);
+      usageApplied = true;
       await this.persistAfterTurn();
     } catch (err) {
+      // A failed/stopped turn can still contain completed assistant/tool
+      // iterations. Persist that partial history before reporting the error;
+      // otherwise the next launch resumes from the last successful turn.
+      if (!agentCompleted && this.current) {
+        this.current.pendingTurnNotice = isAbortError(err)
+          ? "The previous turn was stopped before the assistant produced its final response. " +
+            "Continue from the persisted tool results and do not repeat completed side effects."
+          : "The previous turn was interrupted by an error before the assistant produced its final response. " +
+            "All persisted tool calls and results are authoritative; continue from the latest state " +
+            "and do not repeat completed side effects.";
+      }
+      if (!usageApplied) {
+        this.applyTurnUsage(turnAddPrompt, turnAddCompletion, lastIterPrompt);
+        usageApplied = true;
+      }
+      try {
+        await this.persistAfterTurn();
+      } catch (persistErr) {
+        this.emit({
+          type: "error",
+          message: `Could not save partial history: ${(persistErr as Error).message}`,
+        });
+      }
       if (isAbortError(err)) {
         if (this.agent) this.emit({ type: "tasks", tasks: this.agent.getTasks() as Task[] });
         this.emit({ type: "info", message: "generation stopped" });
@@ -816,6 +838,44 @@ export class AgentHost {
     } finally {
       if (this.turnAbort === abort) this.turnAbort = null;
       this.emit({ type: "assistant-end" });
+    }
+  }
+
+  private applyTurnUsage(
+    promptTokens: number,
+    completionTokens: number,
+    contextSize: number,
+  ): void {
+    if (!this.current) return;
+    // usage.last.promptTokens = accumulated usage across iterations in this
+    // turn; contextSize remains the prompt size of the last completed call.
+    this.current.usage.last = {
+      promptTokens,
+      completionTokens,
+      contextSize,
+    };
+    this.current.usage.total.promptTokens += promptTokens;
+    this.current.usage.total.completionTokens += completionTokens;
+  }
+
+  /** Persist a small synchronous checkpoint after each history mutation. */
+  private persistCheckpointSync(): void {
+    if (!this.current || !this.agent) return;
+    const summary = this.agent.summaryState();
+    const session: Session = {
+      ...this.current,
+      updatedAt: new Date().toISOString(),
+      messages: [...this.agent.history()],
+      tasks: [...this.agent.getTasks()],
+      ...(summary ? { summary } : {}),
+    };
+    if (!summary) delete session.summary;
+    try {
+      saveSessionSync(session);
+      this.current = session;
+    } catch {
+      // The final async persist will retry; a checkpoint must not interrupt
+      // the agent loop when the session directory is temporarily unavailable.
     }
   }
 
