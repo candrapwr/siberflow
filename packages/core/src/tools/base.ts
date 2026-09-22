@@ -71,6 +71,13 @@ export interface BotScriptHost {
 export interface ToolContext {
   /** Sandbox root — all file operations must resolve inside this directory. */
   projectDir: string;
+  /**
+   * Optional shell mode for the exec tool. Hosts normally leave this unset so
+   * exec uses its historical non-interactive /bin/sh (or cmd.exe) behavior.
+   * Desktop can opt into the user's login shell so GUI-launched apps inherit
+   * shell-managed PATH entries such as Homebrew, nvm, fnm, or asdf.
+   */
+  execShellMode?: "default" | "login-interactive";
   /** Identity of the user who triggered this turn (injected by hosts that
    *  know it, e.g. Telegram message.from.id). Absent in non-user contexts. */
   userId?: number | string;

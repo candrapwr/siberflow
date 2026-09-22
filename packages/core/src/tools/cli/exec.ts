@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { homedir, userInfo } from "node:os";
 import type { Tool } from "../base.js";
 
 interface Args {
@@ -38,13 +39,30 @@ export const execTool: Tool = {
 
     // Pick the platform shell. Unix uses /bin/sh; Windows uses cmd.exe.
     const isWin = process.platform === "win32";
-    const shell = isWin ? process.env.ComSpec ?? "cmd.exe" : "/bin/sh";
-    const shellArgs = isWin ? ["/d", "/s", "/c", command] : ["-c", command];
+    const useLoginInteractiveShell =
+      !isWin && ctx.execShellMode === "login-interactive";
+    const shell = isWin
+      ? process.env.ComSpec ?? "cmd.exe"
+      : useLoginInteractiveShell
+        ? resolveUserShell()
+        : "/bin/sh";
+    const shellArgs = isWin
+      ? ["/d", "/s", "/c", command]
+      : useLoginInteractiveShell
+        ? ["-ilc", command]
+        : ["-c", command];
+    const shellEnv = useLoginInteractiveShell
+      ? {
+          ...process.env,
+          HOME: process.env.HOME ?? homedir(),
+          SHELL: shell,
+        }
+      : process.env;
 
     return await new Promise<string>((resolvePromise) => {
       const child = spawn(shell, shellArgs, {
         cwd: ctx.projectDir,
-        env: process.env,
+        env: shellEnv,
         // detached creates a process group on Unix; ignored for kill on Windows
         // (we use taskkill there instead). Windows shells need windowsHide.
         detached: !isWin,
@@ -98,6 +116,19 @@ export const execTool: Tool = {
     });
   },
 };
+
+/** Resolve the user's shell for Desktop GUI launches where SHELL may be unset. */
+function resolveUserShell(): string {
+  const fromEnv = process.env.SHELL?.trim();
+  if (fromEnv) return fromEnv;
+  try {
+    const fromUserInfo = userInfo().shell?.trim();
+    if (fromUserInfo) return fromUserInfo;
+  } catch {
+    // Fall back to a POSIX shell when the OS user record is unavailable.
+  }
+  return "/bin/sh";
+}
 
 /** Kill the spawned process tree. On Unix we kill the process group via the
  * negative pid; on Windows we shell out to `taskkill /T` which kills the

@@ -97,6 +97,7 @@ async function runAgent(
     model: parentProvider.defaultModel,
     systemPrompt,
     projectDir: ctx.projectDir,
+    ...(ctx.execShellMode ? { execShellMode: ctx.execShellMode } : {}),
     maxIterations: parentMaxIterations,
     requestDelayMs: 0,
     tasksEnabled: false,

@@ -107,6 +107,11 @@ export interface AgentOptions {
   /** Sandbox root that file tools and exec are restricted to. */
   projectDir?: string;
   /**
+   * Optional exec shell mode. Desktop uses the user's login-interactive shell
+   * so packaged GUI launches can load the same PATH setup as a local terminal.
+   */
+  execShellMode?: ToolContext["execShellMode"];
+  /**
    * Optional per-session tmp dir that `excel_script` may read uploaded files
    * from (outside the project sandbox). Other file tools ignore this. When
    * unset, `excel_script` can only read files inside `projectDir`.
@@ -293,6 +298,7 @@ export class Agent {
     this.subagentMaxIterations = opts.subagentMaxIterations ?? this.maxIterations;
     this.ctx = {
       projectDir: opts.projectDir ?? process.cwd(),
+      ...(opts.execShellMode ? { execShellMode: opts.execShellMode } : {}),
       ...(this.tasksEnabled ? { taskStore: this.taskStore } : {}),
       ...(opts.uploadDir ? { uploadDir: opts.uploadDir } : {}),
       ...(opts.askUser ? { askUser: opts.askUser } : {}),

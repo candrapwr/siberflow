@@ -391,6 +391,10 @@ export class AgentHost {
       // projectDir is optional now — pass undefined when no workdir so the
       // agent won't sandbox to a random cwd.
       ...(workdir ? { projectDir: workdir } : {}),
+      // Desktop may be launched from Finder/Dock without the terminal PATH.
+      // Let exec load the user's login shell profile so node/npm and tools
+      // managed by Homebrew, nvm, fnm, or asdf are discoverable.
+      execShellMode: "login-interactive",
       ...(uploadDir ? { uploadDir } : {}),
       askUser: (req) => this.askUserViaRenderer(req),
       contextOptimize: this.optimizeConfig(),
