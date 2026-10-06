@@ -63,6 +63,14 @@ export const execTool: Tool = {
       const child = spawn(shell, shellArgs, {
         cwd: ctx.projectDir,
         env: shellEnv,
+        // On Windows, Node normally quotes each argv item before building the
+        // CreateProcess command line. That turns a command such as
+        //   powershell -Command "Get-ChildItem; Get-Location"
+        // into a second, outer quoted string after `cmd.exe /c`, and cmd may
+        // strip/misparse the inner quotes. `/c` consumes the complete command
+        // line after itself, so pass it verbatim and preserve the user's/AI's
+        // original PowerShell quoting. Ignored on POSIX platforms.
+        windowsVerbatimArguments: isWin,
         // detached creates a process group on Unix; ignored for kill on Windows
         // (we use taskkill there instead). Windows shells need windowsHide.
         detached: !isWin,
