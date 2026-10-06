@@ -266,6 +266,21 @@ export const SettingsModal = memo(function SettingsModal({
                         <label htmlFor="custom-provider-model">Default model</label>
                         <input id="custom-provider-model" type="text" value={form.customProvider.defaultModel} onChange={(e) => setCustomProvider("defaultModel", e.target.value)} placeholder="model-name" />
                       </div>
+                      <div className="settings-field">
+                        <label htmlFor="settings-reasoning-effort">Reasoning effort</label>
+                        <select
+                          id="settings-reasoning-effort"
+                          value={form.reasoningEffort}
+                          onChange={(e) => set("reasoningEffort", e.target.value as SettingsValues["reasoningEffort"])}
+                        >
+                          <option value="none">None</option>
+                          <option value="low">Low</option>
+                          <option value="medium">Medium</option>
+                          <option value="high">High</option>
+                          <option value="max">Max</option>
+                        </select>
+                        <span className="settings-help">Controls <code>reasoning_effort</code> for this gateway. Default: none.</span>
+                      </div>
                     </div>
                   )}
 

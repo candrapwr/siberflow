@@ -27,12 +27,17 @@ export interface MultimodalProviderSettings {
   model: string;
 }
 
+/** Reasoning levels exposed by the Desktop custom-provider UI. */
+export type DesktopReasoningEffort = "none" | "low" | "medium" | "high" | "max";
+
 /** Persisted settings shape (stored in userData/siberflow-settings.json). */
 export interface SettingsValues {
   provider: ProviderName;
   customProvider: CustomProviderSettings;
   multimodalProvider: MultimodalProviderSettings;
   model: string;
+  /** Reasoning effort forwarded to custom OpenAI-compatible gateways. */
+  reasoningEffort: DesktopReasoningEffort;
   /** Maximum number of output tokens requested from the provider. */
   maxTokens: number;
   contextOptimize: boolean;
@@ -68,6 +73,7 @@ export const DEFAULT_SETTINGS: SettingsValues = {
     model: "",
   },
   model: "",
+  reasoningEffort: "none",
   maxTokens: 200000,
   contextOptimize: true,
   contextOptimizeMode: "compact",

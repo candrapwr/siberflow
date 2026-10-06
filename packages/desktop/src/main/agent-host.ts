@@ -945,6 +945,7 @@ export class AgentHost {
     return {
       apiKey: this.apiKey,
       baseUrl: settings.customProvider.baseUrl,
+      reasoningEffort: settings.reasoningEffort,
       ...(headers ? { headers } : {}),
       customName: settings.customProvider.name,
       customDefaultModel: settings.customProvider.defaultModel,
@@ -1002,10 +1003,19 @@ function normalizeSettings(values: SettingsValues): SettingsValues {
   const maxTokens = Number.isFinite(maxTokensValue) && maxTokensValue > 0
     ? Math.min(Math.floor(maxTokensValue), 2_000_000)
     : DEFAULT_SETTINGS.maxTokens;
+  const reasoningEffort =
+    values.reasoningEffort === "low" ||
+    values.reasoningEffort === "medium" ||
+    values.reasoningEffort === "high" ||
+    values.reasoningEffort === "max" ||
+    values.reasoningEffort === "none"
+      ? values.reasoningEffort
+      : DEFAULT_SETTINGS.reasoningEffort;
   return {
     ...values,
     contextWindow,
     maxTokens,
+    reasoningEffort,
     customProvider: {
       name: customProvider.name.trim() || "custom",
       baseUrl: customProvider.baseUrl.trim().replace(/\/+$/, ""),
