@@ -59,6 +59,8 @@ export const ChatIcon = svg(<path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1
 export const CodeIcon = svg(<><path d="m8 7-5 5 5 5m8-10 5 5-5 5m-3-13-2 16" /></>);
 export const ArrowUpRightIcon = svg(<><path d="M7 17 17 7M7 7h10v10" /></>);
 export const SparkIcon = svg(<><path d="m12 3 2.4 6.6L21 12l-6.6 2.4L12 21l-2.4-6.6L3 12l6.6-2.4Z" /></>);
+export const SunIcon = svg(<><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.41M17.66 6.34l1.41-1.41" /></>);
+export const MoonIcon = svg(<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z" />);
 /** Spreadsheet document icon — used for .xlsx attachments. */
 export const FileExcelIcon = svg(
   <>

@@ -1,5 +1,5 @@
 @import "./settings.css";
-/* Siberflow: a warm paper canvas with olive accents. Shared across all UI. */
+/* Siberflow shared design tokens: warm paper by default, charcoal in dark mode. */
 :root {
   color-scheme: light;
   --bg: #faf9f6;
@@ -24,9 +24,33 @@
   --radius-xs: 6px;
   --shadow: 0 16px 60px #30362c14, 0 2px 8px #30362c08;
   --shadow-sm: 0 2px 6px #30362c07;
+  --task-panel-bg: #faf9f69e;
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --display: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
   --mono: "SF Mono", Menlo, Consolas, monospace;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #171a17;
+  --bg-sidebar: #111411;
+  --bg-surface: #20241f;
+  --bg-surface-alt: #252a24;
+  --bg-raised: #2d332b;
+  --bg-input: #1d211c;
+  --border: #30362f;
+  --border-strong: #465044;
+  --fg: #e7eadf;
+  --fg-muted: #adb5a7;
+  --fg-subtle: #858f81;
+  --accent: #8faa73;
+  --accent-soft: #293326;
+  --accent-glow: #8faa7326;
+  --green: #88bd91;
+  --yellow: #d6ac68;
+  --red: #e18476;
+  --shadow: 0 18px 64px #00000052, 0 2px 10px #00000033;
+  --shadow-sm: 0 2px 8px #00000038;
+  --task-panel-bg: #171a179e;
 }
 * {
   box-sizing: border-box;
@@ -598,6 +622,8 @@ svg {
 }
 .topbar-tokens {
   display: inline-flex;
+  flex-shrink: 0;
+  justify-content: flex-end;
   gap: 4px;
   font: 10px var(--mono);
   white-space: nowrap;
@@ -1109,14 +1135,16 @@ svg {
 }
 .task-panel {
   position: absolute;
-  top: 84px;
-  right: 20px;
-  width: 280px;
-  max-width: calc(100% - 40px);
-  max-height: 65vh;
+  top: 82px;
+  right: 14px;
+  width: 238px;
+  max-width: calc(100% - 28px);
+  max-height: 52vh;
   border: 1px solid var(--border-strong);
-  border-radius: 12px;
-  background: var(--bg-surface);
+  border-radius: 10px;
+  background: var(--task-panel-bg);
+  backdrop-filter: blur(18px) saturate(125%);
+  -webkit-backdrop-filter: blur(18px) saturate(125%);
   box-shadow: var(--shadow);
   z-index: 30;
   overflow: hidden;
@@ -1124,14 +1152,14 @@ svg {
 .task-header {
   display: flex;
   align-items: center;
-  padding: 10px 12px;
-  gap: 8px;
+  padding: 7px 9px;
+  gap: 6px;
 }
 .task-toggle {
   display: flex;
   flex: 1;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   background: none;
   border: 0;
   color: var(--fg-muted);
@@ -1139,7 +1167,7 @@ svg {
 }
 .task-title {
   white-space: nowrap;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 550;
 }
 .task-title b {
@@ -1149,7 +1177,7 @@ svg {
 }
 .task-progress {
   flex: 1;
-  height: 4px;
+  height: 3px;
   background: var(--bg-raised);
   border-radius: 4px;
   overflow: hidden;
@@ -1163,8 +1191,8 @@ svg {
 .task-close {
   display: grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   color: var(--fg-muted);
   border: 0;
   background: transparent;
@@ -1175,19 +1203,19 @@ svg {
 }
 .task-body {
   border-top: 1px solid var(--border);
-  padding: 8px 14px 14px;
-  max-height: 250px;
+  padding: 6px 10px 10px;
+  max-height: 190px;
   overflow-y: auto;
 }
 .task-active-hint {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   border-bottom: 1px solid var(--border);
-  padding: 6px 0 12px;
-  margin-bottom: 6px;
+  padding: 4px 0 8px;
+  margin-bottom: 3px;
   color: var(--fg-muted);
-  font-size: 11px;
+  font-size: 10px;
 }
 .task-active-dot {
   flex-shrink: 0;
@@ -1204,10 +1232,10 @@ svg {
   display: flex;
   align-items: flex-start;
   position: relative;
-  gap: 7px;
-  padding: 7px 0;
-  font-size: 12px;
-  line-height: 1.45;
+  gap: 5px;
+  padding: 5px 0;
+  font-size: 11px;
+  line-height: 1.35;
   color: var(--fg-muted);
 }
 .task-step-icon {
@@ -1217,19 +1245,23 @@ svg {
   z-index: 1;
   color: var(--fg-subtle);
 }
+.task-step-icon svg {
+  width: 14px;
+  height: 14px;
+}
 .task-steps.is-plan .task-step:not(:last-child)::before {
   content: "";
   position: absolute;
-  left: 7px;
-  top: 24px;
-  bottom: -8px;
+  left: 6px;
+  top: 19px;
+  bottom: -6px;
   width: 1px;
   background: var(--border);
 }
 .task-step-num {
   color: var(--fg-subtle);
-  font-size: 10px;
-  padding-top: 2px;
+  font-size: 9px;
+  padding-top: 1px;
 }
 .task-step.in_progress {
   color: var(--accent);
@@ -1480,6 +1512,199 @@ svg {
 .attach-chip-x:hover {
   background: #d5dfc7;
 }
+
+/* Dark theme refinements for components that use purpose-specific colors
+   beyond the shared surface/text tokens above. */
+:root[data-theme="dark"] ::selection {
+  background: #405134;
+  color: #f0f4e9;
+}
+:root[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+  background: #596355;
+}
+:root[data-theme="dark"] .sidebar-resizer:hover,
+:root[data-theme="dark"] .sidebar-resizer:active {
+  background: #8faa7330;
+}
+:root[data-theme="dark"] .sidebar-search-input {
+  background: #1b1f1a;
+}
+:root[data-theme="dark"] .sidebar-search-input:focus {
+  background: var(--bg-surface);
+}
+:root[data-theme="dark"] .session-item:hover {
+  background: #20261e;
+}
+:root[data-theme="dark"] .session-item.active,
+:root[data-theme="dark"] .session-item.active .session-actions {
+  background: #293426;
+  color: #b7cca5;
+}
+:root[data-theme="dark"] .session-state-icon {
+  background: #3a2724;
+}
+:root[data-theme="dark"] .session-skeleton {
+  background: linear-gradient(90deg, #242a23, #30362e, #242a23);
+  background-size: 200% 100%;
+}
+:root[data-theme="dark"] .workspace-card {
+  background: #191d18;
+}
+:root[data-theme="dark"] .workspace-icon {
+  border-color: #3a4635;
+}
+:root[data-theme="dark"] .empty-icon {
+  background: #293326;
+  border-color: #394534;
+}
+:root[data-theme="dark"] .empty-orbit {
+  border-color: #3f493b;
+}
+:root[data-theme="dark"] .empty-title {
+  color: var(--fg);
+}
+:root[data-theme="dark"] .suggestion-card,
+:root[data-theme="dark"] .historical-work {
+  background: #1c201b;
+}
+:root[data-theme="dark"] .suggestion-card:hover {
+  border-color: #53624b;
+}
+:root[data-theme="dark"] .msg.user .body {
+  background: #293226;
+  border-color: #394535;
+}
+:root[data-theme="dark"] .msg .body blockquote {
+  border-left-color: #6f875c;
+}
+:root[data-theme="dark"] .tool-block.running,
+:root[data-theme="dark"] .tool-group.running {
+  border-color: #53654a;
+  background: #252d22;
+}
+:root[data-theme="dark"] .tool-done {
+  background: #293628;
+}
+:root[data-theme="dark"] .notice.info {
+  color: #b8cdaa;
+  background: #263024;
+  border-color: #3b4a37;
+}
+:root[data-theme="dark"] .notice.error {
+  color: #efaa9e;
+  background: #382522;
+  border-color: #56342f;
+}
+:root[data-theme="dark"] .notice.warn {
+  color: #e2c087;
+  background: #382f21;
+  border-color: #55452d;
+}
+:root[data-theme="dark"] .composer-shell {
+  box-shadow: 0 5px 20px #0000003d;
+}
+:root[data-theme="dark"] .composer-shell:focus-within {
+  border-color: #718466;
+  box-shadow: 0 0 0 3px var(--accent-glow), 0 5px 20px #0000003d;
+}
+:root[data-theme="dark"] .send-btn:disabled {
+  background: #2a3028;
+  color: #667060;
+}
+:root[data-theme="dark"] .send-btn.stop {
+  background: #242a22;
+}
+:root[data-theme="dark"] .context-bar-fill.ok {
+  background: #819d69;
+}
+:root[data-theme="dark"] .attach-chip {
+  border-color: #3d4b38;
+}
+:root[data-theme="dark"] .attach-chip-x:hover {
+  background: #3a4735;
+}
+:root[data-theme="dark"] .brand-mark,
+:root[data-theme="dark"] .new-chat-btn,
+:root[data-theme="dark"] .empty-cta,
+:root[data-theme="dark"] .assistant-avatar,
+:root[data-theme="dark"] .send-btn,
+:root[data-theme="dark"] .btn-primary,
+:root[data-theme="dark"] .ask-user-submit-btn {
+  color: #121710;
+}
+:root[data-theme="dark"] .new-chat-btn:hover,
+:root[data-theme="dark"] .empty-cta:hover,
+:root[data-theme="dark"] .send-btn:hover:not(:disabled),
+:root[data-theme="dark"] .btn-primary:hover {
+  background: #9bb881;
+}
+
+/* Settings and dialogs */
+:root[data-theme="dark"] .modal-backdrop {
+  background: #060806ad;
+}
+:root[data-theme="dark"] .modal {
+  box-shadow: 0 28px 100px #00000099;
+}
+:root[data-theme="dark"] .must-configure,
+:root[data-theme="dark"] .settings-connection-status.needs-setup {
+  background: #382f21;
+  border-color: #55452d;
+}
+:root[data-theme="dark"] .settings-nav {
+  background: #141714;
+}
+:root[data-theme="dark"] .settings-nav-item:hover {
+  background: #20251e;
+}
+:root[data-theme="dark"] .settings-nav-item.active {
+  background: #293426;
+  color: #b8cdaa;
+  border-color: #3d4b38;
+}
+:root[data-theme="dark"] .settings-nav-badge {
+  background: #222620;
+}
+:root[data-theme="dark"] .settings-connection-status.connected {
+  background: #263326;
+  border-color: #3a4a38;
+}
+:root[data-theme="dark"] .settings-field input,
+:root[data-theme="dark"] .settings-field select {
+  background: #1b1f1a;
+}
+:root[data-theme="dark"] .settings-field input:focus,
+:root[data-theme="dark"] .settings-field select:focus {
+  border-color: #718466;
+}
+:root[data-theme="dark"] .settings-error {
+  border-color: #56342f;
+  background: #382522;
+}
+:root[data-theme="dark"] .settings-switch-track {
+  background: #3c433a;
+}
+:root[data-theme="dark"] .settings-info-callout {
+  border-color: #3b4937;
+  background: #252e23;
+}
+:root[data-theme="dark"] .ask-user-item.selected {
+  border-color: #617555;
+  background: #283225;
+}
+:root[data-theme="dark"] .settings-theme-icon.light {
+  color: #c89c50;
+  background: #3a3325;
+  border-color: #514630;
+}
+:root[data-theme="dark"] .settings-theme-option.selected .settings-theme-radio,
+:root[data-theme="dark"] .settings-tool-toggle input:checked + .settings-tool-check,
+:root[data-theme="dark"] .ask-user-item.selected .ask-user-num {
+  color: #121710;
+}
+:root[data-theme="dark"] .settings-tool-toggle input:checked + .settings-tool-check::after {
+  border-color: #121710;
+}
 @keyframes empty-fade {
   from {
     opacity: 0;
@@ -1563,9 +1788,6 @@ svg {
     padding-inline: 18px;
     gap: 9px;
   }
-  .topbar-tokens {
-    display: none;
-  }
   .topbar-meta {
     max-width: 160px;
   }
@@ -1635,7 +1857,10 @@ svg {
     padding: 10px 8px;
   }
   .topbar-meta {
-    max-width: 100px;
+    max-width: 88px;
+  }
+  .topbar-tokens {
+    font-size: 9px;
   }
   .chat-center {
     padding-inline: 16px;

@@ -4,7 +4,7 @@ import { memo, useRef, useState, type ReactNode } from "react";
 import { ipc } from "../ipc.js";
 import { DEFAULT_SETTINGS, type SettingsValues } from "@shared/protocol";
 import { useDialogFocus } from "../hooks/useDialogFocus.js";
-import { SparkIcon, SettingsIcon, ChatIcon, ToolIcon, CodeIcon, XIcon } from "./icons.js";
+import { SparkIcon, SettingsIcon, ChatIcon, ToolIcon, CodeIcon, XIcon, SunIcon, MoonIcon } from "./icons.js";
 
 /** Tools that can be enabled for the agent. */
 const TOGGLE_TOOLS = [
@@ -42,6 +42,7 @@ const TOOL_GROUP_META: Record<string, { title: string; description: string }> = 
 
 const SETTINGS_TABS = [
   { id: "provider", label: "AI & providers", description: "Models and connections", icon: SparkIcon },
+  { id: "appearance", label: "Appearance", description: "Light or dark theme", icon: MoonIcon },
   { id: "agent", label: "Agent behavior", description: "Make it work your way", icon: SettingsIcon },
   { id: "context", label: "Conversation", description: "Context and memory", icon: ChatIcon },
   { id: "tools", label: "Tools", description: "Your assistant's capabilities", icon: ToolIcon },
@@ -382,6 +383,53 @@ export const SettingsModal = memo(function SettingsModal({
                       <span className="settings-help">Use a delay to avoid rate limits. 0 turns it off.</span>
                     </div>
                   </div>
+                </SettingsCard>
+              </div>
+            )}
+
+            {activeTab === "appearance" && (
+              <div className="settings-page">
+                <div className="settings-page-heading">
+                  <div>
+                    <h4>Appearance</h4>
+                    <p>Choose the color theme that feels most comfortable for your workspace.</p>
+                  </div>
+                </div>
+
+                <SettingsCard title="Color theme" description="Your choice is saved and restored the next time Siberflow opens.">
+                  <div className="settings-theme-options" role="radiogroup" aria-label="Color theme">
+                    <label className={`settings-theme-option${form.theme === "light" ? " selected" : ""}`}>
+                      <input
+                        type="radio"
+                        name="desktop-theme"
+                        value="light"
+                        checked={form.theme === "light"}
+                        onChange={() => set("theme", "light")}
+                      />
+                      <span className="settings-theme-icon light"><SunIcon size={19} /></span>
+                      <span className="settings-theme-copy">
+                        <strong>Light</strong>
+                        <small>Warm paper tones for bright environments.</small>
+                      </span>
+                      <span className="settings-theme-radio" />
+                    </label>
+                    <label className={`settings-theme-option${form.theme === "dark" ? " selected" : ""}`}>
+                      <input
+                        type="radio"
+                        name="desktop-theme"
+                        value="dark"
+                        checked={form.theme === "dark"}
+                        onChange={() => set("theme", "dark")}
+                      />
+                      <span className="settings-theme-icon dark"><MoonIcon size={18} /></span>
+                      <span className="settings-theme-copy">
+                        <strong>Dark</strong>
+                        <small>Low-glare charcoal tones for dim environments.</small>
+                      </span>
+                      <span className="settings-theme-radio" />
+                    </label>
+                  </div>
+                  <span className="settings-help settings-theme-help">The theme changes after you save these settings.</span>
                 </SettingsCard>
               </div>
             )}

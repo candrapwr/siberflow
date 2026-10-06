@@ -29,10 +29,13 @@ export interface MultimodalProviderSettings {
 
 /** Reasoning levels exposed by the Desktop custom-provider UI. */
 export type DesktopReasoningEffort = "none" | "low" | "medium" | "high" | "max";
+export type DesktopTheme = "light" | "dark";
 
 /** Persisted settings shape (stored in userData/siberflow-settings.json). */
 export interface SettingsValues {
   provider: ProviderName;
+  /** Renderer color theme. */
+  theme: DesktopTheme;
   customProvider: CustomProviderSettings;
   multimodalProvider: MultimodalProviderSettings;
   model: string;
@@ -63,6 +66,7 @@ export interface SettingsValues {
 
 export const DEFAULT_SETTINGS: SettingsValues = {
   provider: "deepseek",
+  theme: "dark",
   customProvider: {
     name: "custom",
     baseUrl: "",

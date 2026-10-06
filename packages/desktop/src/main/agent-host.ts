@@ -1011,8 +1011,10 @@ function normalizeSettings(values: SettingsValues): SettingsValues {
     values.reasoningEffort === "none"
       ? values.reasoningEffort
       : DEFAULT_SETTINGS.reasoningEffort;
+  const theme = values.theme === "light" ? "light" : DEFAULT_SETTINGS.theme;
   return {
     ...values,
+    theme,
     contextWindow,
     maxTokens,
     reasoningEffort,

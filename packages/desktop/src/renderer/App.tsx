@@ -45,6 +45,15 @@ export default function App() {
   const [suggestedPrompt, setSuggestedPrompt] = useState<{ text: string; id: number }>();
   const [sidebarHidden, setSidebarHidden] = useState(false);
 
+  // The settings file remains the source of truth; localStorage only lets the
+  // renderer paint the same theme before the initial IPC response arrives.
+  useEffect(() => {
+    const theme = state.settingsValues?.theme;
+    if (theme !== "light" && theme !== "dark") return;
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("siberflow-theme", theme);
+  }, [state.settingsValues?.theme]);
+
   // Resizable sidebar: drag the handle on the right edge to resize.
   const [sidebarWidth, setSidebarWidth] = useState(256);
   const draggingRef = useRef(false);

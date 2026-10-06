@@ -369,6 +369,94 @@
   font-weight: 600;
   margin-bottom: 12px;
 }
+.settings-theme-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.settings-theme-option {
+  display: flex;
+  align-items: center;
+  position: relative;
+  gap: 12px;
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-surface-alt);
+  cursor: pointer;
+  transition: border-color .15s, background .15s, transform .15s;
+}
+.settings-theme-option:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+}
+.settings-theme-option.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.settings-theme-option input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+.settings-theme-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.settings-theme-icon.light {
+  color: #8e682a;
+  background: #f5edda;
+}
+.settings-theme-icon.dark {
+  color: #b4c8a4;
+  background: #252b24;
+  border-color: #3b4538;
+}
+.settings-theme-copy {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+.settings-theme-copy strong {
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 600;
+}
+.settings-theme-copy small {
+  color: var(--fg-subtle);
+  font-size: 10px;
+  line-height: 1.45;
+}
+.settings-theme-radio {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--bg-surface);
+  box-shadow: inset 0 0 0 3px var(--bg-surface);
+}
+.settings-theme-option.selected .settings-theme-radio {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+.settings-theme-option input:focus-visible ~ .settings-theme-radio {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.settings-theme-help {
+  display: block;
+  margin-top: 12px;
+}
 .settings-input-suffix {
   display: flex;
   align-items: center;
@@ -797,6 +885,9 @@
     min-height: 0;
   }
   .settings-field-grid {
+    grid-template-columns: 1fr;
+  }
+  .settings-theme-options {
     grid-template-columns: 1fr;
   }
   .settings-footer-hint {
