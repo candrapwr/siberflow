@@ -5,6 +5,7 @@
 
 import { memo, useState, useEffect, useRef } from "react";
 import { ipc } from "../ipc.js";
+import { useDialogFocus } from "../hooks/useDialogFocus.js";
 
 interface AskUserPrompt {
   id: string;
@@ -31,6 +32,7 @@ export const AskUserModal = memo(function AskUserModal({ prompt, onClose }: AskU
   const [text, setText] = useState(prompt.defaultChoice ?? "");
   const [done, setDone] = useState(false);
   const textRef = useRef<HTMLTextAreaElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   const answer = async (value: string) => {
     if (done) return;
@@ -44,6 +46,7 @@ export const AskUserModal = memo(function AskUserModal({ prompt, onClose }: AskU
     await ipc().answerUser(prompt.id, "cancel", "");
     onClose();
   };
+  useDialogFocus(dialogRef, () => { void cancel(); });
 
   // Keyboard navigation.
   useEffect(() => {
@@ -92,19 +95,20 @@ export const AskUserModal = memo(function AskUserModal({ prompt, onClose }: AskU
   };
 
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true">
-      <div className="modal ask-user-modal">
+    <div className="modal-backdrop">
+      <div ref={dialogRef} className="modal ask-user-modal" role="dialog" aria-modal="true" aria-labelledby="ask-user-question">
         <div className="ask-user-header">
           <span className="ask-user-badge">Pertanyaan</span>
         </div>
         <div className="ask-user-body">
-          <div className="ask-user-question">{prompt.question}</div>
+          <div id="ask-user-question" className="ask-user-question">{prompt.question}</div>
           <div className="ask-user-list">
             {prompt.choices.map((choice, i) => (
               <button
                 key={choice}
                 type="button"
                 className={`ask-user-item ${selectedIndex === i ? "selected" : ""}`}
+                aria-pressed={selectedIndex === i}
                 onClick={() => setSelectedIndex(i)}
                 onDoubleClick={() => answer(choice)}
               >
@@ -113,17 +117,18 @@ export const AskUserModal = memo(function AskUserModal({ prompt, onClose }: AskU
               </button>
             ))}
             {showFreeText && (
-              <button
-                type="button"
+              <div
                 className={`ask-user-item ask-user-freetext-item ${selectedIndex === freeTextIndex ? "selected" : ""}`}
-                onClick={() => setSelectedIndex(freeTextIndex)}
               >
-                <span className="ask-user-num">{prompt.choices.length + 1}</span>
-                <span className="ask-user-item-label">Jawaban sendiri</span>
+                <button type="button" className="ask-user-free-select" aria-pressed={selectedIndex === freeTextIndex} onClick={() => setSelectedIndex(freeTextIndex)}>
+                  <span className="ask-user-num">{prompt.choices.length + 1}</span>
+                  <span className="ask-user-item-label">Jawaban sendiri</span>
+                </button>
                 {selectedIndex === freeTextIndex && (
                   <textarea
                     ref={textRef}
                     className="ask-user-text-input"
+                    aria-label="Jawaban sendiri"
                     value={text}
                     onChange={(e) => setText(e.target.value)}
                     placeholder={prompt.defaultChoice ?? "Ketik jawaban…"}
@@ -132,7 +137,7 @@ export const AskUserModal = memo(function AskUserModal({ prompt, onClose }: AskU
                     onKeyDown={(e) => e.stopPropagation()}
                   />
                 )}
-              </button>
+              </div>
             )}
           </div>
         </div>

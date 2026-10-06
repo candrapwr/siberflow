@@ -2,7 +2,7 @@
 
 import { memo, useEffect, useMemo, useState } from "react";
 import type { Task } from "@siberflow/core";
-import { XIcon } from "./icons.js";
+import { XIcon, ChevronDownIcon } from "./icons.js";
 
 interface TaskPanelProps {
   tasks: Task[];
@@ -69,17 +69,19 @@ export const TaskPanel = memo(function TaskPanel({
   return (
     <div className="task-panel">
       {/* ── Header ── */}
-      <div className="task-header" onClick={() => setCollapsed((v) => !v)}>
-        <span className="task-chevron">{collapsed ? "▸" : "▾"}</span>
-        <span className="task-title">
-          {isPlan ? "📋 Rencana Kerja" : "tasks"}{" "}
-          <b>
-            {done}/{displayTasks.length}
-          </b>
-        </span>
-        <div className="task-progress">
-          <div className="task-progress-fill" style={{ width: `${pct}%` }} />
-        </div>
+      <div className="task-header">
+        <button className="task-toggle" onClick={() => setCollapsed((v) => !v)} aria-expanded={!collapsed}>
+          <ChevronDownIcon size={14} className={collapsed ? "rotated" : ""} />
+          <span className="task-title">
+            {isPlan ? "Work plan" : "Tasks"}{" "}
+            <b>
+              {done}/{displayTasks.length}
+            </b>
+          </span>
+          <span className="task-progress">
+            <span className="task-progress-fill" style={{ width: `${pct}%` }} />
+          </span>
+        </button>
         <button
           type="button"
           className="task-close"

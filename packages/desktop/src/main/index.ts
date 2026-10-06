@@ -48,7 +48,7 @@ function createWindow(): void {
     show: false,
     autoHideMenuBar: true,
     title: "Siberflow",
-    backgroundColor: "#1e1e1e",
+    backgroundColor: "#faf9f6",
     icon: iconPath(),
     webPreferences: {
       preload: join(OUT_DIR, "preload", "index.mjs"),

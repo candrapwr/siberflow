@@ -54,6 +54,11 @@ export const SearchIcon = svg(<><circle cx="11" cy="11" r="8" /><path d="m21 21-
 export const PaperclipIcon = svg(<><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" /></>);
 export const XIcon = svg(<><path d="M18 6 6 18" /><path d="m6 6 12 12" /></>);
 export const MoreHorizontalIcon = svg(<><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none" /></>);
+export const PanelIcon = svg(<><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16" /></>);
+export const ChatIcon = svg(<path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5Z" />);
+export const CodeIcon = svg(<><path d="m8 7-5 5 5 5m8-10 5 5-5 5m-3-13-2 16" /></>);
+export const ArrowUpRightIcon = svg(<><path d="M7 17 17 7M7 7h10v10" /></>);
+export const SparkIcon = svg(<><path d="m12 3 2.4 6.6L21 12l-6.6 2.4L12 21l-2.4-6.6L3 12l6.6-2.4Z" /></>);
 /** Spreadsheet document icon — used for .xlsx attachments. */
 export const FileExcelIcon = svg(
   <>

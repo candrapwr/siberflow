@@ -1,8 +1,10 @@
 // Settings modal: provider selection, API key (safeStorage-backed), agent config.
 
-import { memo, useState, type ReactNode } from "react";
+import { memo, useRef, useState, type ReactNode } from "react";
 import { ipc } from "../ipc.js";
 import { DEFAULT_SETTINGS, type SettingsValues } from "@shared/protocol";
+import { useDialogFocus } from "../hooks/useDialogFocus.js";
+import { SparkIcon, SettingsIcon, ChatIcon, ToolIcon, CodeIcon, XIcon } from "./icons.js";
 
 /** Tools that can be enabled for the agent. */
 const TOGGLE_TOOLS = [
@@ -39,11 +41,11 @@ const TOOL_GROUP_META: Record<string, { title: string; description: string }> = 
 };
 
 const SETTINGS_TABS = [
-  { id: "provider", label: "AI & providers", description: "Model, API keys, and integrations" },
-  { id: "agent", label: "Agent behavior", description: "How the assistant works" },
-  { id: "context", label: "Conversation", description: "Context and memory limits" },
-  { id: "tools", label: "Tools", description: "What the assistant can access" },
-  { id: "developer", label: "Developer", description: "Diagnostics and troubleshooting" },
+  { id: "provider", label: "AI & providers", description: "Models and connections", icon: SparkIcon },
+  { id: "agent", label: "Agent behavior", description: "Make it work your way", icon: SettingsIcon },
+  { id: "context", label: "Conversation", description: "Context and memory", icon: ChatIcon },
+  { id: "tools", label: "Tools", description: "Your assistant's capabilities", icon: ToolIcon },
+  { id: "developer", label: "Developer", description: "Diagnostics and logs", icon: CodeIcon },
 ] as const;
 type SettingsTab = (typeof SETTINGS_TABS)[number]["id"];
 
@@ -101,6 +103,8 @@ export const SettingsModal = memo(function SettingsModal({
   mustConfigure,
   onClose,
 }: SettingsModalProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialogRef, onClose);
   const [activeTab, setActiveTab] = useState<SettingsTab>("provider");
   const [form, setForm] = useState<SettingsValues>({
     ...DEFAULT_SETTINGS,
@@ -133,7 +137,7 @@ export const SettingsModal = memo(function SettingsModal({
         : [...f.enabledTools, name],
     }));
 
-  const save = () => {
+  const save = async () => {
     if (form.provider === "custom") {
       if (!form.customProvider.baseUrl.trim() || !form.customProvider.defaultModel.trim()) {
         setError("Add a base URL and default model before saving the custom provider.");
@@ -142,26 +146,30 @@ export const SettingsModal = memo(function SettingsModal({
       }
     }
     // null = leave key unchanged; non-empty = update; empty = clear.
-    void ipc().saveSettings(
-      {
-        ...form,
-        // The custom provider's default model is authoritative.
-        ...(form.provider === "custom" ? { model: "" } : {}),
-        customProvider: {
-          name: form.customProvider.name.trim() || "custom",
-          baseUrl: form.customProvider.baseUrl.trim().replace(/\/+$/, ""),
-          defaultModel: form.customProvider.defaultModel.trim(),
+    try {
+      await ipc().saveSettings(
+        {
+          ...form,
+          // The custom provider's default model is authoritative.
+          ...(form.provider === "custom" ? { model: "" } : {}),
+          customProvider: {
+            name: form.customProvider.name.trim() || "custom",
+            baseUrl: form.customProvider.baseUrl.trim().replace(/\/+$/, ""),
+            defaultModel: form.customProvider.defaultModel.trim(),
+          },
+          multimodalProvider: {
+            baseUrl: form.multimodalProvider.baseUrl.trim().replace(/\/+$/, ""),
+            model: form.multimodalProvider.model.trim(),
+          },
         },
-        multimodalProvider: {
-          baseUrl: form.multimodalProvider.baseUrl.trim().replace(/\/+$/, ""),
-          model: form.multimodalProvider.model.trim(),
-        },
-      },
-      apiKey.length > 0 ? apiKey : null,
-      multimodalApiKey.length > 0 ? multimodalApiKey : null,
-      exaApiKey.length > 0 ? exaApiKey : null,
-    );
-    onClose();
+        apiKey.length > 0 ? apiKey : null,
+        multimodalApiKey.length > 0 ? multimodalApiKey : null,
+        exaApiKey.length > 0 ? exaApiKey : null,
+      );
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save settings.");
+    }
   };
 
   const enabledToolCount = form.enabledTools.length;
@@ -169,14 +177,14 @@ export const SettingsModal = memo(function SettingsModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" onClick={(e) => e.stopPropagation()}>
+      <div ref={dialogRef} className="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" onClick={(e) => e.stopPropagation()}>
         <header className="settings-header">
           <div>
-            <div className="settings-eyebrow">Preferences</div>
-            <h3 id="settings-title">Settings</h3>
-            <div className="modal-subtitle">Set up your AI connection and choose what Siberflow can do.</div>
+            <div className="settings-eyebrow">Your Siberflow</div>
+            <h3 id="settings-title">Make yourself at home.</h3>
+            <div className="modal-subtitle">A few preferences to make this workspace yours.</div>
           </div>
-          <button className="settings-close" type="button" onClick={onClose} aria-label="Close settings">×</button>
+          <button className="settings-close" type="button" onClick={onClose} aria-label="Close settings"><XIcon size={16} /></button>
         </header>
 
         {mustConfigure && (
@@ -194,9 +202,13 @@ export const SettingsModal = memo(function SettingsModal({
                 type="button"
                 className={`settings-nav-item${activeTab === tab.id ? " active" : ""}`}
                 onClick={() => setActiveTab(tab.id)}
+                aria-current={activeTab === tab.id ? "page" : undefined}
               >
-                <span className="settings-nav-item-title">{tab.label}</span>
-                <span className="settings-nav-item-description">{tab.description}</span>
+                <tab.icon size={16} />
+                <span className="settings-nav-copy">
+                  <span className="settings-nav-item-title">{tab.label}</span>
+                  <span className="settings-nav-item-description">{tab.description}</span>
+                </span>
                 {tab.id === "tools" && <span className="settings-nav-badge">{enabledToolCount}</span>}
               </button>
             ))}
@@ -273,6 +285,11 @@ export const SettingsModal = memo(function SettingsModal({
                       <span className="settings-help">Leave this empty unless you need a specific model.</span>
                     </div>
                   )}
+                  <div className="settings-field">
+                    <label htmlFor="settings-max-tokens">Max output tokens</label>
+                    <div className="settings-input-suffix"><input id="settings-max-tokens" type="number" min={1} max={2000000} step={1000} value={form.maxTokens} onChange={(e) => set("maxTokens", Number(e.target.value))} /><span>tokens</span></div>
+                    <span className="settings-help">Maximum response length sent to the AI provider. Default: 200,000 tokens.</span>
+                  </div>
                   {error && <div className="settings-error">{error}</div>}
                 </SettingsCard>
 
@@ -371,7 +388,7 @@ export const SettingsModal = memo(function SettingsModal({
                   </label>
                   <div className="settings-field">
                     <label htmlFor="context-mode">Optimization strategy</label>
-                    <select id="context-mode" value={form.contextOptimizeMode} onChange={(e) => set("contextOptimizeMode", e.target.value as SettingsValues["contextOptimizeMode"]) }>
+                    <select id="context-mode" value={form.contextOptimizeMode} onChange={(e) => set("contextOptimizeMode", e.target.value as SettingsValues["contextOptimizeMode"])}>
                       <option value="compact">Compact with an AI summary (recommended)</option>
                       <option value="summary">Keep a short summary</option>
                       <option value="recent">Keep only recent messages</option>
@@ -386,7 +403,7 @@ export const SettingsModal = memo(function SettingsModal({
                     <div className="settings-field-grid settings-field-grid-three">
                       <div className="settings-field">
                         <label htmlFor="context-window">Context window</label>
-                        <div className="settings-input-suffix"><input id="context-window" type="number" min={1000} step={1000} value={form.contextWindow} onChange={(e) => set("contextWindow", Number(e.target.value))} /><span>tokens</span></div>
+                        <div className="settings-input-suffix"><input id="context-window" type="number" min={1000} max={2000000} step={1000} value={form.contextWindow} onChange={(e) => set("contextWindow", Number(e.target.value))} /><span>tokens</span></div>
                       </div>
                       <div className="settings-field">
                         <label htmlFor="compact-threshold">Compact at</label>

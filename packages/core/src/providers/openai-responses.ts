@@ -102,7 +102,13 @@ export class OpenAIResponsesProvider implements Provider {
     let finishReason: FinishReason = "other";
     let usage: UsageStats | undefined;
 
-    for await (const chunk of parseSSE(res.body)) {
+    const idleTimeoutMs = req.maxTokens !== undefined && req.maxTokens <= 100
+      ? 3_000
+      : 30_000;
+    stream: for await (const chunk of parseSSE(res.body, {
+      idleTimeoutMs,
+      initialTimeoutMs: 60_000,
+    })) {
       const ev = chunk as ResponsesEvent;
 
       switch (ev.type) {
@@ -160,12 +166,17 @@ export class OpenAIResponsesProvider implements Provider {
             };
           }
           finishReason = callsByItemId.size > 0 ? "tool_calls" : "stop";
-          break;
+          // This is a terminal event. Do not require a trailing `[DONE]` or
+          // socket close from OpenAI-compatible gateways.
+          break stream;
         }
 
         case "response.incomplete": {
           finishReason = "length";
-          break;
+          // `response.incomplete` is the terminal event for a response that
+          // hit max_output_tokens. Do not wait for a gateway-specific trailing
+          // event or the UI can remain stuck in a busy state.
+          break stream;
         }
 
         case "response.failed":
@@ -177,6 +188,10 @@ export class OpenAIResponsesProvider implements Provider {
           throw new Error(`openai-responses stream error: ${msg}`);
         }
       }
+    }
+
+    if (finishReason === "length" || finishReason === "stop" || finishReason === "tool_calls") {
+      await res.body.cancel().catch(() => undefined);
     }
 
     const toolCalls: ToolCall[] = [...callsByItemId.values()]

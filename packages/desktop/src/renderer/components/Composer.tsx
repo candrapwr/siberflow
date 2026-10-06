@@ -6,7 +6,7 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { ipc } from "../ipc.js";
 import type { AttachmentKind, PickedFile, UsageInfo } from "@shared/protocol";
-import { FileDocIcon, FileExcelIcon, FileImageIcon, FilePdfIcon, PaperclipIcon, SendIcon, StopIcon, XIcon } from "./icons.js";
+import { FileDocIcon, FileExcelIcon, FileImageIcon, FilePdfIcon, PaperclipIcon, SendIcon, StopIcon, XIcon, FolderIcon } from "./icons.js";
 
 interface ComposerProps {
   busy: boolean;
@@ -18,6 +18,8 @@ interface ComposerProps {
   /** When this changes to a non-empty string, prefill the input with it and
    * focus/select-all so the user can immediately edit or resend. */
   prefill?: string;
+  /** Allows selecting the same suggestion again after changing the draft. */
+  prefillKey?: number;
   /** Whether the active session has a working directory. Upload is disabled
    * (and attachments cleared) when false, since there's no sandbox to copy
    * files into and local file tools wouldn't be registered anyway. */
@@ -55,7 +57,7 @@ function attachmentIcon(kind: AttachmentKind) {
   return FileExcelIcon;
 }
 
-export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, prefill, hasWorkdir = true, docEnabled = true, imageEnabled = false, usage = null, contextWindow = 200000, compactThreshold = 0.8, optimizeMode = "compact", summarizing = false, subagentPhase = null }: ComposerProps) {
+export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, prefill, prefillKey, hasWorkdir = true, docEnabled = true, imageEnabled = false, usage = null, contextWindow = 200000, compactThreshold = 0.8, optimizeMode = "compact", summarizing = false, subagentPhase = null }: ComposerProps) {
   const [value, setValue] = useState("");
   const [attachments, setAttachments] = useState<PickedFile[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -75,7 +77,7 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
         }
       });
     }
-  }, [prefill]);
+  }, [prefill, prefillKey]);
 
   // Auto-resize textarea to fit content.
   useEffect(() => {
@@ -87,7 +89,7 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
 
   // Focus the input on mount, on session switch, and after a turn completes.
   useEffect(() => {
-    if (busy) return;
+    if (busy || document.querySelector('[role="dialog"]')) return;
     const ta = taRef.current;
     if (ta && document.activeElement !== ta) {
       ta.focus();
@@ -128,7 +130,7 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
 
   const send = () => {
     const text = value.trim();
-    if (busy) return;
+    if (busy || uploading) return;
     if (!text && attachments.length === 0) return;
     const composed = buildPromptWithAttachments(text, attachments);
     setValue("");
@@ -146,7 +148,7 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
   }, [busy]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       send();
     }
@@ -164,59 +166,51 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
 
   return (
     <div className="composer">
-      {attachments.length > 0 && (
-        <div className="composer-attachments">
-          {attachments.map((f, i) => {
-            const Icon = attachmentIcon(f.kind);
-            return (
-              <span className="attach-chip" key={`${f.relPath}:${i}`} title={f.relPath}>
-                <Icon size={13} className="attach-chip-icon" />
-                <span className="attach-chip-name">{f.name}</span>
-                <button
-                  type="button"
-                  className="attach-chip-x"
-                  onClick={() => removeAttachment(i)}
-                  disabled={busy}
-                  title="Hapus"
-                >
-                  <XIcon size={11} />
-                </button>
-              </span>
-            );
-          })}
-        </div>
-      )}
-      <div className="composer-shell">
-        <button
-          type="button"
-          className="upload-btn"
-          onClick={onPickFiles}
-          disabled={uploadDisabled}
-          title={uploadTitle}
-          aria-label="Upload file dokumen atau gambar"
-        >
-          <PaperclipIcon size={15} />
-        </button>
+      <div className={`composer-shell${busy ? " is-working" : ""}`}>
+        {attachments.length > 0 && (
+          <div className="composer-attachments">
+            {attachments.map((f, i) => {
+              const Icon = attachmentIcon(f.kind);
+              return (
+                <span className="attach-chip" key={`${f.relPath}:${i}`} title={f.relPath}>
+                  <Icon size={13} className="attach-chip-icon" />
+                  <span className="attach-chip-name">{f.name}</span>
+                  <button
+                    type="button"
+                    className="attach-chip-x"
+                    onClick={() => removeAttachment(i)}
+                    disabled={busy}
+                    title="Hapus"
+                  >
+                    <XIcon size={11} />
+                  </button>
+                </span>
+              );
+            })}
+          </div>
+        )}
         <textarea
           ref={taRef}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={subagentPhase ? `Agent: ${subagentPhase.detail ?? subagentPhase.phase}…` : summarizing ? "Summarizing context…" : busy ? "Generating…" : "Message Siberflow…"}
+          placeholder={subagentPhase ? `Agent: ${subagentPhase.detail ?? subagentPhase.phase}…` : summarizing ? "Summarizing context…" : busy ? "Siberflow is working…" : "What would you like to work on?"}
+          aria-label="Message Siberflow"
           disabled={busy}
           rows={1}
         />
-        {busy ? (
-          <button className="send-btn stop" onClick={stop} title="Stop">
-            <StopIcon size={12} />
-          </button>
-        ) : (
-          <button className="send-btn" onClick={send} disabled={!value.trim() && attachments.length === 0} title="Send (Enter)">
-            <SendIcon size={13} />
-          </button>
-        )}
+        <div className="composer-toolbar">
+          <button type="button" className="upload-btn" onClick={onPickFiles} disabled={uploadDisabled} title={uploadTitle} aria-label="Attach documents or images"><PaperclipIcon size={17} /></button>
+          <span className={`composer-workspace${hasWorkdir ? " connected" : ""}`}><FolderIcon size={13} />{hasWorkdir ? "Workspace connected" : "No folder selected"}</span>
+          <span className="composer-send-label" role="status">{stopping ? "Stopping…" : uploading ? "Attaching…" : busy ? "Working on it" : ""}</span>
+          {busy ? (
+            <button className="send-btn stop" onClick={stop} disabled={stopping} title="Stop response" aria-label="Stop response"><StopIcon size={14} /></button>
+          ) : (
+            <button className="send-btn" onClick={send} disabled={uploading || (!value.trim() && attachments.length === 0)} title="Send (Enter)" aria-label="Send message"><SendIcon size={18} /></button>
+          )}
+        </div>
       </div>
-      {optimizeMode === "compact" && (() => {
+      {optimizeMode === "compact" && usage && (() => {
         const used = usage?.last?.contextSize ?? usage?.last?.promptTokens ?? 0;
         const pct = contextWindow > 0 ? Math.min(100, (used / contextWindow) * 100) : 0;
         const threshPct = Math.min(100, compactThreshold * 100);
@@ -236,9 +230,6 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
           </div>
         );
       })()}
-      <div className="composer-hint">
-        <kbd>Enter</kbd> send · <kbd>Shift+Enter</kbd> newline · <kbd>Cmd+K</kbd> focus
-      </div>
     </div>
   );
 });

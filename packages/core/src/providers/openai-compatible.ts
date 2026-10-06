@@ -150,7 +150,13 @@ export abstract class OpenAICompatibleProvider implements Provider {
     let chunkCount = 0;
     let reasoningContentLength = 0;
 
-    for await (const chunk of parseSSE(res.body)) {
+    const idleTimeoutMs = req.maxTokens !== undefined && req.maxTokens <= 100
+      ? 3_000
+      : 30_000;
+    stream: for await (const chunk of parseSSE(res.body, {
+      idleTimeoutMs,
+      initialTimeoutMs: 60_000,
+    })) {
       const data = chunk as StreamChunk;
       chunkCount++;
 
@@ -219,7 +225,18 @@ export abstract class OpenAICompatibleProvider implements Provider {
       if (choice.finish_reason) {
         rawFinish = choice.finish_reason;
         finishReason = normalizeFinishReason(choice.finish_reason);
+        // finish_reason is itself the terminal signal. Several compatible
+        // gateways omit `[DONE]` or leave the HTTP body open after *any*
+        // terminal reason (not only `length`). All deltas from this choice
+        // have already been consumed, so waiting longer only leaves the host
+        // and Desktop UI stuck in a busy state.
+        break stream;
       }
+    }
+
+    // Release a gateway stream that remains open after its terminal chunk.
+    if (rawFinish !== null) {
+      await res.body.cancel().catch(() => undefined);
     }
 
     const toolCalls: ToolCall[] = [...toolCallsByIndex.entries()]

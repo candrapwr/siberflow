@@ -27,6 +27,7 @@ import {
   type Task,
   type ToolRegistry,
 } from "@siberflow/core";
+import { DEFAULT_SETTINGS } from "@shared/protocol";
 import type {
   BannerInfo,
   CurrentSessionInfo,
@@ -402,6 +403,7 @@ export class AgentHost {
       autoContinue: this.settings.autoContinue,
       preTruncate: this.settings.preTruncate,
       maxIterations: this.settings.maxIterations,
+      maxTokens: this.settings.maxTokens,
       requestDelayMs: this.settings.requestDelayMs,
       // Desktop persists checkpoints while a turn is running, so keep the
       // completed part of an aborted turn available for resume.
@@ -993,8 +995,17 @@ function displayProviderName(settings: SettingsValues): string {
 function normalizeSettings(values: SettingsValues): SettingsValues {
   const customProvider = values.customProvider ?? { name: "custom", baseUrl: "", defaultModel: "" };
   const multimodalProvider = values.multimodalProvider ?? { baseUrl: "https://api.openai.com/v1", model: "" };
+  const contextWindow = Number.isFinite(values.contextWindow) && values.contextWindow >= 1000
+    ? Math.min(Math.floor(values.contextWindow), 2_000_000)
+    : DEFAULT_SETTINGS.contextWindow;
+  const maxTokensValue = Number(values.maxTokens);
+  const maxTokens = Number.isFinite(maxTokensValue) && maxTokensValue > 0
+    ? Math.min(Math.floor(maxTokensValue), 2_000_000)
+    : DEFAULT_SETTINGS.maxTokens;
   return {
     ...values,
+    contextWindow,
+    maxTokens,
     customProvider: {
       name: customProvider.name.trim() || "custom",
       baseUrl: customProvider.baseUrl.trim().replace(/\/+$/, ""),

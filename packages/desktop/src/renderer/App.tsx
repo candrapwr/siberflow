@@ -3,8 +3,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-const SIDEBAR_MIN = 200;
-const SIDEBAR_MAX = 480;
+const SIDEBAR_MIN = 220;
+const SIDEBAR_MAX = 360;
 import { ipc } from "./ipc.js";
 import { useChat, isAssistantTurn } from "./hooks/useChat.js";
 import { useSessions } from "./hooks/useSessions.js";
@@ -15,7 +15,7 @@ import { TaskPanel } from "./components/TaskPanel.js";
 import { EmptyState } from "./components/EmptyState.js";
 import { SettingsModal } from "./components/SettingsModal.js";
 import { AskUserModal } from "./components/AskUserModal.js";
-import { ArrowDownIcon, FolderIcon } from "./components/icons.js";
+import { ArrowDownIcon, PanelIcon } from "./components/icons.js";
 import type { SettingsValues } from "@shared/protocol";
 
 /** Compact token count: 1234 → "1.2k", 12345 → "12k". */
@@ -23,12 +23,6 @@ function formatTokens(n: number): string {
   if (n < 1000) return String(n);
   if (n < 10000) return (n / 1000).toFixed(1) + "k";
   return Math.round(n / 1000) + "k";
-}
-
-/** Return the last path segment of a filesystem path. */
-function basename(p: string): string {
-  const parts = p.replace(/\\/g, "/").split("/").filter(Boolean);
-  return parts[parts.length - 1] ?? p;
 }
 
 export default function App() {
@@ -48,9 +42,11 @@ export default function App() {
   // Edit flow: when non-null, the composer is prefilled with this text and
   // the next send goes through editLast instead of a normal send.
   const [editPrefill, setEditPrefill] = useState<string | null>(null);
+  const [suggestedPrompt, setSuggestedPrompt] = useState<{ text: string; id: number }>();
+  const [sidebarHidden, setSidebarHidden] = useState(false);
 
   // Resizable sidebar: drag the handle on the right edge to resize.
-  const [sidebarWidth, setSidebarWidth] = useState(240);
+  const [sidebarWidth, setSidebarWidth] = useState(256);
   const draggingRef = useRef(false);
 
   const startDrag = useCallback((e: React.MouseEvent) => {
@@ -135,6 +131,8 @@ export default function App() {
   // When switching sessions, re-pin to bottom so the new conversation shows
   // its latest messages.
   useEffect(() => {
+    setEditPrefill(null);
+    setSuggestedPrompt(undefined);
     stickToBottomRef.current = true;
     const el = messagesScrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
@@ -182,8 +180,12 @@ export default function App() {
   const changeWorkdir = useCallback(async () => {
     const folder = await ipc().pickFolder();
     if (!folder) return;
+    if (!state.session) {
+      await sessions.newSession(folder, null);
+      return;
+    }
     await ipc().setWorkdir(folder);
-  }, []);
+  }, [state.session, sessions.newSession]);
 
   const onRegenerate = useCallback(() => {
     // Clear the displayed assistant turn so the regenerated response doesn't
@@ -205,6 +207,7 @@ export default function App() {
    * send. Also clears the edit prefill so the next send is normal again. */
   const onComposerSend = useCallback(
     (content: string) => {
+      setSuggestedPrompt(undefined);
       if (editPrefill !== null) {
         // Edit mode: drop the trailing user+assistant and show the edited
         // prompt optimistically, then ask the backend to re-run.
@@ -221,7 +224,14 @@ export default function App() {
   // ── Keyboard shortcuts ──────────────────────────────────────────────
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (document.querySelector('[role="dialog"]')) return;
       const isMeta = e.metaKey || e.ctrlKey;
+      // Mod+B → show/hide the conversation sidebar.
+      if (isMeta && e.key === "b") {
+        e.preventDefault();
+        setSidebarHidden((hidden) => !hidden);
+        return;
+      }
 
       // Cmd+N / Ctrl+N → new chat
       if (isMeta && e.key === "n") {
@@ -263,7 +273,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <div className="sidebar-wrapper" style={{ width: sidebarWidth }}>
+      {!sidebarHidden && <div className="sidebar-wrapper" style={{ width: sidebarWidth }}>
         <Sidebar
           sessions={sessions.sessions}
           activeId={sessions.activeId}
@@ -273,6 +283,7 @@ export default function App() {
           onRename={(id, name) => void renameSession(id, name)}
           onNewChat={newChat}
           onOpenSettings={openSettings}
+          onChangeWorkdir={changeWorkdir}
           sessionsLoading={sessions.loading}
           sessionsRefreshing={sessions.refreshing}
           sessionsError={sessions.error}
@@ -280,17 +291,27 @@ export default function App() {
           busySessionId={sessions.busySessionId}
           busyAction={sessions.busyAction}
         />
-        <div className="sidebar-resizer" onMouseDown={startDrag} title="Drag to resize" />
-      </div>
+        <div className="sidebar-resizer" onMouseDown={startDrag} title="Drag to resize" role="separator" aria-label="Resize sidebar" aria-orientation="vertical" aria-valuemin={SIDEBAR_MIN} aria-valuemax={SIDEBAR_MAX} aria-valuenow={sidebarWidth} tabIndex={0} onKeyDown={(e) => {
+          if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+            e.preventDefault();
+            setSidebarWidth((width) => Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, width + (e.key === "ArrowRight" ? 16 : -16))));
+          }
+        }} />
+      </div>}
 
-      <main className="chat-area">
+      <main className={`chat-area${isEmpty ? " is-empty" : ""}`}>
         <header className="topbar">
-          <span className="topbar-title">
-            {state.session?.name ?? "New chat"}
-          </span>
+          <button className="icon-btn sidebar-toggle" onClick={() => setSidebarHidden((hidden) => !hidden)} aria-label={sidebarHidden ? "Show sidebar" : "Hide sidebar"} title="Toggle sidebar (⌘/Ctrl+B)" aria-expanded={!sidebarHidden}>
+            <PanelIcon size={18} />
+          </button>
+          <div className="topbar-heading">
+            <span className="topbar-eyebrow">Workspace / Conversation</span>
+            <span className="topbar-title">{state.session?.name ?? "New conversation"}</span>
+          </div>
           {state.banner && (
-            <span className="topbar-meta">
-              {state.banner.provider} · {state.banner.model}
+            <span className="topbar-meta" title={`${state.banner.provider} · ${state.banner.model}`}>
+              <span className={`model-dot${state.busy ? " busy" : ""}`} />
+              <span>{state.banner.model}</span>
             </span>
           )}
           {state.usage && (
@@ -303,20 +324,6 @@ export default function App() {
               <span className="token-completion">{formatTokens(state.usage.last.completionTokens)}</span>
             </span>
           )}
-          {state.session && (
-            <button
-              className={`topbar-workdir ${state.session.projectDir ? "" : "empty"}`}
-              onClick={changeWorkdir}
-              title={
-                state.session.projectDir
-                  ? `Workdir: ${state.session.projectDir}\nClick to change`
-                  : "No working directory — file & exec tools disabled\nClick to set one"
-              }
-            >
-              <FolderIcon size={12} />
-              <span>{state.session.projectDir ? basename(state.session.projectDir) : "No folder"}</span>
-            </button>
-          )}
         </header>
 
         <div className="chat-scroll-area" ref={messagesScrollRef} onScroll={onScroll}>
@@ -325,7 +332,7 @@ export default function App() {
               {isEmpty ? (
                 <EmptyState
                   hasSession={!!state.session}
-                  onPick={() => {}}
+                  onPick={(text) => setSuggestedPrompt({ text, id: Date.now() })}
                   onNewChat={newChat}
                 />
               ) : (
@@ -388,6 +395,7 @@ export default function App() {
         {showJump && state.session && (
           <button
             className="jump-bottom visible"
+            aria-label="Jump to latest message"
             onClick={() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })}
           >
             <ArrowDownIcon size={14} />
@@ -398,10 +406,12 @@ export default function App() {
         {state.session && (
           <div className="chat-center composer-wrap">
             <Composer
+              key={state.session.id}
               busy={state.busy}
               onSend={onComposerSend}
               autoFocusKey={`${state.session.id}:${state.busy}`}
-              prefill={editPrefill ?? undefined}
+              prefill={editPrefill ?? suggestedPrompt?.text}
+              prefillKey={suggestedPrompt?.id}
               hasWorkdir={!!state.session.projectDir}
               docEnabled={
                 state.enabledTools.includes("excel_script") ||

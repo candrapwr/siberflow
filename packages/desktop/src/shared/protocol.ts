@@ -33,6 +33,8 @@ export interface SettingsValues {
   customProvider: CustomProviderSettings;
   multimodalProvider: MultimodalProviderSettings;
   model: string;
+  /** Maximum number of output tokens requested from the provider. */
+  maxTokens: number;
   contextOptimize: boolean;
   contextOptimizeMode: "drop" | "summary" | "recent" | "compact";
   /** Compact-mode: max prompt tokens (context window budget). Default 200000. */
@@ -66,6 +68,7 @@ export const DEFAULT_SETTINGS: SettingsValues = {
     model: "",
   },
   model: "",
+  maxTokens: 200000,
   contextOptimize: true,
   contextOptimizeMode: "compact",
   contextWindow: 200000,

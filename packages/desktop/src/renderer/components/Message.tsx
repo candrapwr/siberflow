@@ -44,6 +44,7 @@ import "prismjs/components/prism-graphql.js";
 import "prismjs/components/prism-markdown.js";
 import type { AssistantTurn, ContentBlock, ToolCall } from "../hooks/useChat.js";
 import {
+  BrandIcon,
   RefreshIcon,
   EditIcon,
   ToolIcon,
@@ -128,9 +129,12 @@ function ToolGroupCard({ tools, compact }: ToolGroupCardProps) {
 
   return (
     <div className={`tool-group ${running ? "running" : ""}`}>
-      <div
+      <button
+        type="button"
         className="tool-group-head"
         onClick={() => !compact && setOpen((v) => !v)}
+        aria-expanded={!compact && open}
+        disabled={compact}
       >
         {!compact && (
           <ChevronDownIcon size={10} className={open ? "" : "rotated"} />
@@ -154,7 +158,7 @@ function ToolGroupCard({ tools, compact }: ToolGroupCardProps) {
             <span className="tool-done">done</span>
           )}
         </span>
-      </div>
+      </button>
       {!compact && open && (
         <div className="tool-group-body">
           {tools.map((t) => (
@@ -208,7 +212,7 @@ const CodeBlock = memo(function CodeBlock({ language, code }: CodeBlockProps) {
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
       },
-      () => {},
+      () => { },
     );
   };
 
@@ -444,7 +448,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   return (
     <div className="msg assistant">
       <div className="role-label">
-        <span className="dot" />
+        <span className="assistant-avatar"><BrandIcon size={17} /></span>
         Siberflow
       </div>
       <div className="body">
@@ -522,7 +526,7 @@ function ToolBlock({ name, args, result, compact = false }: ToolBlockProps) {
 
   return (
     <div className={`tool-block ${running ? "running" : ""}`}>
-      <div className="tool-head" onClick={() => !compact && setOpen((v) => !v)}>
+      <button type="button" className="tool-head" onClick={() => !compact && setOpen((v) => !v)} aria-expanded={!compact && open} disabled={compact}>
         {!compact && <ChevronDownIcon size={10} className={open ? "" : "rotated"} />}
         <ToolIcon size={11} />
         <span>{name}</span>
@@ -537,7 +541,7 @@ function ToolBlock({ name, args, result, compact = false }: ToolBlockProps) {
             <span className="tool-done">done</span>
           )}
         </span>
-      </div>
+      </button>
       {!compact && open && !running && (
         <div className="tool-content">
           {args && <pre>{visibleToolArgs(name, args)}</pre>}

@@ -46,6 +46,11 @@ const EMPTY_FINAL_RETRY_NUDGE =
   "Do not leave the answer empty. If a tool call is still required and available, call the tool; otherwise answer the user directly. " +
   "If the latest tool result produced a local media/file artifact and the current host has a media-send tool, use that tool instead of only saying the artifact was sent. " +
   "Tool use must be a real tool/function call, never pseudo-call text like `[tool_name(...)]`.";
+// Recovery is best-effort. Reusing a very large user maxTokens value here can
+// make a reasoning-only model run until the reverse proxy returns 504, while
+// the Desktop appears stuck. Keep this one retry deliberately short.
+const EMPTY_FINAL_RETRY_MAX_TOKENS = 2_048;
+const EMPTY_FINAL_RETRY_TIMEOUT_MS = 20_000;
 
 /**
  * Default context window (max prompt tokens) assumed for the active provider
@@ -95,6 +100,8 @@ export interface AgentOptions {
   provider: Provider;
   registry: ToolRegistry;
   model?: string;
+  /** Maximum number of output tokens requested from the provider. */
+  maxTokens?: number;
   systemPrompt?: string;
   maxIterations?: number;
   /**
@@ -220,6 +227,7 @@ export class Agent {
   private readonly provider: Provider;
   private readonly registry: ToolRegistry;
   private readonly model: string;
+  private readonly maxTokens: number | undefined;
   private readonly maxIterations: number;
   private readonly requestDelayMs: number;
   private readonly ctx: ToolContext;
@@ -278,6 +286,7 @@ export class Agent {
     this.provider = opts.provider;
     this.registry = opts.registry;
     this.model = opts.model ?? opts.provider.defaultModel;
+    this.maxTokens = opts.maxTokens;
     this.maxIterations = opts.maxIterations ?? 16;
     this.requestDelayMs = opts.requestDelayMs ?? 0;
     this.contextOpt = opts.contextOptimize ?? DEFAULT_OPTIMIZE_CONFIG;
@@ -527,6 +536,19 @@ export class Agent {
           usage = cont.usage;
         }
 
+        // A very small output limit can cut a tool call in the middle of its
+        // JSON arguments. Never persist that partial call: it has no matching
+        // tool result and would leave an orphan in the session history. The
+        // next user turn can continue normally with a plain visible message.
+        if (finishReason === "length" && assistant.toolCalls?.length) {
+          assistant = {
+            role: "assistant",
+            content:
+              assistant.content?.trim() ||
+              "Respons berhenti karena batas output tercapai sebelum tool call selesai.",
+          };
+        }
+
         if (isEmptyFinalAssistant(assistant)) {
           debug(
             "⚠ assistant final content was empty/whitespace — retrying once",
@@ -537,20 +559,29 @@ export class Agent {
                     : "")
               : "usage=none",
           );
-          const retry = await this.retryEmptyFinalAnswer(
-            requestMessages,
-            toolSchemas,
-            events,
-          );
-          assistant = retry.assistant;
-          finishReason = retry.finishReason;
-          usage = retry.usage ?? usage;
+          try {
+            const retry = await this.retryEmptyFinalAnswer(
+              requestMessages,
+              toolSchemas,
+              events,
+            );
+            assistant = retry.assistant;
+            finishReason = retry.finishReason;
+            usage = retry.usage ?? usage;
+          } catch (err) {
+            if (isAbortError(err) || events.signal?.aborted) throw err;
+            debug(`empty-response recovery failed; using fallback: ${err}`);
+          }
           if (isEmptyFinalAssistant(assistant)) {
+            const fallback =
+              "Maaf, model selesai tanpa mengirim jawaban yang bisa ditampilkan. Coba ulangi permintaannya.";
             assistant = {
               role: "assistant",
-              content:
-                "Maaf, model selesai tanpa mengirim jawaban yang bisa ditampilkan. Coba ulangi permintaannya.",
+              content: fallback,
             };
+            // This content is synthesized locally rather than streamed by the
+            // provider, so explicitly forward it to live UIs as well.
+            events.onContent?.(fallback);
             finishReason = "stop";
           }
         }
@@ -803,6 +834,7 @@ export class Agent {
     messages: Message[],
     toolSchemas: ReturnType<typeof toSchema>[],
     events: AgentEvents,
+    options: { maxTokens?: number; timeoutMs?: number } = {},
   ): Promise<{
     assistant: AssistantMessage;
     finishReason: FinishReason;
@@ -828,13 +860,28 @@ export class Agent {
     let assistant: AssistantMessage | null = null;
     let finishReason: FinishReason = "other";
     let usage: UsageStats | undefined;
+    const effectiveMaxTokens = options.maxTokens ?? this.maxTokens;
+    const requestAbort = options.timeoutMs !== undefined ? new AbortController() : null;
+    let timedOut = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const forwardAbort = () => requestAbort?.abort();
+
+    if (requestAbort) {
+      if (events.signal?.aborted) requestAbort.abort();
+      else events.signal?.addEventListener("abort", forwardAbort, { once: true });
+      timeout = setTimeout(() => {
+        timedOut = true;
+        requestAbort.abort();
+      }, options.timeoutMs);
+    }
 
     try {
       for await (const ev of this.provider.chatStream({
         model: this.model,
         messages: safeMessages,
         tools: toolSchemas,
-        signal: events.signal,
+        ...(effectiveMaxTokens !== undefined ? { maxTokens: effectiveMaxTokens } : {}),
+        signal: requestAbort?.signal ?? events.signal,
       })) {
         throwIfAborted(events.signal);
         switch (ev.type) {
@@ -855,10 +902,16 @@ export class Agent {
         }
       }
     } catch (err) {
+      if (timedOut) {
+        throw new Error(`Provider request timed out after ${options.timeoutMs}ms`);
+      }
       if (isAbortError(err) || events.signal?.aborted) {
         throw createAbortError();
       }
       throw err;
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
+      events.signal?.removeEventListener("abort", forwardAbort);
     }
 
     if (!assistant) {
@@ -915,11 +968,18 @@ export class Agent {
     events: AgentEvents,
   ): Promise<{ assistant: AssistantMessage; finishReason: FinishReason; usage?: UsageStats }> {
     throwIfAborted(events.signal);
-    const retryMessages: Message[] = [
-      ...requestMessages,
-      { role: "user", content: EMPTY_FINAL_RETRY_NUDGE },
-    ];
-    return this.runStream(retryMessages, toolSchemas, events);
+    const retryMessages = this.withSystemInstruction(
+      requestMessages,
+      "Empty response recovery",
+      EMPTY_FINAL_RETRY_NUDGE,
+    );
+    return this.runStream(retryMessages, toolSchemas, events, {
+      maxTokens: Math.min(
+        this.maxTokens ?? EMPTY_FINAL_RETRY_MAX_TOKENS,
+        EMPTY_FINAL_RETRY_MAX_TOKENS,
+      ),
+      timeoutMs: EMPTY_FINAL_RETRY_TIMEOUT_MS,
+    });
   }
 
   /**
@@ -945,7 +1005,21 @@ export class Agent {
    * and remains valid for providers that require tool results to stay paired.
    */
   private withContinuationNotice(messages: Message[], notice: string): Message[] {
-    const block = `\n\n# Previous turn status\n${notice}`;
+    return this.withSystemInstruction(messages, "Previous turn status", notice);
+  }
+
+  /**
+   * Add an ephemeral instruction to the leading system message. This keeps
+   * internal recovery metadata out of conversation history and, importantly,
+   * avoids creating adjacent user messages in providers that validate role
+   * ordering strictly.
+   */
+  private withSystemInstruction(
+    messages: Message[],
+    heading: string,
+    instruction: string,
+  ): Message[] {
+    const block = `\n\n# ${heading}\n${instruction}`;
     const result = [...messages];
     if (result[0]?.role === "system") {
       result[0] = { role: "system", content: result[0].content + block };

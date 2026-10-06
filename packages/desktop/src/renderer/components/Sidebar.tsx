@@ -14,6 +14,8 @@ import {
   FolderIcon,
   SearchIcon,
   MoreHorizontalIcon,
+  ChatIcon,
+  ChevronDownIcon,
 } from "./icons.js";
 
 interface SidebarProps {
@@ -25,6 +27,7 @@ interface SidebarProps {
   onRename: (id: string, name: string) => void;
   onNewChat: () => void;
   onOpenSettings: () => void;
+  onChangeWorkdir: () => void;
   sessionsLoading: boolean;
   sessionsRefreshing: boolean;
   sessionsError: string | null;
@@ -48,7 +51,7 @@ function groupOf(updatedAt: string): TimeGroup {
 const GROUP_LABEL: Record<TimeGroup, string> = {
   today: "Today",
   yesterday: "Yesterday",
-  earlier: "Previous 7 days",
+  earlier: "Earlier",
 };
 const GROUP_ORDER: TimeGroup[] = ["today", "yesterday", "earlier"];
 
@@ -75,6 +78,7 @@ export const Sidebar = memo(function Sidebar({
   onRename,
   onNewChat,
   onOpenSettings,
+  onChangeWorkdir,
   sessionsLoading,
   sessionsRefreshing,
   sessionsError,
@@ -96,10 +100,10 @@ export const Sidebar = memo(function Sidebar({
   // Filter sessions by search query (match name or first few chars of id)
   const filtered = searchQuery.trim()
     ? sessions.filter(
-        (s) =>
-          (s.name ?? "").toLowerCase().includes(searchQuery.toLowerCase()) ||
-          s.id.toLowerCase().startsWith(searchQuery.toLowerCase()),
-      )
+      (s) =>
+        (s.name ?? "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+        s.id.toLowerCase().startsWith(searchQuery.toLowerCase()),
+    )
     : sessions;
 
   // Group sessions by relative time, then sort newest-first within each group.
@@ -133,6 +137,7 @@ export const Sidebar = memo(function Sidebar({
   // Keyboard shortcut: focus search on Cmd+Shift+F, or Escape to clear
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (document.querySelector('[role="dialog"]')) return;
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "f") {
         e.preventDefault();
         searchRef.current?.focus();
@@ -166,85 +171,89 @@ export const Sidebar = memo(function Sidebar({
     const busyLabel = busyAction === "deleting" ? "Deleting…" : "Opening…";
 
     return (
-    <div
-      key={s.id}
-      className={`session-item ${s.id === activeId ? "active" : ""}${openMenuId === s.id ? " menu-open" : ""}${isBusy ? " busy" : ""}`}
-      onClick={() => !isBusy && onSelect(s.id)}
-      aria-busy={isBusy}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        if (!isBusy) setOpenMenuId(s.id);
-      }}
-    >
-      {editingId === s.id ? (
-        <input
-          ref={inputRef}
-          className="session-rename-input"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={commitEdit}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") commitEdit();
-            if (e.key === "Escape") cancelEdit();
-          }}
-          onClick={(e) => e.stopPropagation()}
-        />
-      ) : (
-        <>
-          <span
-            className="session-name"
-            onDoubleClick={(e) => {
-              e.stopPropagation();
-              startEdit(s);
+      <div
+        key={s.id}
+        className={`session-item ${s.id === activeId ? "active" : ""}${openMenuId === s.id ? " menu-open" : ""}${isBusy ? " busy" : ""}`}
+        onClick={() => !isBusy && onSelect(s.id)}
+        aria-busy={isBusy}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          if (!isBusy) setOpenMenuId(s.id);
+        }}
+      >
+        {editingId === s.id ? (
+          <input
+            ref={inputRef}
+            className="session-rename-input"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commitEdit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitEdit();
+              if (e.key === "Escape") cancelEdit();
             }}
-          >
-            {s.name ?? `Chat ${s.id.slice(0, 8)}`}
-          </span>
-          <span className="session-time">{isBusy ? busyLabel : relativeTime(s.updatedAt)}</span>
-          <div className="session-actions">
+            onClick={(e) => e.stopPropagation()}
+          />
+        ) : (
+          <>
+            <ChatIcon size={15} className="session-icon" />
             <button
-              className="icon-btn session-more"
-              aria-label={`Actions for ${s.name ?? "this chat"}`}
-              aria-expanded={openMenuId === s.id}
-              onClick={(e) => {
+              className="session-select"
+              aria-current={s.id === activeId ? "page" : undefined}
+              disabled={isBusy}
+              onClick={(e) => { e.stopPropagation(); onSelect(s.id); }}
+              onDoubleClick={(e) => {
                 e.stopPropagation();
-                if (!isBusy) setOpenMenuId((id) => (id === s.id ? null : s.id));
+                startEdit(s);
               }}
-              title="Chat actions"
             >
-              <MoreHorizontalIcon size={14} />
+              {s.name ?? `Chat ${s.id.slice(0, 8)}`}
             </button>
-          </div>
-          {openMenuId === s.id && (
-            <div className="session-context-menu" role="menu" onClick={(e) => e.stopPropagation()}>
+            <span className="session-time">{isBusy ? busyLabel : relativeTime(s.updatedAt)}</span>
+            <div className="session-actions">
               <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setOpenMenuId(null);
-                  startEdit(s);
+                className="icon-btn session-more"
+                aria-label={`Actions for ${s.name ?? "this chat"}`}
+                aria-expanded={openMenuId === s.id}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!isBusy) setOpenMenuId((id) => (id === s.id ? null : s.id));
                 }}
+                title="Chat actions"
               >
-                <EditIcon size={12} />
-                Rename
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                className="danger"
-                onClick={() => {
-                  setOpenMenuId(null);
-                  onDelete(s.id);
-                }}
-              >
-                <TrashIcon size={12} />
-                Delete
+                <MoreHorizontalIcon size={14} />
               </button>
             </div>
-          )}
-        </>
-      )}
-    </div>
+            {openMenuId === s.id && (
+              <div className="session-context-menu" role="menu" onClick={(e) => e.stopPropagation()}>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setOpenMenuId(null);
+                    startEdit(s);
+                  }}
+                >
+                  <EditIcon size={12} />
+                  Rename
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="danger"
+                  onClick={() => {
+                    setOpenMenuId(null);
+                    onDelete(s.id);
+                  }}
+                >
+                  <TrashIcon size={12} />
+                  Delete
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </div>
     );
   };
 
@@ -255,28 +264,25 @@ export const Sidebar = memo(function Sidebar({
     <aside className="sidebar">
       <div className="sidebar-header">
         <div className="sidebar-brand">
-          <BrandIcon size={18} />
+          <span className="brand-mark"><BrandIcon size={22} /></span>
           <span>Siberflow</span>
-        </div>
-        <div className="sidebar-actions">
-          <button className="icon-btn" onClick={onNewChat} title="New chat (Cmd+N)">
-            <NewChatIcon size={15} />
-          </button>
-          <button className="icon-btn" onClick={onOpenSettings} title="Settings (Cmd+,)">
-            <SettingsIcon size={15} />
-          </button>
+          <span className="brand-desktop">Desktop</span>
         </div>
       </div>
+      <button className="new-chat-btn" onClick={onNewChat} title="New chat (⌘/Ctrl+N)">
+        <NewChatIcon size={17} /><span>New conversation</span><span className="shortcut-hint">{navigator.platform.includes("Mac") ? "⌘ N" : "Ctrl N"}</span>
+      </button>
 
       {/* Search / filter bar */}
       {hasAny && (
         <div className="sidebar-search">
-          <SearchIcon size={12} className="sidebar-search-icon" />
+          <SearchIcon size={15} className="sidebar-search-icon" />
           <input
             ref={searchRef}
             className="sidebar-search-input"
             type="text"
-            placeholder="Search sessions…"
+            placeholder="Search conversations"
+            aria-label="Search conversations"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
@@ -292,6 +298,7 @@ export const Sidebar = memo(function Sidebar({
         </div>
       )}
 
+      <div className="sidebar-section-label">Conversations <span>{sessions.length}</span></div>
       <div className="session-list" aria-busy={sessionsLoading || busySessionId !== null}>
         {sessionsLoading && (
           <div className="session-loading" aria-label="Loading chat history">
@@ -313,7 +320,7 @@ export const Sidebar = memo(function Sidebar({
           <div className="session-empty">
             <NewChatIcon size={22} />
             <div>No chats yet</div>
-            <div className="session-empty-hint">Click + to start a conversation</div>
+            <div className="session-empty-hint">Your conversations will appear here.</div>
           </div>
         )}
         {!sessionsLoading && sessionsError && hasAny && (
@@ -348,13 +355,17 @@ export const Sidebar = memo(function Sidebar({
       </div>
 
       <div className="sidebar-footer">
-        <FolderIcon size={13} />
-        <div className="sidebar-footer-info">
-          <div className="sidebar-footer-label">Workspace</div>
-          <div className="sidebar-footer-path" title={currentFolder ?? ""}>
-            {currentFolder ? basename(currentFolder) : "—"}
-          </div>
-        </div>
+        <button className="workspace-card" onClick={onChangeWorkdir} title={currentFolder ?? "Choose a project folder"}>
+          <span className="workspace-icon"><FolderIcon size={18} /></span>
+          <span className="sidebar-footer-info">
+            <span className="sidebar-footer-label">Your workspace</span>
+            <span className="sidebar-footer-path">{currentFolder ? basename(currentFolder) : "Choose a folder"}</span>
+          </span>
+          <ChevronDownIcon size={13} />
+        </button>
+        <button className="sidebar-settings" onClick={onOpenSettings} title="Settings (⌘/Ctrl+,)">
+          <SettingsIcon size={17} /><span>Settings & preferences</span>
+        </button>
       </div>
     </aside>
   );
