@@ -198,6 +198,10 @@ try {
   // the whole run_browser call when the optional package is not installed.
 }
 const parent = process;
+// Kept in module scope so the lifetime guards below can close a browser that
+// is still running when the parent disconnects or the worker reaches its
+// hard timeout.
+let browser;
 const forbiddenScriptPatterns = [
   ["child_process", /\\b(?:node:)?child_process\\b/],
   ["execSync", /\\bexecSync\\s*\\(/],
@@ -250,7 +254,6 @@ async function launchBrowser() {
 
 parent.on("message", async (msg) => {
   const { script, url, timeoutMs } = msg;
-  let browser;
   try {
     assertNoShellLikeScriptAccess(String(script || ""));
     browser = await launchBrowser();
@@ -364,6 +367,7 @@ export const runBrowserTool: Tool = {
     "Write any Puppeteer calls; return a string or JSON-serializable value.\n\n" +
     "Features:\n" +
     "- Stealth anti-detection (puppeteer-extra + stealth plugin) — Google, Bing, and most sites work without CAPTCHA.\n" +
+    "- This is Puppeteer, not Playwright: read body text with `await page.$eval('body', el => el.innerText)`, not `page.locator(...).innerText()`.\n" +
     "- `page.waitForTimeout(ms)` was REMOVED in Puppeteer v22+ — sleep with " +
     "`await new Promise(r => setTimeout(r, ms))` instead.\n" +
     "- Prefer `page.waitForSelector()` / `page.$$eval()` over fixed sleeps for AJAX/SPA content.\n" +

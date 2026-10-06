@@ -4,7 +4,11 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin({ exclude: ["@siberflow/core"] })],
+    // Keep core external. Besides avoiding an unnecessarily large main bundle,
+    // core generates an ESM browser-worker module at runtime; Rollup's CJS
+    // shim transform can otherwise inject code into that worker's template
+    // string and leave the generated module syntactically invalid.
+    plugins: [externalizeDepsPlugin()],
     build: {
       rollupOptions: {
         // Native modules must stay external — they are rebuilt for Electron's
