@@ -9,7 +9,7 @@
     "build": "tsc --build",
     "dev": "npm run build -w @siberflow/core && tsx src/index.ts",
     "start": "node dist/index.js",
-    "clean": "rm -rf dist"
+    "clean": "node ../../scripts/clean.mjs dist"
   },
   "dependencies": {
     "@siberflow/core": "0.1.0",

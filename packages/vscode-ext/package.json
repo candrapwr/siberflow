@@ -240,7 +240,7 @@
     "prepublish": "npm run build && node scripts/stage-puppeteer.mjs stage",
     "publish": "vsce publish --no-dependencies --allow-package-all-secrets",
     "postpublish": "node scripts/stage-puppeteer.mjs clean",
-    "clean": "rm -rf dist *.vsix"
+    "clean": "node ../../scripts/clean.mjs dist *.vsix"
   },
   "dependencies": {
     "@siberflow/core": "0.1.0",

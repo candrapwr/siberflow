@@ -21,7 +21,7 @@
     "release:mac": "electron-vite build && npm run native-deps && electron-builder --mac --publish always",
     "release:win": "electron-vite build && npm run native-deps && electron-builder --win --publish always",
     "release:linux": "electron-vite build && npm run native-deps && electron-builder --linux --publish always",
-    "clean": "rm -rf out dist"
+    "clean": "node ../../scripts/clean.mjs out dist"
   },
   "dependencies": {
     "@siberflow/core": "0.1.0",

@@ -12,7 +12,7 @@
   },
   "scripts": {
     "build": "tsc --build --force",
-    "clean": "rm -rf dist *.tsbuildinfo"
+    "clean": "node ../../scripts/clean.mjs dist *.tsbuildinfo"
   },
   "dependencies": {
     "docx": "^9.7.1",

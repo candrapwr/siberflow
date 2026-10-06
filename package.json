@@ -25,7 +25,7 @@
     "telegram": "npm run start -w @siberflow/telegram",
     "dev:cli": "npm run dev --workspace=@siberflow/cli",
     "cli": "npm run start --workspace=@siberflow/cli",
-    "clean": "rm -rf packages/*/dist packages/*/out"
+    "clean": "npm run clean --workspaces --if-present"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",
