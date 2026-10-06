@@ -17,14 +17,19 @@ const watch = process.argv.includes("--watch");
 // directory exists BEFORE we write the stub — otherwise writeFileSync throws
 // ENOENT, the catch swallows it, no stub file is created, and esbuild fails
 // with "Cannot read file .cpu-features-stub.js" during bundling.
-const CPU_STUB_PATH = new URL("./dist/.cpu-features-stub.js", import.meta.url);
-mkdirSync(dirname(fileURLToPath(CPU_STUB_PATH)), { recursive: true });
+// Always convert file URLs to native filesystem paths before returning them
+// from onResolve. URL.pathname produces `/D:/...` on Windows, which esbuild
+// correctly rejects as a non-absolute Windows path.
+const CPU_STUB_PATH = fileURLToPath(
+  new URL("./dist/.cpu-features-stub.js", import.meta.url),
+);
+mkdirSync(dirname(CPU_STUB_PATH), { recursive: true });
 writeFileSync(CPU_STUB_PATH, "module.exports = () => undefined;\n");
 const cpuFeaturesStub = {
   name: "cpu-features-stub",
   setup(b) {
     b.onResolve({ filter: /^cpu-features$/ }, () => ({
-      path: CPU_STUB_PATH.pathname,
+      path: CPU_STUB_PATH,
       sideEffects: false,
     }));
   },
@@ -35,14 +40,16 @@ const cpuFeaturesStub = {
 // wrapped in try/catch and falls back to pure-JS crypto. We stub it to an
 // empty module so esbuild can bundle ssh2 without a .node loader, and ssh2's
 // own try/catch handles the missing binding at runtime.
-const SSHCRYPTO_STUB_PATH = new URL("./dist/.sshcrypto-stub.js", import.meta.url);
-mkdirSync(dirname(fileURLToPath(SSHCRYPTO_STUB_PATH)), { recursive: true });
+const SSHCRYPTO_STUB_PATH = fileURLToPath(
+  new URL("./dist/.sshcrypto-stub.js", import.meta.url),
+);
+mkdirSync(dirname(SSHCRYPTO_STUB_PATH), { recursive: true });
 writeFileSync(SSHCRYPTO_STUB_PATH, "module.exports = {};\n");
 const sshcryptoStub = {
   name: "sshcrypto-stub",
   setup(b) {
     b.onResolve({ filter: /build\/Release\/sshcrypto\.node$/ }, () => ({
-      path: SSHCRYPTO_STUB_PATH.pathname,
+      path: SSHCRYPTO_STUB_PATH,
       sideEffects: false,
     }));
   },
