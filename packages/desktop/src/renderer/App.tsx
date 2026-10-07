@@ -15,6 +15,7 @@ import { TaskPanel } from "./components/TaskPanel.js";
 import { EmptyState } from "./components/EmptyState.js";
 import { SettingsModal } from "./components/SettingsModal.js";
 import { AskUserModal } from "./components/AskUserModal.js";
+import { WorkspacePickerModal } from "./components/WorkspacePickerModal.js";
 import { ArrowDownIcon, PanelIcon } from "./components/icons.js";
 import type { SettingsValues } from "@shared/protocol";
 
@@ -44,6 +45,7 @@ export default function App() {
   const [editPrefill, setEditPrefill] = useState<string | null>(null);
   const [suggestedPrompt, setSuggestedPrompt] = useState<{ text: string; id: number }>();
   const [sidebarHidden, setSidebarHidden] = useState(false);
+  const [showWorkspacePicker, setShowWorkspacePicker] = useState(false);
 
   // The settings file remains the source of truth; localStorage only lets the
   // renderer paint the same theme before the initial IPC response arrives.
@@ -147,15 +149,48 @@ export default function App() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [state.session?.id]);
 
+  const scrollMessagesToBottom = useCallback(() => {
+    const el = messagesScrollRef.current;
+    if (!el || !stickToBottomRef.current) return;
+    // The markdown/code renderer can change height after React commits. Run
+    // after layout and once more after the browser paints so long code blocks
+    // do not leave the viewport stuck above the newest streamed content.
+    el.scrollTop = el.scrollHeight;
+    requestAnimationFrame(() => {
+      if (stickToBottomRef.current && messagesScrollRef.current === el) {
+        el.scrollTop = el.scrollHeight;
+      }
+    });
+  }, []);
+
   // Auto-scroll to bottom on new streaming content — but ONLY if the user
   // is currently pinned to the bottom. If they scrolled up to read history,
   // respect that and don't yank them back down.
   useEffect(() => {
     if (!state.busy || !stickToBottomRef.current) return;
+    scrollMessagesToBottom();
+  }, [state.messages, state.busy, scrollMessagesToBottom]);
+
+  // Markdown syntax highlighting and streaming code blocks may resize the
+  // message tree without changing the state dependency above. Observe those
+  // layout changes and keep the viewport pinned while the user is at bottom.
+  useEffect(() => {
     const el = messagesScrollRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [state.messages, state.busy]);
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      if (!state.busy || !stickToBottomRef.current) return;
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => scrollMessagesToBottom());
+    });
+    observer.observe(el);
+    const content = el.firstElementChild;
+    if (content) observer.observe(content);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [state.busy, scrollMessagesToBottom]);
 
   const onScroll = () => {
     const el = messagesScrollRef.current;
@@ -171,11 +206,21 @@ export default function App() {
     setShowSettings(true);
   }, []);
 
-  // New chat: folder picker is optional — user may start without a workdir
-  // and set one later from the topbar.
-  const newChat = useCallback(async () => {
-    await sessions.newSession(null, null);
+  // A new session must always belong to a workspace. If the current session
+  // already has one, reuse it; otherwise ask the user to choose a folder first.
+  const createSessionInFolder = useCallback(async (folder: string) => {
+    setShowWorkspacePicker(false);
+    await sessions.newSession(folder, null);
   }, [sessions]);
+
+  const newChat = useCallback(async () => {
+    const currentFolder = state.session?.projectDir?.trim();
+    if (currentFolder) {
+      await sessions.newSession(currentFolder, null);
+      return;
+    }
+    setShowWorkspacePicker(true);
+  }, [sessions, state.session?.projectDir]);
 
   const renameSession = useCallback(
     async (id: string, name: string) => {
@@ -354,6 +399,7 @@ export default function App() {
                         turn={m}
                         hideTools={state.hideTools}
                         waitingForAssistant={isLast && state.waitingForAssistant}
+                        activity={isLast && state.busy ? state.activity : null}
                         showActions={isLast && state.showActions && !state.busy}
                         onRegenerate={onRegenerate}
                         onEdit={onEdit}
@@ -434,6 +480,7 @@ export default function App() {
               optimizeMode={state.settingsValues?.contextOptimizeMode ?? "compact"}
               summarizing={state.summarizing}
               subagentPhase={state.subagentPhase}
+              activity={state.activity}
             />
           </div>
         )}
@@ -455,6 +502,13 @@ export default function App() {
 
       {state.askUserPrompt && (
         <AskUserModal prompt={state.askUserPrompt} onClose={clearAskUserPrompt} />
+      )}
+
+      {showWorkspacePicker && (
+        <WorkspacePickerModal
+          onClose={() => setShowWorkspacePicker(false)}
+          onPicked={(folder) => void createSessionInFolder(folder)}
+        />
       )}
     </div>
   );

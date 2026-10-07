@@ -396,6 +396,7 @@ interface AssistantMessageProps {
   turn: AssistantTurn;
   hideTools: boolean;
   waitingForAssistant?: boolean;
+  activity?: { kind: "thinking" | "tool" | "task" | "subagent" | "context"; label: string; detail?: string } | null;
   showActions: boolean;
   onRegenerate: () => void;
   onEdit: () => void;
@@ -405,6 +406,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   turn,
   hideTools,
   waitingForAssistant = false,
+  activity = null,
   showActions,
   onRegenerate,
   onEdit,
@@ -479,7 +481,17 @@ export const AssistantMessage = memo(function AssistantMessage({
         ) : (
           renderable.map(renderBlock)
         )}
-        {waitingForAssistant && (
+        {activity && (
+          <div className={`activity-status activity-${activity.kind}`} role="status" aria-live="polite">
+            <span className="activity-spinner" aria-hidden="true" />
+            <span className="activity-copy">
+              <strong>{activity.label}</strong>
+              {activity.detail && <small>{activity.detail}</small>}
+            </span>
+            <span className="thinking-dots" aria-hidden="true"><span /><span /><span /></span>
+          </div>
+        )}
+        {waitingForAssistant && !activity && (
           <div className="iteration-loading" role="status" aria-live="polite">
             <span>Menunggu respons AI</span>
             <span className="thinking-dots">

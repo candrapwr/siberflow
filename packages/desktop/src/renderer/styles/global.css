@@ -1038,6 +1038,52 @@ svg {
   font-size: 12px;
   color: var(--fg-muted);
 }
+.activity-status {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: fit-content;
+  max-width: min(100%, 560px);
+  margin: 14px 0 5px;
+  padding: 8px 11px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-surface-alt);
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+.activity-status.activity-tool { border-color: #b4c3a1; }
+.activity-status.activity-task { border-color: #c8b88d; }
+.activity-status.activity-subagent { border-color: #a9b6cf; }
+.activity-status.activity-context { border-color: #c2a9cf; }
+.activity-spinner {
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: activity-spin .8s linear infinite;
+}
+.activity-copy {
+  display: inline-flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.activity-copy strong {
+  color: var(--fg);
+  font-weight: 550;
+}
+.activity-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-subtle);
+  font-size: 10px;
+}
+.activity-status .thinking-dots {
+  margin-left: auto;
+}
 /* Tool activity and task progress */
 .tool-block, .tool-group {
   margin: 10px 0;
@@ -1224,6 +1270,18 @@ svg {
   border-radius: 50%;
   background: var(--accent);
   animation: pulse-dot 1.5s infinite;
+}
+.task-active-dot-working {
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.task-active-label {
+  color: var(--accent);
+  font-weight: 550;
+}
+.task-active-hint .thinking-dots {
+  margin-left: auto;
+  transform: scale(.75);
+  transform-origin: right center;
 }
 .task-steps {
   list-style: none;

@@ -80,6 +80,9 @@ interface ChatState {
   summarizing: boolean;
   /** True while completed tool output is being sent back to the LLM. */
   waitingForAssistant: boolean;
+  /** Human-readable activity shown while a turn is running, including phases
+   * that do not produce a visible tool block (for example task_update). */
+  activity: { kind: "thinking" | "tool" | "task" | "subagent" | "context"; label: string; detail?: string } | null;
   /** When non-null, a subagent tool is running and this holds its latest
    * progress label (e.g. "calling read_file…"). Shown as a nested indicator
    * inside the subagent tool block. */
@@ -113,6 +116,7 @@ const initial: ChatState = {
   busy: false,
   summarizing: false,
   waitingForAssistant: false,
+  activity: null,
   subagentPhase: null,
   stopping: false,
   notices: [],
@@ -325,6 +329,8 @@ function reducer(state: ChatState, action: Action): ChatState {
         taskPlan: null,
         tasksRestored: false,
         waitingForAssistant: false,
+        activity: null,
+        subagentPhase: null,
         // Clear notices on session load so stale error toasts from a previous
         // session don't linger on screen. (ready fires on app start AND on
         // every session switch via loadSessionById → postReady.)
@@ -361,6 +367,8 @@ function reducer(state: ChatState, action: Action): ChatState {
           showActions: false,
           busy: false,
           stopping: false,
+          activity: null,
+          subagentPhase: null,
           usage: null,
         };
       }
@@ -391,6 +399,7 @@ function reducer(state: ChatState, action: Action): ChatState {
           busy: true,
           summarizing: false,
           stopping: false,
+          activity: { kind: "thinking", label: "AI sedang memikirkan respons" },
           showActions: false,
           messages,
         };
@@ -401,6 +410,7 @@ function reducer(state: ChatState, action: Action): ChatState {
       return {
         ...state,
         waitingForAssistant: false,
+        activity: { kind: "thinking", label: "AI sedang menulis respons" },
         messages: updateLastTurn(state.messages, (turn) => {
           const last = turn.blocks[turn.blocks.length - 1];
           if (last && last.kind === "text") {
@@ -422,6 +432,9 @@ function reducer(state: ChatState, action: Action): ChatState {
       return {
         ...state,
         waitingForAssistant: false,
+        activity: e.name === "task_update"
+          ? { kind: "task", label: "Memperbarui task" }
+          : { kind: "tool", label: `Menjalankan ${e.name}` },
         messages: updateLastTurn(msgs, (turn) => {
           turn.blocks.push({
             kind: "tool",
@@ -452,9 +465,11 @@ function reducer(state: ChatState, action: Action): ChatState {
       };
 
     case "tool-result":
-      // Attach the result to the matching tool block.
+      // Attach the result to the matching tool block and keep a visible phase
+      // while the agent processes the returned output.
       return {
         ...state,
+        activity: { kind: "thinking", label: "Memproses hasil tool" },
         messages: updateLastTurn(state.messages, (turn) => {
           const blk = [...turn.blocks]
             .reverse()
@@ -480,21 +495,33 @@ function reducer(state: ChatState, action: Action): ChatState {
         busy: false,
         summarizing: false,
         waitingForAssistant: false,
+        activity: null,
+        subagentPhase: null,
         stopping: false,
         showActions: !state.stopping,
       };
 
     case "tool-round-end":
-      return { ...state, waitingForAssistant: true };
+      return {
+        ...state,
+        waitingForAssistant: true,
+        activity: { kind: "thinking", label: "Menunggu AI melanjutkan" },
+      };
 
     case "task-plan":
-      return { ...state, taskPlan: e.tasks, tasksRestored: false };
+      return {
+        ...state,
+        taskPlan: e.tasks,
+        tasksRestored: false,
+        activity: { kind: "task", label: "Menyiapkan rencana kerja" },
+      };
 
     case "tasks":
       return {
         ...state,
         tasks: e.tasks,
         tasksRestored: e.restored === true,
+        ...(e.restored === true ? {} : { activity: { kind: "task" as const, label: "Mengerjakan task" } }),
       };
 
     case "context-optimized":
@@ -503,7 +530,11 @@ function reducer(state: ChatState, action: Action): ChatState {
     case "context-compacting":
       // The agent is about to make an LLM summarization call; surface it so
       // the composer can show "Summarizing context…" instead of idle.
-      return { ...state, summarizing: true };
+      return {
+        ...state,
+        summarizing: true,
+        activity: { kind: "context", label: "Meringkas context percakapan" },
+      };
 
     case "context-compacted":
       // Summary resolved — clear the indicator. busy may still be true if the
@@ -515,9 +546,13 @@ function reducer(state: ChatState, action: Action): ChatState {
       // Track the subagent's progress so the UI can show a nested indicator.
       // Clear when the subagent reports "done" or "error".
       if (e.phase === "done" || e.phase === "error") {
-        return { ...state, subagentPhase: null };
+        return { ...state, subagentPhase: null, activity: { kind: "thinking", label: "Memproses hasil subagent" } };
       }
-      return { ...state, subagentPhase: { phase: e.phase, detail: e.detail } };
+      return {
+        ...state,
+        subagentPhase: { phase: e.phase, detail: e.detail },
+        activity: { kind: "subagent", label: "Subagent sedang bekerja", detail: e.detail ?? e.phase },
+      };
 
     case "max-iterations":
       return {

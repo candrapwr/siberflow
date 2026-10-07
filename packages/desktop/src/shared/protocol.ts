@@ -90,7 +90,17 @@ export const DEFAULT_SETTINGS: SettingsValues = {
   debug: false,
   maxIterations: 50,
   requestDelayMs: 1500,
-  enabledTools: ["read_file", "write_file", "edit_file", "copy_file", "list_dir", "delete_file", "grep"],
+  enabledTools: [
+    "read_file",
+    "write_file",
+    "edit_file",
+    "copy_file",
+    "list_dir",
+    "delete_file",
+    "grep",
+    "exec",
+    "run_browser",
+  ],
 };
 
 /** Info shown in the topbar / sidebar. */

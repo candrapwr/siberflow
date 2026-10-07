@@ -47,6 +47,13 @@ export const TaskPanel = memo(function TaskPanel({
   useEffect(() => {
     if (taskPlan && taskPlan.length > 0) setClosed(false);
   }, [taskPlan]);
+  // Any live task update is a new trigger from the agent. Re-open the panel
+  // after a manual close so progress is visible again; restored history stays
+  // hidden until a live update arrives.
+  useEffect(() => {
+    if (!restored && tasks.length > 0) setClosed(false);
+  }, [tasks, restored]);
+
   useEffect(() => {
     if (tasks.length === 0) setClosed(false);
   }, [tasks.length]);
@@ -101,8 +108,10 @@ export const TaskPanel = memo(function TaskPanel({
           {/* Active step hint */}
           {isPlan && active && (
             <div className="task-active-hint">
-              <span className="task-active-dot" />
-              Now: <strong>{active.content}</strong>
+              <span className="task-active-dot task-active-dot-working" />
+              <span className="task-active-label">Sedang dikerjakan:</span>
+              <strong>{active.content}</strong>
+              <span className="thinking-dots" aria-hidden="true"><span /><span /><span /></span>
             </div>
           )}
 

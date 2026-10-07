@@ -40,6 +40,8 @@ interface ComposerProps {
   summarizing?: boolean;
   /** When set, a subagent tool is running; show its latest progress. */
   subagentPhase?: { phase: string; detail?: string } | null;
+  /** Current high-level activity label shown in the composer status line. */
+  activity?: { kind: string; label: string; detail?: string } | null;
 }
 
 /** Compact a token count to a short human label, e.g. 45200 -> "45K", 1200000 -> "1.2M". */
@@ -57,7 +59,7 @@ function attachmentIcon(kind: AttachmentKind) {
   return FileExcelIcon;
 }
 
-export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, prefill, prefillKey, hasWorkdir = true, docEnabled = true, imageEnabled = false, usage = null, contextWindow = 200000, compactThreshold = 0.8, optimizeMode = "compact", summarizing = false, subagentPhase = null }: ComposerProps) {
+export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, prefill, prefillKey, hasWorkdir = true, docEnabled = true, imageEnabled = false, usage = null, contextWindow = 200000, compactThreshold = 0.8, optimizeMode = "compact", summarizing = false, subagentPhase = null, activity = null }: ComposerProps) {
   const [value, setValue] = useState("");
   const [attachments, setAttachments] = useState<PickedFile[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -194,7 +196,7 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={subagentPhase ? `Agent: ${subagentPhase.detail ?? subagentPhase.phase}…` : summarizing ? "Summarizing context…" : busy ? "Siberflow is working…" : "What would you like to work on?"}
+          placeholder={activity?.detail ? `${activity.label}: ${activity.detail}…` : subagentPhase ? `Agent: ${subagentPhase.detail ?? subagentPhase.phase}…` : summarizing ? "Summarizing context…" : busy ? "Siberflow is working…" : "What would you like to work on?"}
           aria-label="Message Siberflow"
           disabled={busy}
           rows={1}
@@ -202,7 +204,7 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
         <div className="composer-toolbar">
           <button type="button" className="upload-btn" onClick={onPickFiles} disabled={uploadDisabled} title={uploadTitle} aria-label="Attach documents or images"><PaperclipIcon size={17} /></button>
           <span className={`composer-workspace${hasWorkdir ? " connected" : ""}`}><FolderIcon size={13} />{hasWorkdir ? "Workspace connected" : "No folder selected"}</span>
-          <span className="composer-send-label" role="status">{stopping ? "Stopping…" : uploading ? "Attaching…" : busy ? "Working on it" : ""}</span>
+          <span className="composer-send-label" role="status">{stopping ? "Stopping…" : uploading ? "Attaching…" : activity?.label ?? (busy ? "Working on it" : "")}</span>
           {busy ? (
             <button className="send-btn stop" onClick={stop} disabled={stopping} title="Stop response" aria-label="Stop response"><StopIcon size={14} /></button>
           ) : (
