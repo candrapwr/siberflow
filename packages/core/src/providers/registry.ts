@@ -18,7 +18,25 @@ export type ProviderName =
   | "qwen"
   | "zai"
   | "claude"
+  | "sibergate"
   | "custom";
+
+class SiberGateProvider extends OpenAICompatibleProvider {
+  constructor(config: ProviderConfig) {
+    super(
+      { ...config, baseUrl: "https://api.idsiber.com/v1" },
+      {
+        name: "SiberGate",
+        defaultModel: config.customDefaultModel?.trim() || "",
+        defaultBaseUrl: "https://api.idsiber.com/v1",
+      },
+    );
+  }
+
+  protected requestBodyExtras(): Record<string, unknown> {
+    return { reasoning_effort: this.reasoningEffort };
+  }
+}
 
 class CustomProvider extends OpenAICompatibleProvider {
   constructor(config: ProviderConfig) {
@@ -67,6 +85,8 @@ export function createProvider(
       return new ZaiProvider(config);
     case "claude":
       return new ClaudeProvider(config);
+    case "sibergate":
+      return new SiberGateProvider(config);
     case "custom":
       return new CustomProvider(config);
     default: {

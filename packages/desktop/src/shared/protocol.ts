@@ -14,6 +14,7 @@ export type ProviderName =
   | "qwen"
   | "zai"
   | "claude"
+  | "sibergate"
   | "custom";
 
 export interface CustomProviderSettings {

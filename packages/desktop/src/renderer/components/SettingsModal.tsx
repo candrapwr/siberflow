@@ -65,6 +65,7 @@ const PROVIDER_LABELS: Record<SettingsValues["provider"], string> = {
   qwen: "Qwen (Alibaba)",
   zai: "GLM (Z.AI)",
   claude: "Claude (Anthropic)",
+  sibergate: "SiberGate",
   custom: "Custom (OpenAI-compatible)",
 };
 
@@ -145,6 +146,10 @@ export const SettingsModal = memo(function SettingsModal({
         setActiveTab("provider");
         return;
       }
+    } else if (!form.model.trim()) {
+      setError("Model override wajib diisi sebelum menyimpan provider.");
+      setActiveTab("provider");
+      return;
     }
     // null = leave key unchanged; non-empty = update; empty = clear.
     try {
@@ -246,6 +251,7 @@ export const SettingsModal = memo(function SettingsModal({
                       <option value="qwen">Qwen (Alibaba)</option>
                       <option value="zai">GLM (Z.AI)</option>
                       <option value="claude">Claude (Anthropic)</option>
+                      <option value="sibergate">SiberGate</option>
                       <option value="custom">Custom (OpenAI-compatible)</option>
                     </select>
                     <span className="settings-help">The provider selected here handles your normal conversations.</span>
@@ -267,21 +273,6 @@ export const SettingsModal = memo(function SettingsModal({
                         <label htmlFor="custom-provider-model">Default model</label>
                         <input id="custom-provider-model" type="text" value={form.customProvider.defaultModel} onChange={(e) => setCustomProvider("defaultModel", e.target.value)} placeholder="model-name" />
                       </div>
-                      <div className="settings-field">
-                        <label htmlFor="settings-reasoning-effort">Reasoning effort</label>
-                        <select
-                          id="settings-reasoning-effort"
-                          value={form.reasoningEffort}
-                          onChange={(e) => set("reasoningEffort", e.target.value as SettingsValues["reasoningEffort"])}
-                        >
-                          <option value="none">None</option>
-                          <option value="low">Low</option>
-                          <option value="medium">Medium</option>
-                          <option value="high">High</option>
-                          <option value="max">Max</option>
-                        </select>
-                        <span className="settings-help">Controls <code>reasoning_effort</code> for this gateway. Default: none.</span>
-                      </div>
                     </div>
                   )}
 
@@ -295,11 +286,28 @@ export const SettingsModal = memo(function SettingsModal({
                   </div>
 
                   {form.provider !== "custom" && (
-                    <div className="settings-field">
-                      <label htmlFor="settings-model">Model override <span className="settings-optional">Optional</span></label>
-                      <input id="settings-model" type="text" value={form.model} onChange={(e) => set("model", e.target.value)} placeholder="Use the provider default" />
-                      <span className="settings-help">Leave this empty unless you need a specific model.</span>
-                    </div>
+                    <>
+                      <div className="settings-field">
+                        <label htmlFor="settings-model">Model override <span className="settings-required">Required</span></label>
+                        <input id="settings-model" type="text" value={form.model} onChange={(e) => set("model", e.target.value)} placeholder="Enter the provider model name" required />
+                        <span className="settings-help">Required for this provider. Enter the exact model name supported by its API.</span>
+                      </div>
+                      <div className="settings-field">
+                        <label htmlFor="settings-reasoning-effort">Reasoning effort</label>
+                        <select
+                          id="settings-reasoning-effort"
+                          value={form.reasoningEffort}
+                          onChange={(e) => set("reasoningEffort", e.target.value as SettingsValues["reasoningEffort"])}
+                        >
+                          <option value="none">None</option>
+                          <option value="low">Low</option>
+                          <option value="medium">Medium</option>
+                          <option value="high">High</option>
+                          <option value="max">Max</option>
+                        </select>
+                        <span className="settings-help">Controls reasoning effort when supported by the selected provider.</span>
+                      </div>
+                    </>
                   )}
                   <div className="settings-field">
                     <label htmlFor="settings-max-tokens">Max output tokens</label>

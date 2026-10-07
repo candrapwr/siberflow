@@ -244,6 +244,8 @@ function apiKeyEnvVar(provider: ProviderName): string {
       return "ZAI_API_KEY";
     case "claude":
       return "ANTHROPIC_API_KEY";
+    case "sibergate":
+      return "SIBERGATE_API_KEY";
     case "custom":
       return "CUSTOM_API_KEY";
   }

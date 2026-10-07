@@ -939,6 +939,7 @@ export class AgentHost {
     if (settings.provider !== "custom") {
       return {
         apiKey: this.apiKey,
+        reasoningEffort: settings.reasoningEffort,
         ...(headers ? { headers } : {}),
       };
     }
