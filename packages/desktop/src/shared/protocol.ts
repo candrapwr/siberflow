@@ -79,7 +79,7 @@ export const DEFAULT_SETTINGS: SettingsValues = {
   },
   model: "",
   reasoningEffort: "none",
-  maxTokens: 200000,
+  maxTokens: 50000,
   contextOptimize: true,
   contextOptimizeMode: "compact",
   contextWindow: 200000,

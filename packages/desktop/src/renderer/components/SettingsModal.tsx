@@ -312,7 +312,7 @@ export const SettingsModal = memo(function SettingsModal({
                   <div className="settings-field">
                     <label htmlFor="settings-max-tokens">Max output tokens</label>
                     <div className="settings-input-suffix"><input id="settings-max-tokens" type="number" min={1} max={2000000} step={1000} value={form.maxTokens} onChange={(e) => set("maxTokens", Number(e.target.value))} /><span>tokens</span></div>
-                    <span className="settings-help">Maximum response length sent to the AI provider. Default: 200,000 tokens.</span>
+                    <span className="settings-help">Maximum response length sent to the AI provider. Default: 50,000 tokens.</span>
                   </div>
                   {error && <div className="settings-error">{error}</div>}
                 </SettingsCard>
