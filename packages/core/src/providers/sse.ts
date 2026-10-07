@@ -6,13 +6,18 @@
  */
 export async function* parseSSE(
   body: ReadableStream<Uint8Array>,
-  options: { idleTimeoutMs?: number; initialTimeoutMs?: number } = {},
+  options: {
+    idleTimeoutMs?: number | (() => number);
+    initialTimeoutMs?: number;
+  } = {},
 ): AsyncIterable<unknown> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  const idleTimeoutMs = options.idleTimeoutMs ?? 0;
-  const initialTimeoutMs = options.initialTimeoutMs ?? idleTimeoutMs;
+  const idleTimeout = options.idleTimeoutMs ?? 0;
+  const resolveIdleTimeoutMs = () =>
+    typeof idleTimeout === "function" ? idleTimeout() : idleTimeout;
+  const initialTimeoutMs = options.initialTimeoutMs ?? resolveIdleTimeoutMs();
   const startedAt = Date.now();
   let lastPayloadAt: number | null = null;
 
@@ -20,7 +25,8 @@ export async function* parseSSE(
     while (true) {
       const readPromise = reader.read();
       let timer: ReturnType<typeof setTimeout> | undefined;
-      const activeTimeoutMs = lastPayloadAt === null ? initialTimeoutMs : idleTimeoutMs;
+      const activeTimeoutMs =
+        lastPayloadAt === null ? initialTimeoutMs : resolveIdleTimeoutMs();
       const elapsed = Date.now() - (lastPayloadAt ?? startedAt);
       const remainingMs = Math.max(1, activeTimeoutMs - elapsed);
       let result: ReadableStreamReadResult<Uint8Array> | "idle-timeout";

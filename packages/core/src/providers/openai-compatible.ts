@@ -149,12 +149,16 @@ export abstract class OpenAICompatibleProvider implements Provider {
     let usage: UsageStats | undefined;
     let chunkCount = 0;
     let reasoningContentLength = 0;
+    let terminalSeen = false;
 
     const idleTimeoutMs = req.maxTokens !== undefined && req.maxTokens <= 100
       ? 3_000
       : 30_000;
     stream: for await (const chunk of parseSSE(res.body, {
-      idleTimeoutMs,
+      // Qwen emits finish_reason first and a separate usage-only chunk next.
+      // Once terminal output is seen, only wait briefly for that accounting
+      // chunk so gateways that omit both usage and [DONE] still finalize fast.
+      idleTimeoutMs: () => terminalSeen ? 1_000 : idleTimeoutMs,
       initialTimeoutMs: 60_000,
     })) {
       const data = chunk as StreamChunk;
@@ -175,6 +179,11 @@ export abstract class OpenAICompatibleProvider implements Provider {
             : {}),
         };
       }
+
+      // A terminal choice was already received on the preceding event. Qwen
+      // puts usage in this follow-up event with choices: []; capture it above,
+      // then finish without waiting for [DONE].
+      if (terminalSeen) break stream;
 
       const choice = data.choices?.[0];
       if (!choice) continue;
@@ -225,12 +234,11 @@ export abstract class OpenAICompatibleProvider implements Provider {
       if (choice.finish_reason) {
         rawFinish = choice.finish_reason;
         finishReason = normalizeFinishReason(choice.finish_reason);
-        // finish_reason is itself the terminal signal. Several compatible
-        // gateways omit `[DONE]` or leave the HTTP body open after *any*
-        // terminal reason (not only `length`). All deltas from this choice
-        // have already been consumed, so waiting longer only leaves the host
-        // and Desktop UI stuck in a busy state.
-        break stream;
+        terminalSeen = true;
+        // Providers that do not promise streamed usage can finish immediately.
+        // Otherwise usage may be attached here (DeepSeek) or in the next
+        // choices: [] chunk (Qwen).
+        if (!this.includeUsageInStream || usage) break stream;
       }
     }
 
