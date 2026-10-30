@@ -154,11 +154,15 @@ export abstract class OpenAICompatibleProvider implements Provider {
     const idleTimeoutMs = req.maxTokens !== undefined && req.maxTokens <= 100
       ? 3_000
       : 30_000;
-    stream: for await (const chunk of parseSSE(res.body, {
-      // Qwen emits finish_reason first and a separate usage-only chunk next.
-      // Once terminal output is seen, only wait briefly for that accounting
-      // chunk so gateways that omit both usage and [DONE] still finalize fast.
-      idleTimeoutMs: () => terminalSeen ? 1_000 : idleTimeoutMs,
+    for await (const chunk of parseSSE(res.body, {
+      // Do NOT break early after the terminal chunk. Gateways (DeepSeek,
+      // Qwen, SiberGate, ...) send `data: [DONE]` last, and closing the body
+      // before draining it makes nginx log a 499 "client disconnected before
+      // stream completed" even though the answer was already complete. Let
+      // parseSSE reach [DONE]/EOF naturally (clean 200). The idle timeout is
+      // the only cancel path — it fires solely for gateways that omit both
+      // usage and [DONE] AND never close, where the socket is genuinely stuck.
+      idleTimeoutMs: () => terminalSeen ? 2_000 : idleTimeoutMs,
       initialTimeoutMs: 60_000,
     })) {
       const data = chunk as StreamChunk;
@@ -182,8 +186,9 @@ export abstract class OpenAICompatibleProvider implements Provider {
 
       // A terminal choice was already received on the preceding event. Qwen
       // puts usage in this follow-up event with choices: []; capture it above,
-      // then finish without waiting for [DONE].
-      if (terminalSeen) break stream;
+      // then keep draining so the trailing `data: [DONE]` is consumed (see the
+      // idleTimeoutMs comment — early break caused gateway 499s).
+      if (terminalSeen) continue;
 
       const choice = data.choices?.[0];
       if (!choice) continue;
@@ -238,15 +243,14 @@ export abstract class OpenAICompatibleProvider implements Provider {
         terminalSeen = true;
         // Providers that do not promise streamed usage can finish immediately.
         // Otherwise usage may be attached here (DeepSeek) or in the next
-        // choices: [] chunk (Qwen).
-        if (!this.includeUsageInStream || usage) break stream;
+        // choices: [] chunk (Qwen). Either way, keep draining until
+        // [DONE]/EOF — see idleTimeoutMs comment for the 499 rationale.
       }
     }
 
-    // Release a gateway stream that remains open after its terminal chunk.
-    if (rawFinish !== null) {
-      await res.body.cancel().catch(() => undefined);
-    }
+    // Normal path: we let the stream reach [DONE]/EOF (clean 200). The only
+    // early exit is the parseSSE idle timeout (rawFinish === null), which
+    // cancels internally. Nothing to release here.
 
     const toolCalls: ToolCall[] = [...toolCallsByIndex.entries()]
       .sort(([a], [b]) => a - b)

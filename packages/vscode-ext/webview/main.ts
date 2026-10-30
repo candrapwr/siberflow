@@ -215,6 +215,13 @@ function mount(): void {
   taskPanelEl.style.display = "none";
   root.appendChild(taskPanelEl);
   root.appendChild(renderComposer());
+  // Now that the composer + topbar are in the document, resolve elements by ID
+  // to set initial state: keyboard hint (seeded inline, refreshed here so it
+  // hides correctly when busy) and send-button disabled state.
+  updateComposerState();
+  // Context/usage auto-compact bar lives in the topbar now — refresh it after
+  // mount so the topbar node reference + visibility are correct.
+  updateContextBar();
   // Seed the panel if we already have tasks (resumed session).
   if (state.tasksEnabled && state.tasks.length > 0) updateTaskPanel();
   bindScrollTracker();
@@ -327,6 +334,8 @@ let activityEl: HTMLElement | null = null;
 let activityLabelEl: HTMLElement | null = null;
 let activityDetailEl: HTMLElement | null = null;
 let activityKind: string | null = null;
+/** Auto-compact/usage bar, rendered in the topbar next to the logo. */
+let contextBarEl: HTMLElement | null = null;
 
 function renderActivityCard(): void {
   const a = state.activity;
@@ -391,6 +400,17 @@ function renderTopbar(): HTMLElement {
   brand.className = "topbar-brand";
   brand.innerHTML = `<span class="brand-icon">${ICONS.brand}</span>`;
   el.appendChild(brand);
+
+  // Context-usage / auto-compact bar sits inline BETWEEN the logo and the menu
+  // button (single top row — no extra line). Inside that slot it stacks two
+  // tiny rows: track+percent on top, "auto-compact @ N%" below. Its width is
+  // capped to whatever space remains between the two flanking controls.
+  const contextBar = document.createElement("div");
+  contextBar.className = "sf-context-bar sf-context-bar-top";
+  contextBar.id = "context-bar";
+  contextBar.hidden = true;
+  contextBarEl = contextBar;
+  el.appendChild(contextBar);
 
   const menuBtn = document.createElement("button");
   menuBtn.className = "topbar-btn topbar-menu";
@@ -901,7 +921,7 @@ function fmtTokens(n: number): string {
  * "compact". Called on composer init, on usage updates, and on settings change.
  */
 function updateContextBar(): void {
-  const bar = document.getElementById("context-bar");
+  const bar = contextBarEl;
   if (!bar) return;
   if (state.optimizeMode !== "compact") {
     bar.hidden = true;
@@ -915,12 +935,17 @@ function updateContextBar(): void {
   const threshPct = Math.min(100, state.compactThreshold * 100);
   const tone = pct < 50 ? "ok" : pct < threshPct ? "warn" : "danger";
   bar.title = `Auto-compact triggers at ${Math.round(threshPct)}% (≈ ${fmtTokens(Math.round(cw * state.compactThreshold))} tokens)`;
+  // Two stacked lines (full width, edge-to-edge): row 1 = progress track + used
+  // /budget/%, row 2 = small "auto-compact @ N%" note.
   bar.innerHTML = `
-    <div class="sf-context-track">
-      <div class="sf-context-fill ${tone}" style="width:${pct}%"></div>
-      ${threshPct < 100 ? `<div class="sf-context-threshold" style="left:${threshPct}%"></div>` : ""}
+    <div class="sf-context-row">
+      <div class="sf-context-track">
+        <div class="sf-context-fill ${tone}" style="width:${pct}%"></div>
+        ${threshPct < 100 ? `<div class="sf-context-threshold" style="left:${threshPct}%"></div>` : ""}
+      </div>
+      <span class="sf-context-text">${fmtTokens(used)} / ${fmtTokens(cw)} · ${Math.round(pct)}%</span>
     </div>
-    <span class="sf-context-text">${fmtTokens(used)} / ${fmtTokens(cw)} · ${Math.round(pct)}%<span class="sf-context-thresh-label"> · auto-compact @ ${Math.round(threshPct)}%</span></span>
+    <div class="sf-context-sub">auto-compact @ ${Math.round(threshPct)}%</div>
   `;
 }
 
@@ -991,19 +1016,22 @@ function renderComposer(): HTMLElement {
   btn.disabled = true;
   btn.title = "Send (Enter)";
   el.appendChild(shell);
-  // Context-usage progress bar (visible only in compact mode).
-  const contextBar = document.createElement("div");
-  contextBar.className = "sf-context-bar";
-  contextBar.id = "context-bar";
-  contextBar.hidden = true;
-  el.appendChild(contextBar);
+  // Keyboard hint under the composer (compact mode context/usage moved to the
+  // topbar). Seed it here directly via the node reference too — the
+  // updateComposerState() call inside this function can't find it by ID yet
+  // (el isn't mounted), which is why the hint didn't show on first open and
+  // would sometimes stay blank. updateComposerState() (from mount()) refreshes
+  // it afterwards.
   const hint = document.createElement("div");
   hint.className = "composer-hint";
   hint.id = "composer-hint";
+  hint.innerHTML = `<kbd>Enter</kbd> send · <kbd>Shift+Enter</kbd> newline`;
   el.appendChild(hint);
   updateAttachments();
-  updateComposerState();
-  updateContextBar();
+  // NOTE: updateComposerState()/updateContextBar() are intentionally NOT called
+  // here — they resolve elements by getElementById and `el` isn't in the
+  // document yet. mount() invokes both AFTER appending the composer, so the
+  // lookups succeed (and correctly hide the hint while busy).
   return el;
 }
 

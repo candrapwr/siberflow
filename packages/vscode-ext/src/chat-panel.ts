@@ -42,7 +42,7 @@ import type {
 } from "./protocol.js";
 import type { Message } from "@siberflow/core";
 
-const VERSION = "0.6.4";
+const VERSION = "0.6.6";
 
 /** SiberGate gateway base URL (must match core/providers registry). */
 const SIBERGATE_BASE_URL = "https://api.idsiber.com/v1";
@@ -1534,9 +1534,9 @@ body {
 /* ---------- Topbar ---------- */
 .topbar {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   padding: 8px 10px;
   border-bottom: 1px solid var(--sf-border);
   background: var(--vscode-editor-background);
@@ -1921,6 +1921,38 @@ body {
   padding: 4px 6px 0;
   font-size: 10px;
   color: var(--sf-muted);
+}
+/* Topbar variant: fits INLINE between the brand logo and the menu button.
+ * Inside that slot it stacks two tiny rows — track+% on top, "auto-compact @
+ * N%" below — so the header stays on ONE row (no extra line) while the info
+ * has room to breathe. Width is naturally capped by the grid (minmax(0,1fr)). */
+.sf-context-bar-top {
+  display: block;
+  min-width: 0;
+  padding: 0;
+  font-size: 10px;
+}
+.sf-context-bar-top .sf-context-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sf-context-bar-top .sf-context-row .sf-context-track {
+  flex: 1 1 auto;
+  height: 5px;
+}
+.sf-context-bar-top .sf-context-text {
+  flex-shrink: 0;
+  font-size: 9px;
+}
+.sf-context-bar-top .sf-context-sub {
+  font-size: 8px;
+  opacity: 0.62;
+  color: var(--sf-muted);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .sf-context-track {
   flex: 1;
