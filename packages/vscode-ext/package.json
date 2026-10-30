@@ -1,6 +1,6 @@
 {
   "name": "siberflow-chat",
-  "version": "0.6.0",
+  "version": "0.6.2",
   "displayName": "Siberflow",
   "description": "AI chat sidebar with multi-provider, tool calling, sandboxed file ops, and task checklists.",
   "publisher": "DatasiberLab",
@@ -248,6 +248,11 @@
         "siberflow.debug": {
           "type": "boolean",
           "default": false
+        },
+        "siberflow.subagent": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable sub-agents (agent_general / agent_explorer delegation tools). Default OFF."
         }
       }
     }

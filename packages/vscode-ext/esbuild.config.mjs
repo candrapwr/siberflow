@@ -69,12 +69,16 @@ const extension = {
   platform: "node",
   format: "cjs",
   target: "node20",
-  // puppeteer-core, docx, and mammoth are packages that must stay external.
-  // puppeteer-core does dynamic requires at runtime. `docx` and `mammoth` are
-  // ESM-only ("type":"module") and break esbuild's CJS interop (TDZ on the
-  // generated `require2` helper) when bundled into the extension's CJS output.
-  // Both ship CJS builds, so Node resolves them via require() at runtime.
-  external: ["vscode", "puppeteer-core", "docx", "mammoth", "pdf-lib", "pdfjs-dist"],
+  // Only vscode (provided by the host) and puppeteer-core stay external.
+  // puppeteer-core does dynamic requires at runtime and is staged into the
+  // VSIX under vendor/ (see scripts/stage-puppeteer.mjs) + resolved by path.
+  // docx/mammoth (and the formerly-external pdf-lib/pdfjs-dist, now unused in
+  // JS since PDF OCR moved to Python) ARE bundled here so the VSIX is
+  // self-contained — vsce runs with --no-dependencies, so anything left
+  // external but NOT staged would crash activation with "Cannot find module".
+  // docx/mammoth are static-imported at the top of docx-script.ts, so they
+  // load on extension activation, not just when the tool runs.
+  external: ["vscode", "puppeteer-core"],
 };
 
 const webview = {

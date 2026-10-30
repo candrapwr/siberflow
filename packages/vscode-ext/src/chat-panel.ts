@@ -42,7 +42,7 @@ import type {
 } from "./protocol.js";
 import type { Message } from "@siberflow/core";
 
-const VERSION = "0.6.0";
+const VERSION = "0.6.2";
 
 /** Default settings shared with the desktop app (protocol parity). */
 const DEFAULT_SETTINGS: SettingsValues = {
@@ -61,6 +61,7 @@ const DEFAULT_SETTINGS: SettingsValues = {
   preTruncate: true,
   hideTools: true,
   debug: false,
+  subagent: false,
   maxIterations: 100,
   requestDelayMs: 100,
   enabledTools: [
@@ -424,6 +425,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       cfg.update("preTruncate", values.preTruncate, target),
       cfg.update("hideTools", values.hideTools, target),
       cfg.update("debug", values.debug, target),
+      cfg.update("subagent", values.subagent, target),
       cfg.update("maxIterations", values.maxIterations, target),
       cfg.update("requestDelayMs", values.requestDelayMs, target),
       cfg.update("enabledTools", values.enabledTools, target),
@@ -533,12 +535,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private rebuildAgent(): void {
     if (!this.apiKey) return;
     this.provider = createProvider(this.settings.provider, this.providerConfig());
-    // subagent + explore are always available in the VS Code host — add both
-    // names to the enabled set so they pass the per-name filter (the factory
-    // gate is opened by `subagent: true` below).
+    // Sub-agents (agent_general / agent_explorer) are opt-in via the `subagent`
+    // setting (default OFF). When enabled, add both tool names to the enabled
+    // set so they pass the per-name filter, and open the factory gate below.
     const enabledTools = new Set(this.settings.enabledTools);
-    enabledTools.add("agent_general");
-    enabledTools.add("agent_explorer");
+    if (this.settings.subagent) {
+      enabledTools.add("agent_general");
+      enabledTools.add("agent_explorer");
+    }
     const modelOverride = this.settings.model.trim();
     const model =
       modelOverride.length > 0 ? modelOverride : this.provider.defaultModel;
@@ -546,7 +550,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       enabledTools,
       provider: this.provider,
       model,
-      subagent: true,
+      subagent: this.settings.subagent,
       subagentMaxIterations: this.settings.maxIterations,
     });
     this.agent = this.buildAgent();
@@ -1301,6 +1305,7 @@ function readSettings(): SettingsValues {
     preTruncate: cfg.get<boolean>("preTruncate", true),
     hideTools: cfg.get<boolean>("hideTools", true),
     debug: cfg.get<boolean>("debug", false),
+    subagent: cfg.get<boolean>("subagent", false),
     maxIterations: cfg.get<number>("maxIterations", 100),
     requestDelayMs: cfg.get<number>("requestDelayMs", 100),
     enabledTools: cfg.get<string[]>("enabledTools", DEFAULT_SETTINGS.enabledTools),
@@ -1360,6 +1365,7 @@ function normalizeSettings(values: SettingsValues): SettingsValues {
       : DEFAULT_SETTINGS.reasoningEffort;
   return {
     ...values,
+    subagent: values.subagent === true,
     contextWindow,
     maxTokens,
     reasoningEffort,

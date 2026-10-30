@@ -136,6 +136,9 @@ export interface SettingsValues {
   preTruncate: boolean;
   hideTools: boolean;
   debug: boolean;
+  /** Enable sub-agents (agent_general / agent_explorer delegation tools).
+   * Default false — OFF unless the user turns it on in Settings. */
+  subagent: boolean;
   maxIterations: number;
   /** Milliseconds to wait before each LLM request (anti rate-limit). 0 = off. */
   requestDelayMs: number;
