@@ -318,8 +318,15 @@ function setActivity(activity: Activity | null): void {
   updateComposerState();
 }
 
-/** The live activity card row; kept as a singleton appended to #messages. */
+/** The live activity card row; kept as a singleton appended to #messages.
+ * Its spinner + dots are animated purely in CSS (infinite loops), so we must
+ * NEVER re-create them on every reasoning/content delta — replacing innerHTML
+ * mid-animation restarts the bounce/rotate from frame 0, which reads as a
+ * flicker. We build the shell once and only patch the two text nodes. */
 let activityEl: HTMLElement | null = null;
+let activityLabelEl: HTMLElement | null = null;
+let activityDetailEl: HTMLElement | null = null;
+let activityKind: string | null = null;
 
 function renderActivityCard(): void {
   const a = state.activity;
@@ -328,23 +335,44 @@ function renderActivityCard(): void {
       activityEl.classList.add("leaving");
       const el = activityEl;
       activityEl = null;
+      activityLabelEl = null;
+      activityDetailEl = null;
+      activityKind = null;
       setTimeout(() => el.remove(), 160);
     }
     return;
   }
   if (!messagesEl) return;
+
+  // (Re)build the shell only when it's missing or detached from the DOM
+  // (e.g. after a session reset). While it exists we reuse the same nodes.
   if (!activityEl || !messagesEl.contains(activityEl)) {
     activityEl = document.createElement("div");
     activityEl.className = "activity-card";
+    activityEl.innerHTML = `
+      <span class="activity-spinner" aria-hidden="true"></span>
+      <span class="activity-copy"><strong></strong><small hidden></small></span>
+      <span class="thinking-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+    `;
+    activityLabelEl = activityEl.querySelector(".activity-copy strong");
+    activityDetailEl = activityEl.querySelector(".activity-copy small");
+    activityKind = null;
   }
-  // Always (re)append so the card stays pinned below the newest message.
+  // Always (re)append so the card stays pinned below the newest message —
+  // moving a node does not restart its CSS animations.
   messagesEl.appendChild(activityEl);
-  activityEl.className = `activity-card activity-${a.kind}`;
-  activityEl.innerHTML = `
-    <span class="activity-spinner" aria-hidden="true"></span>
-    <span class="activity-copy"><strong>${escape(a.label)}</strong>${a.detail ? `<small>${escape(a.detail)}</small>` : ""}</span>
-    <span class="thinking-dots" aria-hidden="true"><span></span><span></span><span></span></span>
-  `;
+  if (activityKind !== a.kind) {
+    activityEl.className = `activity-card activity-${a.kind}`;
+    activityKind = a.kind;
+  }
+  // Patch text only; leave the animated spinner/dots untouched.
+  if (activityLabelEl!.textContent !== a.label) activityLabelEl!.textContent = a.label;
+  if (a.detail) {
+    if (activityDetailEl!.hidden) activityDetailEl!.hidden = false;
+    if (activityDetailEl!.textContent !== a.detail) activityDetailEl!.textContent = a.detail;
+  } else if (!activityDetailEl!.hidden) {
+    activityDetailEl!.hidden = true;
+  }
   scrollToBottom();
 }
 
@@ -1082,12 +1110,10 @@ function updateComposerState(): void {
   }
   if (ta) {
     ta.disabled = state.busy;
-    // Mirror the desktop composer: while busy, the placeholder carries the
-    // live activity ("AI is thinking: 42 words…" / "Summarizing context…").
-    const a = state.activity;
-    ta.placeholder = a
-      ? `${a.label}${a.detail ? `: ${a.detail}` : ""}…`
-      : "Message…";
+    // Static placeholder only. The live loading status (label + word count) is
+    // shown by the activity card at the bottom of the transcript, so we no
+    // longer mirror it into the composer — keeps the composer clean.
+    ta.placeholder = "Message…";
   }
   if (uploadBtn) {
     const fileEnabled =
@@ -1103,12 +1129,11 @@ function updateComposerState(): void {
         : "Upload dokumen atau gambar (.xlsx/.docx/.pdf/.png/.jpg/.webp/.gif)";
   }
   if (hint) {
-    const a = state.activity;
-    hint.innerHTML = state.stopping
-      ? "Stopping generation…"
-      : a
-        ? `${escape(a.label)}${a.detail ? ` — <small>${escape(a.detail)}</small>` : ""}`
-        : `<kbd>Enter</kbd> send · <kbd>Shift+Enter</kbd> newline`;
+    // The live loading status lives only in the activity card now — keep the
+    // composer area clean: a keyboard hint when idle, empty while busy.
+    hint.innerHTML = state.busy
+      ? ""
+      : `<kbd>Enter</kbd> send · <kbd>Shift+Enter</kbd> newline`;
   }
 }
 
@@ -1201,7 +1226,6 @@ function applyImagePreview(path: string, dataUrl: string | null): void {
 function appendUserMessage(text: string): void {
   const messages = document.getElementById("messages");
   if (!messages) return;
-  syncEmptyState(false);
   const el = document.createElement("div");
   el.className = "msg user";
   el.innerHTML = `<div class="role"><span class="role-dot"></span>You</div><div class="body"></div>`;
@@ -1215,6 +1239,9 @@ function appendUserMessage(text: string): void {
     body.appendChild(textEl);
   }
   messages.appendChild(el);
+  // Hide the welcome screen immediately now that the first user message exists
+  // (was previously only hidden once the assistant/tool content arrived).
+  syncEmptyState(false);
   scrollToBottom();
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "siberflow-chat",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "displayName": "Siberflow",
   "description": "AI chat sidebar with multi-provider, tool calling, sandboxed file ops, and task checklists.",
   "publisher": "DatasiberLab",
@@ -211,8 +211,8 @@
         },
         "siberflow.preTruncate": {
           "type": "boolean",
-          "default": true,
-          "description": "Pre-truncate large tool outputs/arguments to keep context lean. read_file caps to ~200 lines (unless an explicit offset/limit is given), exec caps stdout/stderr to ~20K chars, and write_file/edit_file arguments are digested after execution. Default true."
+          "default": false,
+          "description": "Pre-truncate large tool outputs/arguments to keep context lean. read_file caps to ~200 lines (unless an explicit offset/limit is given), exec caps stdout/stderr to ~20K chars, and write_file/edit_file arguments are digested after execution. Default false."
         },
         "siberflow.hideTools": {
           "type": "boolean",

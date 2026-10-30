@@ -42,7 +42,7 @@ import type {
 } from "./protocol.js";
 import type { Message } from "@siberflow/core";
 
-const VERSION = "0.6.2";
+const VERSION = "0.6.3";
 
 /** Default settings shared with the desktop app (protocol parity). */
 const DEFAULT_SETTINGS: SettingsValues = {
@@ -58,7 +58,7 @@ const DEFAULT_SETTINGS: SettingsValues = {
   compactThreshold: 0.8,
   compactKeepRecent: 2,
   autoContinue: true,
-  preTruncate: true,
+  preTruncate: false,
   hideTools: true,
   debug: false,
   subagent: false,
@@ -1302,7 +1302,7 @@ function readSettings(): SettingsValues {
     compactThreshold: cfg.get<number>("compactThreshold", 0.8),
     compactKeepRecent: cfg.get<number>("compactKeepRecent", 2),
     autoContinue: cfg.get<boolean>("autoContinue", true),
-    preTruncate: cfg.get<boolean>("preTruncate", true),
+    preTruncate: cfg.get<boolean>("preTruncate", false),
     hideTools: cfg.get<boolean>("hideTools", true),
     debug: cfg.get<boolean>("debug", false),
     subagent: cfg.get<boolean>("subagent", false),
