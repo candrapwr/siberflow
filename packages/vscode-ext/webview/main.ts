@@ -3,8 +3,10 @@ import type {
   ExtToView,
   ViewToExt,
   BannerInfo,
-  DocKind,
+  AttachmentKind,
+  HistoryMessage,
   PickedFile,
+  ReasoningEffort,
   SessionInfo,
   SettingsValues,
 } from "../src/protocol.js";
@@ -17,6 +19,14 @@ declare const acquireVsCodeApi: () => {
 };
 const vscode = acquireVsCodeApi();
 
+/** High-level agent activity shown in the composer + activity card.
+ * Mirrors the desktop useChat `activity` state. */
+interface Activity {
+  kind: "thinking" | "tool" | "task" | "subagent" | "context";
+  label: string;
+  detail?: string;
+}
+
 interface UIState {
   banner: BannerInfo | null;
   session: SessionInfo | null;
@@ -25,8 +35,24 @@ interface UIState {
   /** Tool names enabled in settings (drives composer upload toggle). */
   enabledTools: string[];
   tasks: Task[];
+  /** Snapshot of the initial task plan (set once per turn via task_plan). */
+  taskPlan: Task[] | null;
+  /** True when the visible task list came from a restored session. */
+  tasksRestored: boolean;
+  /** Task panel manually dismissed — hidden until the next live update. */
+  taskPanelClosed: boolean;
   /** Element of the currently streaming assistant message (or null). */
   currentAssistant: HTMLElement | null;
+  /** Single container for the whole live turn. All iterations append their
+   * blocks here; completed iterations are folded into `turnWorkWrap` so the
+   * final answer and its work share ONE bubble — same layout as history
+   * restore, applied live during and after the turn. */
+  turnRoot: HTMLElement | null;
+  turnToggle: HTMLButtonElement | null;
+  turnWorkWrap: HTMLElement | null;
+  /** True while the user has the live "Show work" section expanded. */
+  turnWorkOpen: boolean;
+  turnToolCount: number;
   currentAssistantText: string;
   /** Tool call elements by index for the current assistant turn. */
   currentTools: Map<number, ToolElements>;
@@ -34,12 +60,14 @@ interface UIState {
    * no batch is open OR when the current assistant iteration has < 2 calls. */
   currentToolGroup: ToolGroupElements | null;
   busy: boolean;
-  /** True while the agent is making an LLM context-summarization call. */
-  summarizing: boolean;
-  /** When set, a subagent tool is running; { phase, detail } for the indicator. */
-  subagentPhase: { phase: string; detail?: string } | null;
+  /** Current activity label rendered in the activity card + composer. */
+  activity: Activity | null;
+  /** Live reasoning/thinking stream stats for the current assistant
+   * iteration (chars + word count), or null when the model is not emitting
+   * reasoning deltas. Drives the "AI is thinking (N words)" label. */
+  reasoning: { chars: number; words: number; lastWasSpace: boolean } | null;
   stopping: boolean;
-  /** Excel files staged for the next send (copied into the workspace sandbox). */
+  /** Files staged for the next send (copied into the session upload dir). */
   attachments: PickedFile[];
   /** Latest token usage for the active session (drives the context-usage bar). */
   usage: SessionUsage | null;
@@ -93,13 +121,21 @@ const state: UIState = {
   tasksEnabled: false,
   enabledTools: ["read_file", "write_file", "edit_file", "copy_file", "list_dir", "delete_file", "grep"],
   tasks: [],
+  taskPlan: null,
+  tasksRestored: false,
+  taskPanelClosed: false,
   currentAssistant: null,
+  turnRoot: null,
+  turnToggle: null,
+  turnWorkWrap: null,
+  turnWorkOpen: false,
+  turnToolCount: 0,
   currentAssistantText: "",
   currentTools: new Map(),
   currentToolGroup: null,
   busy: false,
-  summarizing: false,
-  subagentPhase: null,
+  activity: null,
+  reasoning: null,
   stopping: false,
   attachments: [],
   usage: null,
@@ -137,13 +173,17 @@ const ICONS = {
   fileExcel: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h8"/><path d="M12 13v4"/></svg>`,
   fileDoc: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13l1.5 5 1.5-4 1.5 4L15 13"/></svg>`,
   filePdf: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8.5 13v5h1.5a1.5 1.5 0 0 0 0-3H8.5"/><path d="M13 13v5h1.5a1.5 1.5 0 0 0 1.5-1.5v-2a1.5 1.5 0 0 0-1.5-1.5H13z"/></svg>`,
+  fileImage: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></svg>`,
+  code: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 18 6-6-6-6"/><path d="m8 6-6 6 6 6"/></svg>`,
+  spark: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3z"/></svg>`,
+  arrowUpRight: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7"/><path d="M7 7h10v10"/></svg>`,
+  chevron: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>`,
   x: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`,
 };
 
 // Element references so updates can target panels without wiping #messages.
 let mounted = false;
 let messagesEl: HTMLElement | null = null;
-let pendingEl: HTMLElement | null = null;
 let emptyStateEl: HTMLElement | null = null;
 // Pinned task panel sits between messages and the composer. Collapsible.
 let taskPanelEl: HTMLElement | null = null;
@@ -151,6 +191,11 @@ let taskPanelCollapsed = false;
 // The text segment we are currently streaming into. Reset to null whenever
 // a tool call interrupts so the next content stream gets its own segment.
 let currentTextEl: HTMLElement | null = null;
+// Live markdown streaming: we re-parse the in-progress segment as markdown on
+// a throttle (not per-token) so typing stays smooth; a final exact render still
+// happens at segment end. `streamLastRenderAt` gates the throttle.
+let streamLastRenderAt = 0;
+const STREAM_MD_THROTTLE_MS = 90;
 let hiddenToolSummary: HiddenToolSummary | null = null;
 
 function mount(): void {
@@ -182,9 +227,10 @@ function updateTopbar(): void {
 
 /**
  * Render / update the pinned task panel between messages and composer.
- * Hidden entirely when there are no tasks. Header click toggles collapsed
- * state (body hidden, header still visible). Collapsed state persists
- * across updates within this webview lifetime.
+ * Mirrors the desktop TaskPanel: a merged plan+live-status checklist with a
+ * progress bar, an "In progress" hint, and a close button. Hidden entirely
+ * when there are no tasks or the user dismissed the panel; restored lists
+ * stay hidden until the next live update.
  */
 function updateTaskPanel(): void {
   if (!taskPanelEl) return;
@@ -192,15 +238,28 @@ function updateTaskPanel(): void {
     taskPanelEl.style.display = "none";
     return;
   }
+  if (state.taskPanelClosed || state.tasksRestored) {
+    taskPanelEl.style.display = "none";
+    return;
+  }
   taskPanelEl.style.display = "";
   taskPanelEl.classList.toggle("collapsed", taskPanelCollapsed);
 
-  const done = state.tasks.filter((t) => t.status === "completed").length;
-  const chevron = taskPanelCollapsed ? "▸" : "▾";
-  const pct = state.tasks.length > 0 ? Math.round((done / state.tasks.length) * 100) : 0;
+  // Merge initial plan tasks (stable order) with the latest live status.
+  const liveMap = new Map<string, Task["status"]>();
+  for (const t of state.tasks) liveMap.set(t.content, t.status);
+  const displayTasks = (state.taskPlan && state.taskPlan.length > 0
+    ? state.taskPlan.map((t) => ({ content: t.content, status: liveMap.get(t.content) ?? t.status }))
+    : state.tasks) as Task[];
+  const isPlan = !!(state.taskPlan && state.taskPlan.length > 0);
 
-  const items = state.tasks
-    .map((t) => {
+  const done = displayTasks.filter((t) => t.status === "completed").length;
+  const active = displayTasks.find((t) => t.status === "in_progress");
+  const pct = displayTasks.length > 0 ? Math.round((done / displayTasks.length) * 100) : 0;
+  const chevron = taskPanelCollapsed ? "▸" : "▾";
+
+  const items = displayTasks
+    .map((t, i) => {
       const cls =
         t.status === "completed"
           ? "done"
@@ -213,41 +272,80 @@ function updateTaskPanel(): void {
           : t.status === "in_progress"
             ? `<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="12" cy="12" r="5"/></svg>`
             : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/></svg>`;
-      return `<li class="${cls}"><span class="task-ico">${marker}</span><span class="task-text">${escape(t.content)}</span></li>`;
+      const num = isPlan ? `<span class="task-step-num">${i + 1}.</span>` : "";
+      return `<li class="${cls}"><span class="task-ico">${marker}</span>${num}<span class="task-text">${escape(t.content)}</span></li>`;
     })
     .join("");
+
+  const activeHint = isPlan && active
+    ? `<div class="task-active-hint"><span class="task-active-dot"></span><span class="task-active-label">In progress:</span><strong>${escape(active.content)}</strong><span class="thinking-dots"><span></span><span></span><span></span></span></div>`
+    : "";
 
   taskPanelEl.innerHTML = `
     <div class="task-panel-header" id="tp-header">
       <span class="task-panel-chevron">${chevron}</span>
-      <span class="task-panel-title">tasks <b>${done}/${state.tasks.length}</b></span>
+      <span class="task-panel-title">${isPlan ? "work plan" : "tasks"} <b>${done}/${displayTasks.length}</b></span>
       <div class="task-panel-progress"><div class="task-panel-progress-fill" style="width:${pct}%"></div></div>
+      <button class="task-panel-close" id="tp-close" title="Close task list" aria-label="Close task list">✕</button>
     </div>
-    <div class="task-panel-body"><ul>${items}</ul></div>
+    <div class="task-panel-body">
+      ${activeHint}
+      <ul>${items}</ul>
+    </div>
   `;
 
-  taskPanelEl.querySelector("#tp-header")?.addEventListener("click", () => {
+  taskPanelEl.querySelector("#tp-header")?.addEventListener("click", (e) => {
+    if ((e.target as HTMLElement).closest("#tp-close")) return;
     taskPanelCollapsed = !taskPanelCollapsed;
+    updateTaskPanel();
+  });
+  taskPanelEl.querySelector("#tp-close")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    state.taskPanelClosed = true;
     updateTaskPanel();
   });
 }
 
-function showPending(label?: string): void {
-  if (pendingEl || !messagesEl) return;
-  pendingEl = document.createElement("div");
-  pendingEl.className = "pending";
-  pendingEl.innerHTML = `<span class="thinking-dots"><span></span><span></span><span></span></span>${label ? `<span class="pending-label">${escape(label)}</span>` : ""}`;
-  messagesEl.appendChild(pendingEl);
-  scrollToBottom();
+/**
+ * Set the current activity (or clear it with null) and re-render the activity
+ * card + composer status. Mirrors the desktop's `activity` state: a spinner
+ * card with a label/detail that tracks every agent phase while a turn runs.
+ */
+function setActivity(activity: Activity | null): void {
+  state.activity = activity;
+  if (!activity) state.reasoning = null;
+  renderActivityCard();
+  updateComposerState();
 }
 
-function hidePending(): void {
-  if (!pendingEl) return;
-  pendingEl.classList.add("leaving");
-  const el = pendingEl;
-  pendingEl = null;
-  // Let the fade-out finish before removing from the DOM.
-  setTimeout(() => el.remove(), 160);
+/** The live activity card row; kept as a singleton appended to #messages. */
+let activityEl: HTMLElement | null = null;
+
+function renderActivityCard(): void {
+  const a = state.activity;
+  if (!a || !state.busy) {
+    if (activityEl) {
+      activityEl.classList.add("leaving");
+      const el = activityEl;
+      activityEl = null;
+      setTimeout(() => el.remove(), 160);
+    }
+    return;
+  }
+  if (!messagesEl) return;
+  if (!activityEl || !messagesEl.contains(activityEl)) {
+    activityEl = document.createElement("div");
+    activityEl.className = "activity-card";
+  }
+  // Always (re)append so the card stays pinned below the newest message.
+  messagesEl.appendChild(activityEl);
+  activityEl.className = `activity-card activity-${a.kind}`;
+  activityEl.innerHTML = `
+    <span class="activity-spinner" aria-hidden="true"></span>
+    <span class="activity-copy"><strong>${escape(a.label)}</strong>${a.detail ? `<small>${escape(a.detail)}</small>` : ""}</span>
+    <span class="thinking-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+  `;
+  scrollToBottom();
 }
 
 function renderTopbar(): HTMLElement {
@@ -395,6 +493,7 @@ function showSettingsModal(
           <option value="qwen">qwen (Alibaba)</option>
           <option value="zai">zai (GLM / Z.AI)</option>
           <option value="claude">claude (Anthropic)</option>
+          <option value="sibergate">sibergate (SiberGate)</option>
           <option value="custom">custom (OpenAI-compatible)</option>
         </select>
       </div>
@@ -421,6 +520,22 @@ function showSettingsModal(
       <div class="form-row">
         <label>Model override</label>
         <input type="text" id="cfg-model" placeholder="(leave empty for provider default)">
+      </div>
+      <div class="form-row">
+        <label>Reasoning effort</label>
+        <select id="cfg-reasoning">
+          <option value="none">none</option>
+          <option value="low">low</option>
+          <option value="medium">medium</option>
+          <option value="high">high</option>
+          <option value="max">max</option>
+        </select>
+        <div class="help">Forwarded as reasoning_effort to OpenAI-compatible gateways.</div>
+      </div>
+      <div class="form-row">
+        <label>Max output tokens</label>
+        <input type="number" id="cfg-maxtokens" min="1024" step="1024">
+        <div class="help">Maximum completion tokens requested per LLM call. Default 50000.</div>
       </div>
     </div>
     <div class="form-section">
@@ -559,6 +674,10 @@ function showSettingsModal(
   (modal.querySelector("#cfg-debug") as HTMLInputElement).checked = values.debug;
   (modal.querySelector("#cfg-max") as HTMLInputElement).value = String(values.maxIterations);
   (modal.querySelector("#cfg-delay") as HTMLInputElement).value = String(values.requestDelayMs);
+  (modal.querySelector("#cfg-reasoning") as HTMLSelectElement).value =
+    values.reasoningEffort ?? "none";
+  (modal.querySelector("#cfg-maxtokens") as HTMLInputElement).value =
+    String(values.maxTokens ?? 50000);
 
   // Build per-tool checkboxes. Each toggle adds/removes the tool name from the
   // enabledTools array carried by the form state.
@@ -649,6 +768,11 @@ function showSettingsModal(
       0,
       parseInt((modal.querySelector("#cfg-delay") as HTMLInputElement).value, 10) || 0,
     );
+    const reasoningEffort = (modal.querySelector("#cfg-reasoning") as HTMLSelectElement).value as ReasoningEffort;
+    const maxTokensRaw = parseInt((modal.querySelector("#cfg-maxtokens") as HTMLInputElement).value, 10);
+    const maxTokens = Number.isFinite(maxTokensRaw) && maxTokensRaw > 0
+      ? Math.min(maxTokensRaw, 2_000_000)
+      : 50000;
     // Collect checked tool names from the tools grid.
     const enabledTools = Array.from(
       modal.querySelectorAll<HTMLInputElement>("#cfg-tools input[type='checkbox']:checked"),
@@ -669,6 +793,8 @@ function showSettingsModal(
         customProvider,
         multimodalProvider,
         model,
+        reasoningEffort,
+        maxTokens,
         contextOptimize,
         contextOptimizeMode,
         contextWindow,
@@ -805,10 +931,11 @@ function renderComposer(): HTMLElement {
   return el;
 }
 
-/** Map a document kind to its chip icon SVG string. */
-function docIcon(kind: DocKind): string {
+/** Map an attachment kind to its chip icon SVG string. */
+function docIcon(kind: AttachmentKind): string {
   if (kind === "docx") return ICONS.fileDoc;
   if (kind === "pdf") return ICONS.filePdf;
+  if (kind === "image") return ICONS.fileImage;
   return ICONS.fileExcel;
 }
 
@@ -855,9 +982,9 @@ function submit(): void {
   const text = ta.value.trim();
   const hasAttachments = state.attachments.length > 0;
   if (!text && !hasAttachments) return;
-  // Fold staged Excel attachments into the prompt: list their relative paths
-  // and instruct the agent to read them via excel_script. Mirrors the desktop
-  // composer's buildPromptWithAttachments.
+  // Fold staged attachments into the prompt: documents and images get
+  // separate headers so the agent knows which tool handles which file.
+  // Mirrors the desktop Composer's buildPromptWithAttachments.
   const composed = buildPromptWithAttachments(text, state.attachments);
   ta.value = "";
   ta.style.height = "auto";
@@ -870,35 +997,45 @@ function submit(): void {
   const wasEditing = editingLast;
   editingLast = false;
   appendUserMessage(composed);
-  // Reset the task panel for the new turn. The previous turn's checklist
-  // is stale; the model will repopulate via task_update if it decides to
-  // maintain one this turn.
-  if (state.tasks.length > 0) {
-    state.tasks = [];
-    updateTaskPanel();
-  }
-  showPending();
+  // Reset per-turn task-panel state: the previous plan is stale, and the
+  // model will emit a fresh task_plan if it maintains one this turn. The
+  // live checklist itself stays visible until replaced (desktop parity).
+  state.taskPlan = null;
+  state.tasksRestored = false;
+  // Reset the live-turn "Show work" fold state so the new turn starts clean.
+  resetLiveTurn();
   setBusy(true);
+  setActivity({ kind: "thinking", label: "AI is thinking" });
   vscode.postMessage({ kind: wasEditing ? "edit_last" : "send", input: composed });
 }
 
 /**
- * Fold staged attachments into the prompt sent to the agent. Short and
- * type-agnostic: just lists the file paths under a one-line header, then the
- * user's typed instruction (or a generic default if they typed nothing). The
- * agent picks the right `*_script` tool itself based on each file's extension.
- * Mirrors the desktop Composer's helper.
+ * Fold staged attachments into the prompt sent to the agent. Images and
+ * documents use separate headers so the agent knows image paths should be
+ * handled by `analyze_image` while documents use their matching script tool.
+ * Kept in sync with the desktop Composer's helper.
  */
 function buildPromptWithAttachments(text: string, files: PickedFile[]): string {
   if (files.length === 0) return text;
-  const fileList = files.map((f) => `- ${f.relPath}`).join("\n");
-  const instr = text.length > 0 ? text : "Read these files and summarize their contents.";
-  return `Attached files:\n${fileList}\n\n${instr}`;
+  const docs = files.filter((f) => f.kind !== "image");
+  const images = files.filter((f) => f.kind === "image");
+  const sections: string[] = [];
+  if (docs.length > 0) sections.push(`Attached files:\n${docs.map((f) => `- ${f.relPath}`).join("\n")}`);
+  if (images.length > 0) sections.push(`Attached images (use analyze_image):\n${images.map((f) => `- ${f.relPath}`).join("\n")}`);
+  const instr = text.length > 0
+    ? text
+    : images.length > 0 && docs.length === 0
+      ? "Analyze these images and describe what they contain."
+      : "Read these files and summarize their contents.";
+  return `${sections.join("\n\n")}\n\n${instr}`;
 }
 
 function setBusy(b: boolean): void {
   state.busy = b;
-  if (!b) state.stopping = false;
+  if (!b) {
+    state.stopping = false;
+    setActivity(null);
+  }
   updateComposerState();
   // Clear action buttons while generating; they're re-attached on assistant_end.
   if (b) document.querySelectorAll(".msg .actions").forEach((n) => n.remove());
@@ -935,29 +1072,121 @@ function updateComposerState(): void {
       btn.innerHTML = ICONS.send;
     }
   }
-  if (ta) ta.disabled = state.busy;
+  if (ta) {
+    ta.disabled = state.busy;
+    // Mirror the desktop composer: while busy, the placeholder carries the
+    // live activity ("AI is thinking: 42 words…" / "Summarizing context…").
+    const a = state.activity;
+    ta.placeholder = a
+      ? `${a.label}${a.detail ? `: ${a.detail}` : ""}…`
+      : "Message…";
+  }
   if (uploadBtn) {
-    const docEnabled =
+    const fileEnabled =
       state.enabledTools.includes("excel_script") ||
       state.enabledTools.includes("docx_script") ||
-      state.enabledTools.includes("pdf_script");
-    uploadBtn.disabled = state.busy || !docEnabled;
-    uploadBtn.title = !docEnabled
-      ? "Aktifkan salah satu tool dokumen (excel_script/docx_script/pdf_script) di Tools settings untuk upload"
+      state.enabledTools.includes("pdf_script") ||
+      state.enabledTools.includes("analyze_image");
+    uploadBtn.disabled = state.busy || !fileEnabled;
+    uploadBtn.title = !fileEnabled
+      ? "Aktifkan tool dokumen (excel_script/docx_script/pdf_script) atau analyze_image di Tools settings untuk upload"
       : state.busy
         ? "Tunggu turn selesai"
-        : "Upload file dokumen (.xlsx/.docx/.pdf)";
+        : "Upload dokumen atau gambar (.xlsx/.docx/.pdf/.png/.jpg/.webp/.gif)";
   }
   if (hint) {
-    hint.innerHTML = state.subagentPhase
-      ? `Agent: ${state.subagentPhase.detail ?? state.subagentPhase.phase}…`
-      : state.summarizing
-        ? "Summarizing context…"
-        : state.busy
-          ? state.stopping
-            ? "Stopping generation..."
-            : "Generating — click Stop to cancel"
-          : `<kbd>Enter</kbd> send · <kbd>Shift+Enter</kbd> newline`;
+    const a = state.activity;
+    hint.innerHTML = state.stopping
+      ? "Stopping generation…"
+      : a
+        ? `${escape(a.label)}${a.detail ? ` — <small>${escape(a.detail)}</small>` : ""}`
+        : `<kbd>Enter</kbd> send · <kbd>Shift+Enter</kbd> newline`;
+  }
+}
+
+/** Hide internal attachment paths while keeping their semantic sections.
+ * Mirrors the desktop Message.parseUserContent. */
+function parseUserContent(content: string): { text: string; images: string[]; files: string[] } {
+  if (!content.includes("Attached files:\n") && !content.includes("Attached images (use analyze_image):\n")) {
+    return { text: content, images: [], files: [] };
+  }
+
+  const images: string[] = [];
+  const files: string[] = [];
+  const visible: string[] = [];
+  let section: "images" | "files" | null = null;
+  for (const line of content.split("\n")) {
+    if (line === "Attached images (use analyze_image):") {
+      section = "images";
+      continue;
+    }
+    if (line === "Attached files:") {
+      section = "files";
+      continue;
+    }
+    if (section && line.startsWith("- ")) {
+      const path = line.slice(2).trim();
+      if (path) (section === "images" ? images : files).push(path);
+      continue;
+    }
+    if (section && line.trim() === "") {
+      section = null;
+      continue;
+    }
+    section = null;
+    visible.push(line);
+  }
+
+  return { text: visible.join("\n").trim(), images, files };
+}
+
+function fileName(path: string): string {
+  const parts = path.replace(/\\/g, "/").split("/").filter(Boolean);
+  return parts[parts.length - 1] ?? path;
+}
+
+/**
+ * Render the attachment strip inside a user message: image thumbnails (the
+ * data URL is fetched from the host via get_image_preview) and file-name
+ * chips for documents. Mirrors the desktop UserMessage rendering.
+ */
+function renderUserAttachments(body: HTMLElement, images: string[], files: string[]): void {
+  if (images.length === 0 && files.length === 0) return;
+  const wrap = document.createElement("div");
+  wrap.className = "user-attachments";
+  for (const path of images) {
+    const img = document.createElement("img");
+    img.className = "user-image-attachment";
+    img.alt = fileName(path);
+    img.dataset.path = path;
+    wrap.appendChild(img);
+    // Ask the extension host for the (validated) data URL.
+    vscode.postMessage({ kind: "get_image_preview", path });
+  }
+  for (const path of files) {
+    const chip = document.createElement("div");
+    chip.className = "user-file-attachment";
+    chip.title = fileName(path);
+    chip.textContent = fileName(path);
+    wrap.appendChild(chip);
+  }
+  body.appendChild(wrap);
+}
+
+/** Attach a host-provided image preview to its pending <img> element(s). */
+function applyImagePreview(path: string, dataUrl: string | null): void {
+  const all = messagesEl?.querySelectorAll<HTMLImageElement>("img.user-image-attachment");
+  if (!all) return;
+  for (const el of all) {
+    if (el.dataset.path !== path) continue;
+    if (dataUrl) {
+      el.src = dataUrl;
+    } else {
+      const fallback = document.createElement("div");
+      fallback.className = "user-image-attachment unavailable";
+      fallback.textContent = "Image unavailable";
+      el.replaceWith(fallback);
+    }
   }
 }
 
@@ -968,31 +1197,38 @@ function appendUserMessage(text: string): void {
   const el = document.createElement("div");
   el.className = "msg user";
   el.innerHTML = `<div class="role"><span class="role-dot"></span>You</div><div class="body"></div>`;
-  el.querySelector(".body")!.textContent = text;
+  const body = el.querySelector(".body") as HTMLElement;
+  const parsed = parseUserContent(text);
+  renderUserAttachments(body, parsed.images, parsed.files);
+  if (parsed.text) {
+    const textEl = document.createElement("div");
+    textEl.className = "user-message-text";
+    textEl.textContent = parsed.text;
+    body.appendChild(textEl);
+  }
   messages.appendChild(el);
   scrollToBottom();
 }
 
-/** Render a completed assistant message from session history (already final, no streaming). */
-function appendAssistantHistory(text: string): void {
-  if (!messagesEl) return;
-  syncEmptyState(false);
-  const el = document.createElement("div");
-  el.className = "msg assistant";
-  el.innerHTML = `<div class="role"><span class="role-dot"></span>Siberflow</div><div class="body">${marked.parse(text)}</div>`;
-  messagesEl.appendChild(el);
-  const body = el.querySelector(".body") as HTMLElement | null;
-  if (body) enhanceCodeBlocks(body);
-}
-
 function startAssistant(): void {
   if (!messagesEl) return;
-  syncEmptyState(false);
-  const el = document.createElement("div");
-  el.className = "msg assistant";
-  el.innerHTML = `<div class="role"><span class="role-dot"></span>Siberflow</div><div class="body"><span class="thinking-dot"></span></div>`;
-  messagesEl.appendChild(el);
-  state.currentAssistant = el;
+  // A new assistant iteration begins. The FIRST one creates the turn bubble;
+  // every later one folds the previous iteration's finished blocks into the
+  // collapsed "Show work" section — so work + final answer share ONE bubble,
+  // exactly like history restore (restoreHistory), but applied live.
+  if (!state.turnRoot) {
+    syncEmptyState(false);
+    const el = document.createElement("div");
+    el.className = "msg assistant";
+    el.innerHTML = `<div class="role"><span class="role-dot"></span>Siberflow</div><div class="body"><span class="thinking-dot"></span></div>`;
+    messagesEl.appendChild(el);
+    state.turnRoot = el;
+  } else {
+    foldCompletedWork();
+  }
+  // Streaming always targets the single turn bubble (its work section sits
+  // above, so new blocks append below it and the answer stays un-folded).
+  state.currentAssistant = state.turnRoot;
   state.currentAssistantText = "";
   state.currentTools.clear();
   // A new assistant iteration ends any open tool batch (defensive — the agent
@@ -1008,20 +1244,29 @@ function removeThinkingDot(body: HTMLElement): void {
 }
 
 function appendAssistantContent(delta: string): void {
-  hidePending();
   if (!state.currentAssistant) startAssistant();
   state.currentAssistantText += delta;
   const body = state.currentAssistant!.querySelector(".body") as HTMLElement;
   removeThinkingDot(body);
-  // Create a new text segment if there's no active one (i.e., we just
-  // came out of a tool call, or this is the first content).
+  // Create a new text segment if there's no active one (i.e. we just came out
+  // of a tool call, or this is the first content).
   if (!currentTextEl) {
     currentTextEl = document.createElement("div");
     currentTextEl.className = "seg";
     body.appendChild(currentTextEl);
+    streamLastRenderAt = 0; // force the first markdown render to be immediate
   }
-  // Stream as plain text for responsiveness — markdown render at segment end.
-  currentTextEl.textContent = state.currentAssistantText;
+  // Render markdown LIVE, but throttled (not per-token) so streaming stays
+  // smooth. Between ticks the last parsed DOM is left as-is — the new deltas
+  // appear on the next tick (~90ms), which reads as live typing without the
+  // cost/flicker of re-parsing on every character. An unclosed code fence is
+  // still consumed as a block by marked, and a final exact render (with copy
+  // buttons) happens in finalizeCurrentTextEl at segment end.
+  const now = Date.now();
+  if (now - streamLastRenderAt >= STREAM_MD_THROTTLE_MS) {
+    streamLastRenderAt = now;
+    currentTextEl.innerHTML = marked.parse(state.currentAssistantText) as string;
+  }
   scrollToBottom();
 }
 
@@ -1077,6 +1322,85 @@ function finalizeAssistant(): void {
 }
 
 /**
+ * Live-turn compaction, mirroring the collapsed "Show work" layout that
+ * history restore produces. The whole turn lives in ONE assistant bubble;
+ * when a new iteration starts, every block the previous iteration left in
+ * the body (its text segments + finished tool cards) is moved into a single
+ * collapsed "Show work" section pinned at the top of that same bubble — so
+ * work and the final answer are never split into separate messages. The
+ * answer (last iteration) is never folded.
+ */
+function ensureLiveShell(): void {
+  if (state.turnToggle && state.turnWorkWrap) return;
+  const body = state.turnRoot!.querySelector(":scope > .body") as HTMLElement;
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "work-toggle";
+  toggle.innerHTML = `<span class="tool-chevron">▸</span><span>${shellLabel(0)}</span>`;
+  const wrap = document.createElement("div");
+  wrap.className = "historical-work";
+  wrap.style.display = "none";
+  toggle.addEventListener("click", () => {
+    state.turnWorkOpen = !state.turnWorkOpen;
+    wrap.style.display = state.turnWorkOpen ? "" : "none";
+    toggle.querySelector(".tool-chevron")!.textContent = state.turnWorkOpen ? "▾" : "▸";
+    toggle.querySelector("span:last-child")!.textContent = state.turnWorkOpen
+      ? "Hide work"
+      : shellLabel(state.turnToolCount);
+  });
+  // Insert toggle + wrap at the very top of the body (above streaming blocks).
+  body.insertBefore(wrap, body.firstChild);
+  body.insertBefore(toggle, wrap);
+  state.turnToggle = toggle;
+  state.turnWorkWrap = wrap;
+}
+
+function shellLabel(toolCount: number): string {
+  return toolCount > 0
+    ? `Show work · ${toolCount} tool call${toolCount === 1 ? "" : "s"}`
+    : "Show earlier work";
+}
+
+/** Move every finished block currently in the turn body into "Show work". */
+function foldCompletedWork(): void {
+  const body = state.turnRoot?.querySelector(":scope > .body");
+  if (!body) return;
+  // Collect iteration blocks, excluding the shell elements themselves.
+  const blocks = (Array.from(body.children) as HTMLElement[]).filter(
+    (el) => !el.classList.contains("work-toggle") && !el.classList.contains("historical-work"),
+  );
+  if (blocks.length === 0) return;
+  ensureLiveShell();
+  const wrap = state.turnWorkWrap!;
+  for (const el of blocks) {
+    // task_update bookkeeping is never shown, even inside Show work.
+    if (el.classList.contains("tool") && el.dataset.hiddenTool === "1") {
+      el.remove();
+      continue;
+    }
+    state.turnToolCount += el.classList.contains("tool-group")
+      ? el.querySelectorAll(".tool").length
+      : el.classList.contains("tool")
+        ? 1
+        : 0;
+    wrap.appendChild(el);
+  }
+  if (!state.turnWorkOpen) {
+    state.turnToggle!.querySelector("span:last-child")!.textContent = shellLabel(state.turnToolCount);
+  }
+}
+
+/** Clear live-turn fold state. Used by resetChatDom (new session), where the
+ * whole transcript is wiped anyway. */
+function resetLiveTurn(): void {
+  state.turnRoot = null;
+  state.turnToggle = null;
+  state.turnWorkWrap = null;
+  state.turnWorkOpen = false;
+  state.turnToolCount = 0;
+}
+
+/**
  * Strip any lingering action bar from all messages, then attach a fresh
  * "regenerate / edit" action bar under the LAST assistant message. Only one
  * bar is visible at a time (the most recent response). Hidden while busy.
@@ -1100,8 +1424,9 @@ function refreshActionBar(): void {
     if (state.busy) return;
     if (!confirmRewind()) return;
     rewindLastAssistant();
-    showPending();
+    resetLiveTurn();
     setBusy(true);
+    setActivity({ kind: "thinking", label: "AI is thinking" });
     vscode.postMessage({ kind: "regenerate" });
   });
 
@@ -1124,6 +1449,7 @@ function refreshActionBar(): void {
     // `send` (which would append and leave the old turn in Agent history).
     rewindLastAssistant();
     rewindLastUser();
+    resetLiveTurn();
     editingLast = true;
     ta.value = last;
     ta.style.height = "auto";
@@ -1144,7 +1470,9 @@ function lastUserText(): string | null {
   const users = messagesEl?.querySelectorAll(".msg.user");
   const last = users?.[users.length - 1] as HTMLElement | undefined;
   if (!last) return null;
-  return last.querySelector(".body")?.textContent ?? null;
+  // Prefer the dedicated text node (attachments render as chips); fall back
+  // to the whole body for legacy markup.
+  return last.querySelector(".user-message-text")?.textContent ?? last.querySelector(".body")?.textContent ?? null;
 }
 
 /** Confirm before rewinding since it discards the last response + tool work. */
@@ -1168,6 +1496,56 @@ function rewindLastUser(): void {
   last?.remove();
 }
 
+/** Mask inline image payloads in analyze_image args (desktop parity). */
+function visibleToolArgs(name: string, args: string): string {
+  if (name !== "analyze_image") return args;
+  try {
+    const parsed = JSON.parse(args) as Record<string, unknown>;
+    if (typeof parsed.image === "string") {
+      parsed.image = "<attached image>";
+      return JSON.stringify(parsed, null, 2);
+    }
+  } catch {
+    // Keep malformed tool arguments visible for diagnostics.
+  }
+  return args;
+}
+
+/**
+ * Build a completed collapsible tool block (head + args + result). Used by
+ * history restore; the live-stream path builds the same structure inline in
+ * startToolCall so args can stream into it.
+ */
+function buildToolBlockEl(name: string, args: string, result: string | null): HTMLElement {
+  const root = document.createElement("div");
+  root.className = "tool";
+  const head = document.createElement("div");
+  head.className = "head";
+  head.innerHTML = `<span class="tool-chevron">▸</span><span class="tool-icon">${ICONS.tool}</span><span class="tool-label">${escape(name)}</span><span class="tool-status">done</span>`;
+  root.appendChild(head);
+  const toolBody = document.createElement("div");
+  toolBody.className = "tool-body collapsed";
+  if (args) {
+    const argsEl = document.createElement("div");
+    argsEl.className = "args";
+    argsEl.textContent = visibleToolArgs(name, args);
+    toolBody.appendChild(argsEl);
+  }
+  if (result) {
+    const r = document.createElement("div");
+    r.className = "result";
+    r.textContent = formatToolResultPreview(name, args, result);
+    toolBody.appendChild(r);
+  }
+  root.appendChild(toolBody);
+  root.classList.add("collapsed");
+  head.addEventListener("click", () => {
+    const collapsed = root.classList.toggle("collapsed");
+    head.querySelector(".tool-chevron")!.textContent = collapsed ? "▸" : "▾";
+  });
+  return root;
+}
+
 function startToolCall(index: number, name: string): void {
   // task_update is a silent housekeeping tool: still executed, but never
   // rendered — its effect shows in the task panel instead.
@@ -1183,7 +1561,6 @@ function startToolCall(index: number, name: string): void {
     });
     return;
   }
-  hidePending();
   if (!state.currentAssistant) startAssistant();
   const body = state.currentAssistant!.querySelector(".body") as HTMLElement;
   removeThinkingDot(body);
@@ -1214,7 +1591,10 @@ function startToolCall(index: number, name: string): void {
     scrollToBottom();
     return;
   } else {
-    head.innerHTML = `<span class="tool-chevron">▾</span><span class="tool-icon">${ICONS.tool}</span><span class="tool-label">${escape(name)}</span>`;
+    // Standalone tool cards start COLLAPSED (chevron ▸) for both live and
+    // history rendering, so the streaming args/result are hidden until the
+    // user opens them manually — matching the "Show work" compaction intent.
+    head.innerHTML = `<span class="tool-chevron">▸</span><span class="tool-icon">${ICONS.tool}</span><span class="tool-label">${escape(name)}</span>`;
     root.appendChild(head);
     // Wrap args + future result in a collapsible body so the header can
     // toggle them as a unit.
@@ -1224,6 +1604,8 @@ function startToolCall(index: number, name: string): void {
     argsEl.className = "args";
     toolBody.appendChild(argsEl);
     root.appendChild(toolBody);
+    // Collapsed by default; user clicks the head to expand and watch progress.
+    root.classList.add("collapsed");
     head.addEventListener("click", () => {
       const collapsed = root.classList.toggle("collapsed");
       head.querySelector(".tool-chevron")!.textContent = collapsed ? "▸" : "▾";
@@ -1296,14 +1678,40 @@ function showToolResult(index: number, name: string, result: string): void {
   scrollToBottom();
 }
 
+/**
+ * Append a notice row. info/warn auto-dismiss after 5s (desktop parity);
+ * errors persist until dismissed manually. Every notice has a close button
+ * and dismisses on click.
+ */
 function showNotice(level: "info" | "error" | "warn", message: string): void {
   const messages = document.getElementById("messages");
   if (!messages) return;
   syncEmptyState(false);
   const el = document.createElement("div");
   el.className = `notice ${level}`;
-  el.textContent = message;
+  el.title = "Click to dismiss";
+  const text = document.createElement("span");
+  text.className = "notice-text";
+  text.textContent = message;
+  const close = document.createElement("button");
+  close.className = "notice-close";
+  close.type = "button";
+  close.title = "Dismiss";
+  close.setAttribute("aria-label", "Dismiss notice");
+  close.textContent = "✕";
+  const dismiss = () => {
+    el.remove();
+    syncEmptyState();
+  };
+  close.addEventListener("click", (e) => {
+    e.stopPropagation();
+    dismiss();
+  });
+  el.addEventListener("click", dismiss);
+  el.appendChild(text);
+  el.appendChild(close);
   messages.appendChild(el);
+  if (level !== "error") setTimeout(dismiss, 5000);
   scrollToBottom();
 }
 
@@ -1374,14 +1782,60 @@ function shortenPath(p: string): string {
   return ".../" + parts.slice(-2).join("/");
 }
 
+/** Suggestion cards mirroring the desktop EmptyState — click prefills the composer. */
+const SUGGESTIONS = [
+  {
+    title: "Build something",
+    detail: "From an idea to a working project",
+    icon: "code",
+    prompt: "Help me plan and build a project. First, ask me what I want to create.",
+  },
+  {
+    title: "Make it clear",
+    detail: "Untangle a question or an idea",
+    icon: "spark",
+    prompt: "Help me understand a complex topic. Ask me what I am working on, then explain it step by step.",
+  },
+  {
+    title: "Work with files",
+    detail: "Read, review, and refine your work",
+    icon: "fileDoc",
+    prompt: "Help me review files in my workspace. First, ask which files to focus on and what I want to improve.",
+  },
+];
+
 function renderEmptyState(): HTMLElement {
   const el = document.createElement("div");
   el.className = "empty-state";
   el.innerHTML = `
-    <div class="empty-icon">${ICONS.brand}</div>
-    <div class="empty-title">How can I help?</div>
-    <div class="empty-copy">Your AI pair programmer is ready. Ask anything, build anything — from quick questions to full features.</div>
+    <div class="empty-hero" aria-hidden="true"><span class="empty-orbit"></span><div class="empty-icon">${ICONS.brand}</div><span class="orbit-dot"></span></div>
+    <div class="empty-eyebrow">A little space for your next big idea</div>
+    <div class="empty-title">Good things start<br />with a <em>conversation.</em></div>
+    <div class="empty-copy">Think it through. Build it out. Make it happen.<br />Your ideas, with a little help from Siberflow.</div>
+    <div class="suggestion-grid"></div>
   `;
+  const grid = el.querySelector(".suggestion-grid") as HTMLElement;
+  for (const s of SUGGESTIONS) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "suggestion-card";
+    const iconSvg = (ICONS as Record<string, string>)[s.icon] ?? ICONS.spark;
+    card.innerHTML = `
+      <span class="suggestion-top">${iconSvg}${ICONS.arrowUpRight}</span>
+      <strong>${escape(s.title)}</strong>
+      <span>${escape(s.detail)}</span>
+    `;
+    card.addEventListener("click", () => {
+      // Prefill (don't auto-send) so the user can review and press Enter.
+      const ta = document.getElementById("input") as HTMLTextAreaElement | null;
+      if (!ta || state.busy) return;
+      ta.value = s.prompt;
+      ta.dispatchEvent(new Event("input"));
+      ta.focus();
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+    });
+    grid.appendChild(card);
+  }
   return el;
 }
 
@@ -1393,7 +1847,7 @@ function syncEmptyState(forceVisible?: boolean): void {
     return;
   }
 
-  const hasContent = !!messagesEl.querySelector(".msg, .notice, .pending");
+  const hasContent = !!messagesEl.querySelector(".msg, .notice, .activity-card");
   if (hasContent) {
     emptyStateEl.style.display = "none";
   } else {
@@ -1409,7 +1863,6 @@ function syncEmptyState(forceVisible?: boolean): void {
  * `.tool` divs inside this group's body until `endToolBatch` closes it.
  */
 function startToolBatch(count: number): void {
-  hidePending();
   if (!state.currentAssistant) startAssistant();
   const body = state.currentAssistant!.querySelector(".body") as HTMLElement;
   removeThinkingDot(body);
@@ -1567,6 +2020,24 @@ function extractPathFromToolArgs(rawArgs: string): string | null {
 
 // ----- message dispatch from extension -----
 
+/** Wipe the transcript DOM and all per-stream state (session switch/reset). */
+function resetChatDom(): void {
+  if (messagesEl) messagesEl.innerHTML = "";
+  if (messagesEl && emptyStateEl) {
+    messagesEl.appendChild(emptyStateEl);
+    syncEmptyState(true);
+  }
+  activityEl = null;
+  state.currentAssistant = null;
+  resetLiveTurn();
+  state.currentAssistantText = "";
+  state.currentTools.clear();
+  state.currentToolGroup = null;
+  state.reasoning = null;
+  hiddenToolSummary = null;
+  currentTextEl = null;
+}
+
 window.addEventListener("message", (ev) => {
   const msg = ev.data as ExtToView;
   switch (msg.kind) {
@@ -1576,41 +2047,73 @@ window.addEventListener("message", (ev) => {
       state.hideTools = msg.hideTools;
       state.tasksEnabled = msg.tasksEnabled;
       state.enabledTools = msg.enabledTools;
+      if (msg.values) {
+        // Keep the context bar and upload toggle in sync with live settings
+        // (previously these were only refreshed from the settings modal).
+        state.contextWindow = msg.values.contextWindow;
+        state.compactThreshold = msg.values.compactThreshold;
+        state.optimizeMode = msg.values.contextOptimizeMode;
+      }
       if (mounted) {
+        // A fresh ready event resets the transcript (new session / settings
+        // rebuild) — history/tasks/usage events follow to repopulate.
+        resetChatDom();
         updateTopbar();
         updateTaskPanel();
+        updateContextBar();
       } else {
         mount();
       }
       break;
     case "assistant_start":
-      // Show pending indicator between iterations (each iteration starts
-      // with a brief wait for the model's first token).
-      state.summarizing = false;
-      updateComposerState();
-      showPending();
+      // A new iteration begins: track thinking activity until tokens arrive.
+      state.reasoning = null;
+      setActivity({ kind: "thinking", label: "AI is thinking" });
       break;
     case "assistant_content":
+      setActivity({ kind: "thinking", label: "AI is writing" });
       appendAssistantContent(msg.delta);
       break;
+    case "reasoning": {
+      // Model is streaming reasoning/thinking text. Count words incrementally
+      // (a word = run of non-whitespace) so the activity card can show live
+      // progress like "AI is thinking: 128 words".
+      const prev = state.reasoning ?? { chars: 0, words: 0, lastWasSpace: true };
+      let { chars, words, lastWasSpace } = prev;
+      for (const ch of msg.delta) {
+        const sp = /\s/.test(ch);
+        if (!sp && lastWasSpace) words++;
+        lastWasSpace = sp;
+        chars++;
+      }
+      state.reasoning = { chars, words, lastWasSpace };
+      setActivity({ kind: "thinking", label: "AI is thinking", detail: `${words} words` });
+      break;
+    }
     case "iteration_end":
       // Close this iteration's assistant element so the next iteration
       // creates a fresh one — keeps tool/text order chronological.
+      state.reasoning = null;
       finalizeAssistant();
       break;
     case "assistant_end":
-      hidePending();
       finalizeAssistant();
       setBusy(false);
       refreshActionBar();
       break;
     case "tool_call_start":
+      setActivity(
+        msg.name === "task_update"
+          ? { kind: "task", label: "Updating task" }
+          : { kind: "tool", label: `Running ${msg.name}` },
+      );
       startToolCall(msg.index, msg.name);
       break;
     case "tool_call_args":
       appendToolArgs(msg.index, msg.delta);
       break;
     case "tool_result":
+      setActivity({ kind: "thinking", label: "Processing tool result" });
       showToolResult(msg.index, msg.name, msg.result);
       break;
     case "tool_batch_start":
@@ -1619,29 +2122,43 @@ window.addEventListener("message", (ev) => {
     case "tool_batch_end":
       endToolBatch();
       break;
+    case "tool_round_end":
+      // Completed tool output is being sent back to the LLM.
+      setActivity({ kind: "thinking", label: "Waiting for AI" });
+      break;
+    case "task_plan":
+      state.taskPlan = msg.tasks;
+      state.tasksRestored = false;
+      state.taskPanelClosed = false;
+      setActivity({ kind: "task", label: "Planning tasks" });
+      updateTaskPanel();
+      break;
     case "tasks":
       state.tasks = msg.tasks;
+      state.tasksRestored = msg.restored === true;
+      // A live (non-restored) update re-opens a manually-closed panel so
+      // progress is visible again.
+      if (!state.tasksRestored && msg.tasks.length > 0) state.taskPanelClosed = false;
+      if (!state.tasksRestored) setActivity({ kind: "task", label: "Working on tasks" });
       updateTaskPanel();
       break;
     case "context_optimized":
       break;
     case "context_compacting":
-      state.summarizing = true;
-      updateComposerState();
-      showPending("Summarizing context…");
+      // The agent is about to make an LLM summarization call; surface it.
+      setActivity({ kind: "context", label: "Summarizing context" });
       break;
     case "context_compacted":
-      state.summarizing = false;
-      updateComposerState();
-      hidePending();
+      // Summary resolved — busy may still be true if the turn continues;
+      // the next phase event replaces the activity label.
       break;
     case "subagent_update":
+      // Track the subagent's progress; clear when it reports done/error.
       if (msg.phase === "done" || msg.phase === "error") {
-        state.subagentPhase = null;
+        setActivity({ kind: "thinking", label: "Processing subagent result" });
       } else {
-        state.subagentPhase = { phase: msg.phase, detail: msg.detail };
+        setActivity({ kind: "subagent", label: "Subagent is working", detail: msg.detail ?? msg.phase });
       }
-      updateComposerState();
       break;
     case "max_iterations":
       showNotice(
@@ -1656,15 +2173,7 @@ window.addEventListener("message", (ev) => {
       updateTopbar();
       if (prevId !== nextId) {
         // Switched to a different session (or wiped) — clear the visible chat.
-        if (messagesEl) messagesEl.innerHTML = "";
-        if (messagesEl && emptyStateEl) {
-          messagesEl.appendChild(emptyStateEl);
-          syncEmptyState(true);
-        }
-        pendingEl = null;
-        state.currentAssistant = null;
-        state.currentAssistantText = "";
-        state.currentTools.clear();
+        resetChatDom();
       }
       break;
     }
@@ -1678,7 +2187,6 @@ window.addEventListener("message", (ev) => {
       showNotice("info", msg.message);
       break;
     case "error":
-      hidePending();
       showNotice("error", msg.message);
       state.stopping = false;
       setBusy(false);
@@ -1687,7 +2195,7 @@ window.addEventListener("message", (ev) => {
       // Ensure the chat scaffold is mounted before the modal appears.
       if (!mounted) {
         if (!state.banner) {
-          state.banner = { version: "0.1.0", provider: "?", model: "?", projectDir: "" };
+          state.banner = { version: "0.6.0", provider: "?", model: "?", projectDir: "" };
         }
         mount();
       }
@@ -1700,20 +2208,8 @@ window.addEventListener("message", (ev) => {
       showSettingsModal(msg.values, msg.hasApiKey, msg.hasMultimodalApiKey, msg.hasExaApiKey, msg.mustConfigure);
       break;
     case "history":
-      if (messagesEl) messagesEl.innerHTML = "";
-      if (messagesEl && emptyStateEl) {
-        messagesEl.appendChild(emptyStateEl);
-        syncEmptyState(true);
-      }
-      pendingEl = null;
-      state.currentAssistant = null;
-      state.currentAssistantText = "";
-      state.currentTools.clear();
-      hiddenToolSummary = null;
-      for (const m of msg.messages) {
-        if (m.role === "user") appendUserMessage(m.content);
-        else appendAssistantHistory(m.content);
-      }
+      resetChatDom();
+      restoreHistory(msg.messages);
       syncEmptyState();
       scrollToBottom();
       refreshActionBar();
@@ -1728,11 +2224,127 @@ window.addEventListener("message", (ev) => {
     case "doc_pick_error":
       showNotice("error", msg.message);
       break;
+    case "image_preview":
+      applyImagePreview(msg.path, msg.dataUrl);
+      break;
     case "ask_user":
       showAskUserModal(msg);
       break;
   }
 });
+
+/**
+ * Rebuild the transcript from persisted history: a user message starts a
+ * display turn; every assistant iteration and its tool results up to the next
+ * user message belong to that same turn. The turn's intermediate content
+ * (text segments + tool blocks) is folded into a collapsed "Show work"
+ * section and the LAST text block renders as the final answer — mirroring
+ * the desktop AssistantMessage restore behavior.
+ */
+function restoreHistory(entries: HistoryMessage[]): void {
+  interface PendingTool {
+    el: HTMLElement;
+    name: string;
+    args: string;
+  }
+  let turnBlocks: HTMLElement[] = [];
+  const toolBlocks = new Map<string, PendingTool>();
+
+  const finishTurn = () => {
+    if (turnBlocks.length === 0) return;
+    // Drop turns that only carried hidden task bookkeeping (task_update).
+    const visible = turnBlocks.filter(
+      (el) => !(el.classList.contains("tool") && el.dataset.hiddenTool === "1"),
+    );
+    turnBlocks = [];
+    if (visible.length === 0) return;
+
+    const el = document.createElement("div");
+    el.className = "msg assistant historical";
+    el.innerHTML = `<div class="role"><span class="role-dot"></span>Siberflow</div><div class="body"></div>`;
+    const body = el.querySelector(".body") as HTMLElement;
+
+    // The last text segment is the final answer; everything before it is the
+    // turn's work and collapses behind a "Show work" toggle.
+    const lastText = [...visible].reverse().find((b) => b.classList.contains("seg"));
+    const work = lastText ? visible.filter((b) => b !== lastText) : [];
+    const toolCount = visible.filter((b) => b.classList.contains("tool")).length;
+
+    if (work.length > 0) {
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "work-toggle";
+      toggle.innerHTML = `<span class="tool-chevron">▸</span><span>${toolCount > 0 ? `Show work · ${toolCount} tool call${toolCount === 1 ? "" : "s"}` : "Show earlier work"}</span>`;
+      const wrap = document.createElement("div");
+      wrap.className = "historical-work";
+      wrap.style.display = "none";
+      for (const b of work) wrap.appendChild(b);
+      toggle.addEventListener("click", () => {
+        const open = wrap.style.display !== "none";
+        wrap.style.display = open ? "none" : "";
+        toggle.querySelector(".tool-chevron")!.textContent = open ? "▸" : "▾";
+        toggle.querySelector("span:last-child")!.textContent = open
+          ? toolCount > 0
+            ? `Show work · ${toolCount} tool call${toolCount === 1 ? "" : "s"}`
+            : "Show earlier work"
+          : "Hide work";
+      });
+      body.appendChild(toggle);
+      body.appendChild(wrap);
+    }
+    if (lastText) body.appendChild(lastText);
+
+    syncEmptyState(false);
+    messagesEl?.appendChild(el);
+  };
+
+  for (const entry of entries) {
+    if (entry.role === "user") {
+      finishTurn();
+      appendUserMessage(entry.content);
+      continue;
+    }
+
+    if (entry.role === "assistant") {
+      if (entry.content && entry.content.length > 0) {
+        const seg = document.createElement("div");
+        seg.className = "seg";
+        seg.innerHTML = marked.parse(entry.content) as string;
+        enhanceCodeBlocks(seg);
+        turnBlocks.push(seg);
+      }
+      for (const call of entry.toolCalls ?? []) {
+        if (call.name === "task_update") {
+          // Hidden bookkeeping tool — tracked so its result is skipped, but
+          // never rendered.
+          const hidden = document.createElement("div");
+          hidden.className = "tool";
+          hidden.dataset.hiddenTool = "1";
+          const pending: PendingTool = { el: hidden, name: call.name, args: call.arguments };
+          toolBlocks.set(call.id, pending);
+          turnBlocks.push(hidden);
+          continue;
+        }
+        const el = buildToolBlockEl(call.name, call.arguments, null);
+        toolBlocks.set(call.id, { el, name: call.name, args: call.arguments });
+        turnBlocks.push(el);
+      }
+      continue;
+    }
+
+    // Tool result: attach to the matching pending block.
+    const pending = toolBlocks.get(entry.toolCallId);
+    if (pending && pending.name !== "task_update") {
+      const r = document.createElement("div");
+      r.className = "result";
+      r.textContent = formatToolResultPreview(pending.name, pending.args, entry.content);
+      const toolBody = pending.el.querySelector(":scope > .tool-body");
+      if (toolBody) toolBody.appendChild(r);
+      else pending.el.appendChild(r);
+    }
+  }
+  finishTurn();
+}
 
 /**
  * Render the ask_user modal overlay. Shows the question, optional choices,

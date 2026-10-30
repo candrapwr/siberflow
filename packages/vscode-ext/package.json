@@ -1,6 +1,6 @@
 {
   "name": "siberflow-chat",
-  "version": "0.5.31",
+  "version": "0.6.0",
   "displayName": "Siberflow",
   "description": "AI chat sidebar with multi-provider, tool calling, sandboxed file ops, and task checklists.",
   "publisher": "DatasiberLab",
@@ -100,10 +100,12 @@
             "qwen",
             "zai",
             "claude",
+            "sibergate",
             "custom"
           ],
-          "default": "deepseek",
-          "description": "Active LLM provider"
+          "default": "sibergate",
+          "description": "Active LLM provider",
+          "enumDescriptions": null
         },
         "siberflow.customProvider": {
           "type": "object",
@@ -156,6 +158,23 @@
           "default": "",
           "description": "Model override (leave empty for provider default)"
         },
+        "siberflow.reasoningEffort": {
+          "type": "string",
+          "enum": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "max"
+          ],
+          "default": "none",
+          "description": "Reasoning effort forwarded as reasoning_effort to OpenAI-compatible providers (custom gateways). Default none."
+        },
+        "siberflow.maxTokens": {
+          "type": "number",
+          "default": 50000,
+          "description": "Maximum completion (output) tokens requested per LLM call. Default 50000."
+        },
         "siberflow.contextOptimize": {
           "type": "boolean",
           "default": true
@@ -201,11 +220,11 @@
         },
         "siberflow.maxIterations": {
           "type": "number",
-          "default": 50
+          "default": 100
         },
         "siberflow.requestDelayMs": {
           "type": "number",
-          "default": 1500,
+          "default": 100,
           "description": "Delay (ms) before each request to the LLM to avoid rate-limiting. 0 = off."
         },
         "siberflow.enabledTools": {
@@ -220,7 +239,9 @@
             "copy_file",
             "list_dir",
             "delete_file",
-            "grep"
+            "grep",
+            "exec",
+            "run_browser"
           ],
           "description": "Which tools are registered for the AI. Disabled tools aren't sent in the prompt. Default: file operations only."
         },

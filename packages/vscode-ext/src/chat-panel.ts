@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
-import { copyFile, mkdir, stat } from "node:fs/promises";
+import { copyFile, mkdir, readFile, realpath, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, extname, isAbsolute, join, relative } from "node:path";
 import {
   Agent,
   buildSystemPrompt,
@@ -28,20 +28,53 @@ import {
   type ToolRegistry,
 } from "@siberflow/core";
 import type {
+  AttachmentKind,
   BannerInfo,
   ExtToView,
-  DocKind,
   HistoryMessage,
   OptimizeMode,
   PickedFile,
   ProviderName,
+  ReasoningEffort,
   SessionInfo,
   SettingsValues,
   ViewToExt,
 } from "./protocol.js";
 import type { Message } from "@siberflow/core";
 
-const VERSION = "0.1.0";
+const VERSION = "0.6.0";
+
+/** Default settings shared with the desktop app (protocol parity). */
+const DEFAULT_SETTINGS: SettingsValues = {
+  provider: "sibergate",
+  customProvider: { name: "custom", baseUrl: "", defaultModel: "" },
+  multimodalProvider: { baseUrl: "https://api.openai.com/v1", model: "" },
+  model: "",
+  reasoningEffort: "none",
+  maxTokens: 50000,
+  contextOptimize: true,
+  contextOptimizeMode: "compact",
+  contextWindow: 200000,
+  compactThreshold: 0.8,
+  compactKeepRecent: 2,
+  autoContinue: true,
+  preTruncate: true,
+  hideTools: true,
+  debug: false,
+  maxIterations: 100,
+  requestDelayMs: 100,
+  enabledTools: [
+    "read_file",
+    "write_file",
+    "edit_file",
+    "copy_file",
+    "delete_file",
+    "list_dir",
+    "grep",
+    "exec",
+    "run_browser",
+  ],
+};
 
 /**
  * Resolve the absolute path to the puppeteer-core package directory from the
@@ -101,6 +134,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private optSavedBytes = 0;
   private readyForChat = false;
   private turnAbort: AbortController | null = null;
+  /** Tracks whether we've emitted the initial task-plan for the current turn. */
+  private planEmittedForTurn = false;
 
   constructor(private readonly ctx: vscode.ExtensionContext) {
     const folder = vscode.workspace.workspaceFolders?.[0];
@@ -187,7 +222,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         await this.onInit();
         break;
       case "send":
-        await this.runTurn(msg.input);
+        await this.send(msg.input);
         break;
       case "regenerate":
         await this.regenerate();
@@ -207,6 +242,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "pick_doc_files":
         await this.pickDocFiles();
         break;
+      case "get_image_preview":
+        await this.sendImagePreview(msg.path);
+        break;
       case "answer_user":
         this.resolveUserAnswer(msg.id, msg.status, msg.answer);
         break;
@@ -214,10 +252,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   /**
-   * Open a multi-select .xlsx file picker, copy each chosen file into the
-   * workspace's `_uploads/` sandbox, and notify the webview with the resulting
-   * relative paths (or an error message if it failed). Mirrors the desktop
-   * app's `pickDocFiles` IPC handler.
+   * Open a multi-select file picker for supported documents and images, copy
+   * each chosen file into the session's upload sandbox, and notify the webview
+   * with the resulting metadata (or an error message if it failed). Mirrors
+   * the desktop app's `pickFiles` IPC handler.
    */
   private async pickDocFiles(): Promise<void> {
     if (this.turnAbort) {
@@ -225,12 +263,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
     const uris = await vscode.window.showOpenDialog({
-      title: "Pilih file dokumen",
+      title: "Pilih file dokumen atau gambar",
       filters: {
-        "Dokumen": ["xlsx", "docx", "pdf"],
+        "Dokumen & Gambar": ["xlsx", "docx", "pdf", "png", "jpg", "jpeg", "webp", "gif"],
         "Excel Workbook": ["xlsx"],
         "Word Document": ["docx"],
         "PDF Document": ["pdf"],
+        "Images": ["png", "jpg", "jpeg", "webp", "gif"],
       },
       canSelectMany: true,
       openLabel: "Upload",
@@ -247,10 +286,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /**
    * Copy source file URIs into the session's per-session upload dir in the OS
    * tmp folder (NOT the workspace — keeps the project clean and out of git).
-   * Returns metadata with absolute destination paths + `kind` so the agent can
-   * be told the matching tool (`excel_script` / `docx_script` / `pdf_script`),
-   * which whitelists this dir via the agent's `uploadDir` option. The folder is
-   * removed automatically when the session is deleted.
+   * Returns metadata with absolute destination paths + `kind` (excel / docx /
+   * pdf / image) so the agent can be told the matching tool, which whitelists
+   * this dir via the agent's `uploadDir` option. The folder is removed
+   * automatically when the session is deleted.
    * Requires `this.current` to be set (so we know which session owns the dir).
    */
   private async copyUploads(srcUris: vscode.Uri[]): Promise<PickedFile[]> {
@@ -266,22 +305,58 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     for (const uri of srcUris) {
       const original = basename(uri.fsPath);
       const lower = original.toLowerCase();
-      let kind: DocKind;
+      let kind: AttachmentKind;
       if (lower.endsWith(".xlsx")) kind = "excel";
       else if (lower.endsWith(".docx")) kind = "docx";
       else if (lower.endsWith(".pdf")) kind = "pdf";
-      else throw new Error(`File "${original}" bukan .xlsx/.docx/.pdf. Hanya dokumen yang didukung.`);
+      else if ([".png", ".jpg", ".jpeg", ".webp", ".gif"].some((ext) => lower.endsWith(ext))) kind = "image";
+      else throw new Error(`File "${original}" bukan format yang didukung (.xlsx/.docx/.pdf/.png/.jpg/.jpeg/.webp/.gif).`);
       const safe = sanitizeFileName(original, usedNames);
       usedNames.add(safe);
       const dest = join(destDir, safe);
       await copyFile(uri.fsPath, dest);
-      await stat(dest); // sanity check it landed
+      const stats = await stat(dest); // sanity check it landed
       // relPath is the ABSOLUTE tmp path — the *_script tools resolve absolute
       // paths against the upload dir whitelist. (Field name kept for protocol
       // stability; semantically it's an absolute path now.)
-      out.push({ name: original, kind, relPath: dest });
+      out.push({ name: original, kind, relPath: dest, bytes: stats.size });
     }
     return out;
+  }
+
+  /**
+   * Read an uploaded image as a data URL for the webview chat preview.
+   * Resolve and validate both paths so the webview cannot use this channel to
+   * read arbitrary files from the machine. Mirrors the desktop host.
+   */
+  private async sendImagePreview(imagePath: string): Promise<void> {
+    const session = this.current;
+    if (!session || !isAbsolute(imagePath)) {
+      this.post({ kind: "image_preview", path: imagePath, dataUrl: null });
+      return;
+    }
+    const uploadDir = uploadsDirFor(session.id);
+    try {
+      const [uploadReal, imageReal] = await Promise.all([realpath(uploadDir), realpath(imagePath)]);
+      const rel = relative(uploadReal, imageReal);
+      if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+        this.post({ kind: "image_preview", path: imagePath, dataUrl: null });
+        return;
+      }
+      const mime = mimeForImage(imageReal);
+      if (!mime) {
+        this.post({ kind: "image_preview", path: imagePath, dataUrl: null });
+        return;
+      }
+      const file = await readFile(imageReal);
+      if (file.byteLength > 20 * 1024 * 1024) {
+        this.post({ kind: "image_preview", path: imagePath, dataUrl: null });
+        return;
+      }
+      this.post({ kind: "image_preview", path: imagePath, dataUrl: `data:${mime};base64,${file.toString("base64")}` });
+    } catch {
+      this.post({ kind: "image_preview", path: imagePath, dataUrl: null });
+    }
   }
 
   // -------- init / settings --------
@@ -338,6 +413,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       cfg.update("customProvider", values.customProvider, target),
       cfg.update("multimodalProvider", values.multimodalProvider, target),
       cfg.update("model", values.model, target),
+      cfg.update("reasoningEffort", values.reasoningEffort, target),
+      cfg.update("maxTokens", values.maxTokens, target),
       cfg.update("contextOptimize", values.contextOptimize, target),
       cfg.update("contextOptimizeMode", values.contextOptimizeMode, target),
       cfg.update("contextWindow", values.contextWindow, target),
@@ -394,9 +471,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           ? values.model.trim()
           : createProvider(values.provider, this.providerConfig(values)).defaultModel;
       this.current.updatedAt = new Date().toISOString();
-      if (this.agent) {
-        this.current.tasks = [...this.agent.getTasks()];
-      }
       saveSessionSync(this.current);
     }
 
@@ -495,9 +569,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       summaryMode: this.summaryModeActive(),
       enabledToolNames: this.registry.list().map((t) => t.name),
     });
-    // uploadDir is the per-session tmp dir where uploaded Excels live. Pass it
-    // so excel_script can whitelist reads from there even though it's outside
-    // the project sandbox.
+    // uploadDir is the per-session tmp dir where uploaded documents/images
+    // live. Pass it so the *_script and analyze_image tools can whitelist
+    // reads from there even though it's outside the project sandbox.
     const uploadDir = this.current ? uploadsDirFor(this.current.id) : undefined;
     return new Agent({
       provider: this.provider,
@@ -512,14 +586,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       autoContinue: this.settings.autoContinue,
       preTruncate: this.settings.preTruncate,
       maxIterations: this.settings.maxIterations,
+      maxTokens: this.settings.maxTokens,
       requestDelayMs: this.settings.requestDelayMs,
+      // VSCode may be launched from Finder/Dock without the terminal PATH.
+      // Let exec load the user's login shell profile so node/npm and tools
+      // managed by Homebrew, nvm, fnm, or asdf are discoverable.
+      execShellMode: "login-interactive",
+      // Persist checkpoints while a turn is running, so the completed part of
+      // an aborted turn stays available for resume.
+      preservePartialHistoryOnAbort: true,
       // Seed the compact-mode threshold trigger with the resumed session's
-      // last prompt size (contextSize = last iteration's prompt, accurate).
+      // last prompt size (contextSize = last iteration's prompt, accurate
+      // context window — not the turn-accumulated promptTokens).
       ...(this.current?.usage?.last?.contextSize
         ? { lastPromptTokens: this.current.usage.last.contextSize }
-        : this.current?.usage?.last?.promptTokens
-          ? { lastPromptTokens: this.current.usage.last.promptTokens }
-          : {}),
+        : {}),
     });
   }
 
@@ -604,6 +685,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       hideTools: this.settings.hideTools,
       tasksEnabled: true,
       enabledTools: this.settings.enabledTools,
+      values: this.settings,
     });
     if (this.current && this.current.messages.length > 0) {
       this.post({
@@ -612,7 +694,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       });
     }
     if (this.agent) {
-      this.post({ kind: "tasks", tasks: this.agent.getTasks() as Task[] });
+      // restored=true keeps the resumed checklist hidden until a live update
+      // arrives — mirrors the desktop TaskPanel behavior.
+      this.post({ kind: "tasks", tasks: this.agent.getTasks() as Task[], restored: true });
     }
     // Seed the context-usage bar with the resumed session's last prompt size.
     if (this.current) {
@@ -624,31 +708,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  // -------- session picker on first open --------
+  // -------- session resume on first open --------
 
+  /**
+   * On startup, resume the most recently used session for this workspace if
+   * one exists, so reopening the panel doesn't prompt every time. Only create
+   * a fresh session when there are no prior sessions at all. Mirrors the
+   * desktop AgentHost.init().
+   */
   private async pickSessionOnStart(): Promise<void> {
-    const summaries = await listSessions({ projectDir: this.projectDir });
-    if (summaries.length === 0) {
+    const recent = await listSessions({ projectDir: this.projectDir });
+    if (recent.length === 0) {
       this.startNewSession(null);
       return;
     }
-    const items = [
-      { label: "$(plus) New session…", id: "__new__" } as vscode.QuickPickItem & { id: string },
-      ...summaries.map((s) => ({
-        label: s.name ?? `(unnamed) ${s.id.slice(0, 12)}`,
-        description: `${s.messageCount} msgs · ${s.updatedAt}`,
-        id: s.id,
-      })),
-    ];
-    const choice = await vscode.window.showQuickPick(items, {
-      title: "Siberflow — pick a session",
-      placeHolder: "Resume an existing chat or start a new one",
-    });
-    if (!choice || choice.id === "__new__") {
-      this.startNewSession(null);
-      return;
-    }
-    const session = await loadSession(choice.id);
+    const session = await loadSession(recent[0]!.id);
     if (!session || !this.agent) {
       this.startNewSession(null);
       return;
@@ -683,21 +757,32 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       messages: [...this.agent.history()],
       usage: emptyUsage(),
     };
+    // Rebuild so the agent's uploadDir matches the new session id.
+    this.rebuildAgent();
     saveSessionSync(this.current);
-    if (this.settings.contextOptimize) {
-      const { messages: optimized } = optimizeContext(
-        this.current.messages,
-        this.optimizeConfig(),
-      );
-      if (this.summaryModeActive()) {
-        void saveOptimizedMiddleView(this.current, optimized);
-      } else {
-        void saveOptimizedView(this.current, optimized);
-      }
-    }
+    this.writeOptimizedView();
+    // Notify the webview so the chat area resets immediately (ready clears
+    // the transcript, history/tasks/usage seed the fresh state).
+    this.postReady();
   }
 
   // -------- turn runner --------
+
+  async send(input: string): Promise<void> {
+    // Auto-name the session from the first user message if it has no name yet.
+    // Takes a substring of the prompt: up to 5 words, truncated at a word
+    // boundary near 50 chars, with the first letter capitalized.
+    if (this.current && this.current.name === null) {
+      const firstUserSeen = this.current.messages.some((m) => m.role === "user");
+      if (!firstUserSeen) {
+        this.current.name = deriveSessionName(input);
+        this.current.updatedAt = new Date().toISOString();
+        saveSessionSync(this.current);
+        this.post({ kind: "session_changed", session: this.sessionInfo() });
+      }
+    }
+    return this.runTurn(input);
+  }
 
   private async runTurn(input: string): Promise<void> {
     if (this.turnAbort) {
@@ -711,20 +796,29 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     const abort = new AbortController();
     this.turnAbort = abort;
-    let latestUsage: { promptTokens: number; completionTokens: number } | undefined;
+    this.planEmittedForTurn = false;
+    const initialTaskCount = this.agent.getTasks().length;
     let turnAddPrompt = 0;
     let turnAddCompletion = 0;
+    let usageApplied = false;
+    let agentCompleted = false;
+    const continuationNotice = this.current?.pendingTurnNotice?.trim();
+    // Track the LAST iteration's prompt size so usage.last.contextSize
+    // reflects the actual context the model saw (not the turn accumulation).
+    let lastIterPrompt = 0;
 
     try {
       await this.agent.send(input, {
         signal: abort.signal,
+        ...(continuationNotice ? { continuationNotice } : {}),
         onAssistantStart: () => this.post({ kind: "assistant_start" }),
         onContent: (delta) => this.post({ kind: "assistant_content", delta }),
+        onReasoning: (delta) => this.post({ kind: "reasoning", delta }),
         onAssistantEnd: (_msg, meta) => {
           if (meta.usage) {
-            latestUsage = meta.usage;
             turnAddPrompt += meta.usage.promptTokens;
             turnAddCompletion += meta.usage.completionTokens;
+            lastIterPrompt = meta.usage.promptTokens;
           }
           // Close the current iteration's assistant DOM element so the next
           // iteration creates a fresh one. Without this, tool calls from
@@ -741,14 +835,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         onToolBatchStart: (count) =>
           this.post({ kind: "tool_batch_start", count }),
         onToolBatchEnd: () => this.post({ kind: "tool_batch_end" }),
+        onToolRoundEnd: () => this.post({ kind: "tool_round_end" }),
         onTasksUpdated: (tasks) => {
-          this.post({ kind: "tasks", tasks: tasks as Task[] });
+          const taskList = tasks as Task[];
+          // Emit task-plan once per turn when tasks are first populated.
+          if (!this.planEmittedForTurn && initialTaskCount === 0 && taskList.length > 0) {
+            this.planEmittedForTurn = true;
+            this.post({ kind: "task_plan", tasks: taskList });
+          }
+          this.post({ kind: "tasks", tasks: taskList });
           if (this.current) {
-            this.current.tasks = [...tasks];
+            this.current.tasks = [...taskList];
             this.current.updatedAt = new Date().toISOString();
             try {
               saveSessionSync(this.current);
-            } catch {}
+            } catch {
+              /* best-effort */
+            }
           }
         },
         onContextOptimized: (stats) => {
@@ -765,23 +868,40 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         onSubagentUpdate: (phase, detail) =>
           this.post({ kind: "subagent_update", phase, detail }),
         onMaxIterations: (limit) => this.post({ kind: "max_iterations", limit }),
+        onHistoryChanged: () => this.persistCheckpointSync(),
       });
 
-      if (this.current && latestUsage) {
-        // VSCode already overwrites usage.last with the FINAL iteration's
-        // usage (latestUsage), so promptTokens == contextSize here. Set
-        // contextSize explicitly for parity with other hosts.
-        this.current.usage.last = {
-          ...latestUsage,
-          contextSize: latestUsage.promptTokens,
-        };
-        this.current.usage.total.promptTokens += turnAddPrompt;
-        this.current.usage.total.completionTokens += turnAddCompletion;
-      }
+      agentCompleted = true;
+      if (this.current) delete this.current.pendingTurnNotice;
+      this.applyTurnUsage(turnAddPrompt, turnAddCompletion, lastIterPrompt);
+      usageApplied = true;
       await this.persistAfterTurn();
     } catch (err) {
+      // A failed/stopped turn can still contain completed assistant/tool
+      // iterations. Persist that partial history before reporting the error;
+      // otherwise the next launch resumes from the last successful turn.
+      if (!agentCompleted && this.current) {
+        this.current.pendingTurnNotice = isAbortError(err)
+          ? "The previous turn was stopped before the assistant produced its final response. " +
+            "Continue from the persisted tool results and do not repeat completed side effects."
+          : "The previous turn was interrupted by an error before the assistant produced its final response. " +
+            "All persisted tool calls and results are authoritative; continue from the latest state " +
+            "and do not repeat completed side effects.";
+      }
+      if (!usageApplied) {
+        this.applyTurnUsage(turnAddPrompt, turnAddCompletion, lastIterPrompt);
+        usageApplied = true;
+      }
+      try {
+        await this.persistAfterTurn();
+      } catch (persistErr) {
+        this.post({
+          kind: "error",
+          message: `Could not save partial history: ${(persistErr as Error).message}`,
+        });
+      }
       if (isAbortError(err)) {
-        this.post({ kind: "tasks", tasks: this.agent.getTasks() as Task[] });
+        if (this.agent) this.post({ kind: "tasks", tasks: this.agent.getTasks() as Task[] });
         this.post({ kind: "info", message: "generation stopped" });
       } else {
         this.post({ kind: "error", message: (err as Error).message });
@@ -789,6 +909,44 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     } finally {
       if (this.turnAbort === abort) this.turnAbort = null;
       this.post({ kind: "assistant_end" });
+    }
+  }
+
+  private applyTurnUsage(
+    promptTokens: number,
+    completionTokens: number,
+    contextSize: number,
+  ): void {
+    if (!this.current) return;
+    // usage.last.promptTokens = accumulated usage across iterations in this
+    // turn; contextSize remains the prompt size of the last completed call.
+    this.current.usage.last = {
+      promptTokens,
+      completionTokens,
+      contextSize,
+    };
+    this.current.usage.total.promptTokens += promptTokens;
+    this.current.usage.total.completionTokens += completionTokens;
+  }
+
+  /** Persist a small synchronous checkpoint after each history mutation. */
+  private persistCheckpointSync(): void {
+    if (!this.current || !this.agent) return;
+    const summary = this.agent.summaryState();
+    const session: Session = {
+      ...this.current,
+      updatedAt: new Date().toISOString(),
+      messages: [...this.agent.history()],
+      tasks: [...this.agent.getTasks()],
+      ...(summary ? { summary } : {}),
+    };
+    if (!summary) delete session.summary;
+    try {
+      saveSessionSync(session);
+      this.current = session;
+    } catch {
+      // The final async persist will retry; a checkpoint must not interrupt
+      // the agent loop when the session directory is temporarily unavailable.
     }
   }
 
@@ -862,18 +1020,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     };
     await saveSession(session);
     this.current = session;
-    if (this.settings.contextOptimize) {
-      const { messages: optimized } = optimizeContext(
-        session.messages,
-        this.optimizeConfig(),
-        this.agent.summaryState(),
-      );
-      if (this.summaryModeActive()) {
-        await saveOptimizedMiddleView(session, optimized);
-      } else {
-        await saveOptimizedView(session, optimized);
-      }
-    }
+    this.writeOptimizedView();
     this.post({ kind: "session_changed", session: this.sessionInfo() });
     // Push the updated usage so the webview's context-usage bar reflects the
     // turn just completed (previously only sent on the manual /usage command).
@@ -884,6 +1031,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  private writeOptimizedView(): void {
+    if (!this.current || !this.settings.contextOptimize || !this.agent) return;
+    const { messages: optimized } = optimizeContext(
+      this.current.messages,
+      this.optimizeConfig(),
+      this.agent.summaryState(),
+    );
+    if (this.summaryModeActive()) {
+      void saveOptimizedMiddleView(this.current, optimized);
+    } else {
+      void saveOptimizedView(this.current, optimized);
+    }
+  }
+
   // -------- slash commands --------
 
   private async cmdNew(): Promise<void> {
@@ -892,9 +1053,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       placeHolder: "feature-x (or leave empty)",
     });
     if (name === undefined) return;
+    // startNewSession posts ready/history/tasks/usage itself.
     this.startNewSession(name.trim().length > 0 ? name.trim() : null);
-    this.post({ kind: "session_changed", session: this.sessionInfo() });
-    this.post({ kind: "tasks", tasks: [] });
   }
 
   private async cmdLoad(): Promise<void> {
@@ -919,10 +1079,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (session.tasks?.length) {
       this.agent.loadTasks(session.tasks);
     }
+    this.agent.loadSummary(session.summary ?? null);
     this.current = session;
     this.post({ kind: "session_changed", session: this.sessionInfo() });
     this.post({ kind: "history", messages: filterHistory(session.messages) });
-    this.post({ kind: "tasks", tasks: (session.tasks ?? []) as Task[] });
+    // restored=true keeps the resumed checklist hidden until a live update.
+    this.post({ kind: "tasks", tasks: (session.tasks ?? []) as Task[], restored: true });
+    this.post({ kind: "usage", usage: this.current.usage, optSaved: this.optSavedBytes });
   }
 
   private async cmdDelete(): Promise<void> {
@@ -943,10 +1106,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (confirm !== "Delete") return;
     await deleteSession(target.id);
     if (this.current?.id === target.id) {
-      this.current = null;
-      this.agent = this.buildAgent();
-      this.post({ kind: "session_changed", session: null });
-      this.post({ kind: "tasks", tasks: [] });
+      // Active session deleted — start a fresh one so the composer never
+      // points at a dangling agent with no session to persist into.
+      this.startNewSession(null);
+      this.post({ kind: "info", message: `Deleted session "${target.name ?? target.id}"` });
+      return;
     }
     this.post({ kind: "info", message: `Deleted session "${target.name ?? target.id}"` });
   }
@@ -964,10 +1128,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     );
     if (confirm !== "Delete all") return;
     const removed = await clearSessions({ projectDir: this.projectDir });
-    this.current = null;
-    this.agent = this.buildAgent();
-    this.post({ kind: "session_changed", session: null });
-    this.post({ kind: "tasks", tasks: [] });
+    // All sessions wiped — start fresh so the composer persists somewhere.
+    this.startNewSession(null);
     this.post({ kind: "info", message: `Cleared ${removed} session(s)` });
   }
 
@@ -1026,12 +1188,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (settings.provider !== "custom") {
       return {
         apiKey: this.apiKey,
+        reasoningEffort: settings.reasoningEffort,
         ...(headers ? { headers } : {}),
       };
     }
     return {
       apiKey: this.apiKey,
       baseUrl: settings.customProvider.baseUrl,
+      reasoningEffort: settings.reasoningEffort,
       ...(headers ? { headers } : {}),
       customName: settings.customProvider.name,
       customDefaultModel: settings.customProvider.defaultModel,
@@ -1073,22 +1237,38 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 }
 
 /**
- * Convert internal Message[] into a flat user/assistant transcript suitable
- * for rendering on the webview after a session is loaded. Drops system
- * messages, tool results, and intermediate assistant messages that only
- * carried tool_calls without text content.
+ * Project the full persisted message history into a renderer-safe transcript
+ * for the webview after a session is loaded. Mirrors the desktop's
+ * HistoryEntry projection: assistant messages keep their toolCalls and tool
+ * results come through as separate entries, so the webview can rebuild the
+ * same text/tool-block layout the live stream produced.
  */
 function filterHistory(messages: readonly Message[]): HistoryMessage[] {
   const out: HistoryMessage[] = [];
   for (const m of messages) {
     if (m.role === "user") {
       out.push({ role: "user", content: m.content });
-    } else if (
-      m.role === "assistant" &&
-      typeof m.content === "string" &&
-      m.content.length > 0
-    ) {
-      out.push({ role: "assistant", content: m.content });
+    } else if (m.role === "assistant") {
+      out.push({
+        role: "assistant",
+        content: m.content,
+        ...(m.toolCalls && m.toolCalls.length > 0
+          ? {
+              toolCalls: m.toolCalls.map((call) => ({
+                id: call.id,
+                name: call.name,
+                arguments: call.arguments,
+              })),
+            }
+          : {}),
+      });
+    } else if (m.role === "tool") {
+      out.push({
+        role: "tool",
+        toolCallId: m.toolCallId,
+        name: m.name,
+        content: m.content,
+      });
     }
   }
   return out;
@@ -1097,26 +1277,21 @@ function filterHistory(messages: readonly Message[]): HistoryMessage[] {
 function readSettings(): SettingsValues {
   const cfg = vscode.workspace.getConfiguration("siberflow");
   return {
-    provider: cfg.get<ProviderName>("provider", "deepseek"),
-    customProvider: {
-      name: "custom",
-      baseUrl: "",
-      defaultModel: "",
-      ...(cfg.get<SettingsValues["customProvider"]>("customProvider", {
+    provider: cfg.get<ProviderName>("provider", "sibergate"),
+    customProvider:
+      cfg.get<SettingsValues["customProvider"]>("customProvider", {
         name: "custom",
         baseUrl: "",
         defaultModel: "",
-      }) ?? {}),
-    },
-    multimodalProvider: {
-      baseUrl: "https://api.openai.com/v1",
-      model: "",
-      ...(cfg.get<SettingsValues["multimodalProvider"]>("multimodalProvider", {
+      }) ?? { name: "custom", baseUrl: "", defaultModel: "" },
+    multimodalProvider:
+      cfg.get<SettingsValues["multimodalProvider"]>("multimodalProvider", {
         baseUrl: "https://api.openai.com/v1",
         model: "",
-      }) ?? {}),
-    },
+      }) ?? { baseUrl: "https://api.openai.com/v1", model: "" },
     model: cfg.get<string>("model", ""),
+    reasoningEffort: cfg.get<ReasoningEffort>("reasoningEffort", "none"),
+    maxTokens: cfg.get<number>("maxTokens", 50000),
     contextOptimize: cfg.get<boolean>("contextOptimize", true),
     contextOptimizeMode: cfg.get<OptimizeMode>("contextOptimizeMode", "compact"),
     contextWindow: cfg.get<number>("contextWindow", 200000),
@@ -1124,30 +1299,30 @@ function readSettings(): SettingsValues {
     compactKeepRecent: cfg.get<number>("compactKeepRecent", 2),
     autoContinue: cfg.get<boolean>("autoContinue", true),
     preTruncate: cfg.get<boolean>("preTruncate", true),
-    hideTools: cfg.get<boolean>("hideTools", false),
+    hideTools: cfg.get<boolean>("hideTools", true),
     debug: cfg.get<boolean>("debug", false),
-    maxIterations: cfg.get<number>("maxIterations", 50),
-    requestDelayMs: cfg.get<number>("requestDelayMs", 1500),
-    enabledTools: cfg.get<string[]>("enabledTools", [
-      "read_file", "write_file", "edit_file", "copy_file", "list_dir", "delete_file", "grep",
-    ]),
+    maxIterations: cfg.get<number>("maxIterations", 100),
+    requestDelayMs: cfg.get<number>("requestDelayMs", 100),
+    enabledTools: cfg.get<string[]>("enabledTools", DEFAULT_SETTINGS.enabledTools),
   };
 }
 
 /**
- * Sanitize an uploaded filename for safe storage inside the workspace sandbox:
+ * Sanitize an uploaded filename for safe storage inside the upload sandbox:
  * keep alphanumerics, dot, dash, underscore; collapse everything else to a
- * dash; de-duplicate against `used` by appending `-2`, `-3`, … before `.xlsx`.
+ * dash; de-duplicate against `used` by appending `-2`, `-3`, … before the
+ * ORIGINAL extension (a .docx upload must stay .docx).
  */
 function sanitizeFileName(original: string, used: Set<string>): string {
   const lower = original.toLowerCase();
   const dot = lower.lastIndexOf(".");
   const stem = dot > 0 ? lower.slice(0, dot) : lower;
+  const extension = dot > 0 ? lower.slice(dot) : ".bin";
   const cleanedStem = stem.replace(/[^a-z0-9._-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "file";
-  let candidate = `${cleanedStem}.xlsx`;
+  let candidate = `${cleanedStem}${extension}`;
   let n = 2;
   while (used.has(candidate)) {
-    candidate = `${cleanedStem}-${n}.xlsx`;
+    candidate = `${cleanedStem}-${n}${extension}`;
     n++;
   }
   return candidate;
@@ -1168,8 +1343,26 @@ function exaSecretKey(): string {
 function normalizeSettings(values: SettingsValues): SettingsValues {
   const customProvider = values.customProvider ?? { name: "custom", baseUrl: "", defaultModel: "" };
   const multimodalProvider = values.multimodalProvider ?? { baseUrl: "https://api.openai.com/v1", model: "" };
+  const contextWindow = Number.isFinite(values.contextWindow) && values.contextWindow >= 1000
+    ? Math.min(Math.floor(values.contextWindow), 2_000_000)
+    : DEFAULT_SETTINGS.contextWindow;
+  const maxTokensValue = Number(values.maxTokens);
+  const maxTokens = Number.isFinite(maxTokensValue) && maxTokensValue > 0
+    ? Math.min(Math.floor(maxTokensValue), 2_000_000)
+    : DEFAULT_SETTINGS.maxTokens;
+  const reasoningEffort =
+    values.reasoningEffort === "low" ||
+    values.reasoningEffort === "medium" ||
+    values.reasoningEffort === "high" ||
+    values.reasoningEffort === "max" ||
+    values.reasoningEffort === "none"
+      ? values.reasoningEffort
+      : DEFAULT_SETTINGS.reasoningEffort;
   return {
     ...values,
+    contextWindow,
+    maxTokens,
+    reasoningEffort,
     customProvider: {
       name: customProvider.name.trim() || "custom",
       baseUrl: customProvider.baseUrl.trim().replace(/\/+$/, ""),
@@ -1180,6 +1373,58 @@ function normalizeSettings(values: SettingsValues): SettingsValues {
       model: multimodalProvider.model.trim(),
     },
   };
+}
+
+/**
+ * Derive a short, human-readable session name from the first user prompt.
+ * - Takes up to 5 words.
+ * - Truncates at a word boundary near 50 characters (no mid-word cut).
+ * - Capitalizes the first letter.
+ * - Strips leading command prefixes like "tolong", "please", "coba", "bisa".
+ */
+function deriveSessionName(input: string): string {
+  const STRIP_PREFIXES = [
+    "tolong", "please", "tolonglah", "coba", "bisa", "bantu", "help",
+    "minta", "saya", "aku", "gimana", "gmn", "how", "what", "why", "can you",
+  ];
+  const MAX_WORDS = 5;
+  const MAX_CHARS = 50;
+
+  let words = input.trim().replace(/\s+/g, " ").split(" ");
+  // Drop leading filler words so the name starts with the real intent.
+  while (words.length > 1 && STRIP_PREFIXES.includes(words[0]!.toLowerCase())) {
+    words = words.slice(1);
+  }
+  words = words.slice(0, MAX_WORDS);
+
+  let name = words.join(" ");
+  // Truncate at the last word boundary that fits within MAX_CHARS.
+  if (name.length > MAX_CHARS) {
+    name = name.slice(0, MAX_CHARS);
+    const lastSpace = name.lastIndexOf(" ");
+    if (lastSpace > 15) name = name.slice(0, lastSpace);
+    name = name.trimEnd() + "…";
+  }
+
+  // Capitalize the first character.
+  name = name.charAt(0).toUpperCase() + name.slice(1);
+  return name || "New chat";
+}
+
+function mimeForImage(path: string): string | null {
+  switch (extname(path).toLowerCase()) {
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".png":
+      return "image/png";
+    case ".webp":
+      return "image/webp";
+    case ".gif":
+      return "image/gif";
+    default:
+      return null;
+  }
 }
 
 function displayProviderName(settings: SettingsValues): string {
@@ -1438,23 +1683,21 @@ body {
   word-wrap: break-word;
   overflow-wrap: anywhere;
   border-radius: var(--sf-radius-sm);
-  padding: 8px 11px;
+  padding: 0;
   line-height: 1.5;
 }
 .msg.user .body {
   white-space: pre-wrap;
-  background: color-mix(in srgb, var(--sf-user) 80%, var(--vscode-editor-background) 20%);
-  border: 1px solid color-mix(in srgb, var(--vscode-button-background) 24%, var(--sf-border));
 }
 .msg.assistant .body {
-  background: color-mix(in srgb, var(--sf-assistant) 80%, transparent);
-  border: 1px solid var(--sf-border);
+  background: transparent;
+  border: none;
 }
 /* Placeholder assistant turn (no text segments yet, e.g. waiting on tools). */
 .msg.assistant:not(:has(.seg)) .body {
-  border-style: dashed;
-  padding: 7px 10px;
-  background: color-mix(in srgb, var(--sf-surface-alt) 60%, transparent);
+  background: transparent;
+  border: none;
+  padding: 0;
 }
 .msg.assistant:not(:has(.seg)) .role { opacity: 0.55; }
 
@@ -1682,6 +1925,7 @@ body {
   line-height: 1.4;
   overflow: hidden;
   flex: 0 0 auto;
+  animation: sf-enter 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .task-panel-header {
   display: flex;
@@ -1709,6 +1953,23 @@ body {
   transition: width 0.3s ease;
 }
 .task-panel-chevron { font-size: 8px; opacity: 0.6; width: 8px; text-align: center; flex-shrink: 0; }
+.task-panel-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--sf-radius-xs);
+  color: var(--sf-muted);
+  font-size: 10px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.task-panel-close:hover { background: color-mix(in srgb, var(--vscode-foreground) 12%, transparent); color: var(--vscode-foreground); }
 .task-panel-body {
   padding: 2px 10px 8px;
   max-height: 220px;
@@ -1734,6 +1995,7 @@ body {
   justify-content: center;
 }
 .task-panel-body .task-ico svg { width: 100%; height: 100%; }
+.task-panel-body .task-step-num { color: var(--sf-muted); font-size: 10px; flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .task-panel-body .task-text { flex: 1; min-width: 0; }
 .task-panel-body .done { color: var(--vscode-foreground); }
 .task-panel-body .done .task-ico { color: var(--vscode-charts-green); }
@@ -1743,6 +2005,34 @@ body {
 .task-panel-body .pending { color: var(--sf-muted); }
 .task-panel-body .pending .task-ico { opacity: 0.5; }
 .task-panel.collapsed .task-panel-body { max-height: 0; opacity: 0; padding-top: 0; padding-bottom: 0; overflow: hidden; }
+/* Active step hint (plan mode) */
+.task-active-hint {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border-bottom: 1px solid var(--sf-border);
+  padding: 4px 0 8px;
+  margin-bottom: 3px;
+  color: var(--sf-muted);
+  font-size: 10px;
+}
+.task-active-hint strong {
+  color: var(--vscode-foreground);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.task-active-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sf-accent);
+  animation: sf-pulse-dot 1.5s infinite;
+}
+.task-active-hint .thinking-dots { margin-left: auto; transform: scale(0.75); transform-origin: right center; }
 
 /* ---------- Composer ---------- */
 .composer {
@@ -2026,19 +2316,7 @@ body {
   font-size: 11px;
 }
 
-/* ---------- Pending / thinking ---------- */
-.pending {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 1px;
-  border: none;
-  color: var(--sf-muted);
-  background: transparent;
-  align-self: flex-start;
-  font-size: 11px;
-  margin-left: 1px;
-}
+/* ---------- Thinking dots / spinners ---------- */
 .thinking-dots { display: inline-flex; align-items: center; gap: 4px; }
 .thinking-dots span {
   width: 6px;
@@ -2057,16 +2335,19 @@ body {
 @keyframes sp-rotate { to { transform: rotate(360deg); } }
 .thinking-dot::before { content: ""; }
 .msg .body .thinking-dot { display: none; }
+@keyframes sf-pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(0.8); }
+}
 
 /* ---------- Entrance / leave animations ---------- */
-.msg, .tool, .pending, .notice {
+.msg, .tool, .notice {
   animation: sf-enter 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 @keyframes sf-enter {
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
 }
-.pending.leaving { animation: sf-leave 160ms ease-in forwards; }
 @keyframes sf-leave {
   from { opacity: 1; }
   to   { opacity: 0; transform: translateY(-2px); }
@@ -2166,11 +2447,238 @@ body {
 }
 #jump-bottom:hover { opacity: 1; background: var(--vscode-list-hoverBackground); }
 
+/* ---------- Activity card (live agent phase indicator) ---------- */
+.activity-card {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: fit-content;
+  max-width: min(100%, 560px);
+  margin: 2px 1px;
+  padding: 7px 11px;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-sm);
+  background: color-mix(in srgb, var(--sf-surface-alt) 80%, transparent);
+  color: var(--sf-muted);
+  font-size: 11px;
+  animation: sf-enter 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.activity-card.activity-tool { border-color: color-mix(in srgb, var(--vscode-charts-green) 45%, var(--sf-border)); }
+.activity-card.activity-task { border-color: color-mix(in srgb, var(--vscode-charts-yellow) 45%, var(--sf-border)); }
+.activity-card.activity-subagent { border-color: color-mix(in srgb, var(--vscode-charts-blue) 45%, var(--sf-border)); }
+.activity-card.activity-context { border-color: color-mix(in srgb, var(--vscode-charts-purple, var(--sf-accent)) 45%, var(--sf-border)); }
+.activity-spinner {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--sf-border-strong);
+  border-top-color: var(--sf-accent);
+  border-radius: 50%;
+  animation: sp-rotate 0.8s linear infinite;
+}
+.activity-copy { display: inline-flex; flex-direction: column; min-width: 0; }
+.activity-copy strong { color: var(--vscode-foreground); font-weight: 600; }
+.activity-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--sf-muted);
+  font-size: 10px;
+}
+.activity-card .thinking-dots { margin-left: auto; }
+.activity-card.leaving { animation: sf-leave 160ms ease-in forwards; }
+
+/* ---------- User message attachments ---------- */
+.msg.user .user-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.user-image-attachment {
+  display: block;
+  width: min(320px, 100%);
+  max-height: 280px;
+  object-fit: contain;
+  background: var(--vscode-editor-background);
+  border: 1px solid var(--sf-border-strong);
+  border-radius: var(--sf-radius-sm);
+}
+.user-image-attachment.unavailable {
+  padding: 16px;
+  font-size: 11px;
+  color: var(--sf-muted);
+}
+.user-file-attachment {
+  padding: 7px 10px;
+  border: 1px solid var(--sf-border-strong);
+  border-radius: var(--sf-radius-xs);
+  background: color-mix(in srgb, var(--vscode-editor-background) 70%, transparent);
+  font-size: 11px;
+  color: var(--vscode-foreground);
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msg.user .user-message-text { white-space: pre-wrap; }
+
+/* ---------- Historical turns ("Show work") ---------- */
+.work-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  margin: 0 0 8px;
+  padding: 4px 9px;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-xs);
+  background: transparent;
+  color: var(--sf-muted);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+.work-toggle:hover { background: var(--vscode-list-hoverBackground); color: var(--vscode-foreground); }
+.work-toggle .tool-chevron { font-size: 8px; width: 8px; text-align: center; }
+.historical-work {
+  padding: 8px 10px;
+  border: 1px dashed var(--sf-border);
+  border-radius: var(--sf-radius-sm);
+  margin-bottom: 8px;
+  background: color-mix(in srgb, var(--sf-surface-alt) 50%, transparent);
+}
+
+/* ---------- Notices ---------- */
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.notice-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.notice-close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 0;
+  color: inherit;
+  opacity: 0.6;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0 2px;
+  border-radius: var(--sf-radius-xs);
+}
+.notice-close:hover { opacity: 1; }
+
+/* ---------- Tool head status ---------- */
+.tool .head .tool-status { margin-left: auto; color: var(--vscode-charts-green); font-size: 9px; font-weight: 600; }
+
+/* ---------- Empty state (hero + suggestions) ---------- */
+.empty-state { max-width: 340px; }
+.empty-hero {
+  display: grid;
+  place-items: center;
+  width: 90px;
+  height: 80px;
+  position: relative;
+  margin: 0 auto 18px;
+}
+.empty-hero .empty-icon {
+  width: 56px;
+  height: 56px;
+  margin: 0;
+  border-radius: 18px;
+  transform: rotate(-8deg);
+}
+.empty-hero .empty-icon svg { transform: rotate(8deg); }
+.empty-orbit {
+  position: absolute;
+  inset: 0 -2px;
+  border: 1px solid color-mix(in srgb, var(--sf-accent) 30%, transparent);
+  border-radius: 50%;
+  transform: rotate(-26deg) scaleX(1.15);
+  animation: sf-orbit 9s linear infinite;
+}
+.orbit-dot {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border: 2px solid var(--vscode-editor-background);
+  background: var(--sf-accent);
+  border-radius: 50%;
+  right: 0;
+  top: 12px;
+}
+@keyframes sf-orbit { to { transform: rotate(334deg) scaleX(1.15); } }
+.empty-eyebrow {
+  color: var(--sf-muted);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  margin-bottom: 12px;
+}
+.empty-title {
+  font-size: 17px;
+  line-height: 1.25;
+  font-weight: 700;
+  margin-bottom: 8px;
+  color: var(--vscode-foreground);
+  letter-spacing: -0.3px;
+}
+.empty-title em { color: var(--sf-accent); font-style: normal; }
+.empty-copy { margin: 0 0 16px; line-height: 1.65; }
+.suggestion-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 7px;
+  text-align: left;
+}
+.suggestion-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 11px 13px;
+  background: color-mix(in srgb, var(--sf-surface-alt) 65%, transparent);
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius);
+  text-align: left;
+  color: var(--sf-muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+}
+.suggestion-card:hover {
+  background: var(--sf-accent-soft);
+  border-color: color-mix(in srgb, var(--sf-accent) 40%, var(--sf-border));
+  transform: translateY(-2px);
+}
+.suggestion-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--sf-accent);
+  margin-bottom: 4px;
+}
+.suggestion-top svg { width: 15px; height: 15px; }
+.suggestion-top svg:last-child { opacity: 0.5; width: 12px; height: 12px; }
+.suggestion-card strong { color: var(--vscode-foreground); font-size: 11px; font-weight: 600; }
+.suggestion-card > span:last-child { font-size: 10px; line-height: 1.5; }
+
+/* ---------- Composer hint detail ---------- */
+.composer-hint small { opacity: 0.8; }
+
 /* ---------- Reduced motion ---------- */
 @media (prefers-reduced-motion: reduce) {
-  .msg, .tool, .pending, .notice, .pending.leaving, .modal, .popover,
+  .msg, .tool, .activity-card, .notice, .activity-card.leaving, .modal, .popover,
   .composer button.stop, .composer button.stop.pressed, .tool .tool-body,
-  .task-panel-body, .thinking-dots span {
+  .task-panel, .task-panel-body, .thinking-dots span, .activity-spinner,
+  .empty-orbit, .task-active-dot, .suggestion-card {
     animation: none !important;
     transition: none !important;
   }
