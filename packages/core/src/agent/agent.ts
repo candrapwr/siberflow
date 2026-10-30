@@ -219,6 +219,13 @@ export interface AgentEvents {
   onContextCompacting?: () => void;
   /** Fires when a subagent reports progress (phase: thinking|tool|tool_done|done, detail: tool name/preview). */
   onSubagentUpdate?: (phase: string, detail?: string) => void;
+  /**
+   * Fires for each streamed reasoning/thinking delta from the model
+   * (reasoning_content on DeepSeek/Qwen-style gateways, reasoning summary on
+   * the OpenAI Responses API). Transient UX signal only — reasoning text is
+   * never persisted into conversation history.
+   */
+  onReasoning?: (delta: string) => void;
   /** Fires after the in-memory conversation history changes. */
   onHistoryChanged?: () => void;
 }
@@ -888,6 +895,9 @@ export class Agent {
           case "content":
             events.onContent?.(ev.delta);
             break;
+          case "reasoning_delta":
+            events.onReasoning?.(ev.delta);
+            break;
           case "tool_call_start":
             events.onToolCallStart?.(ev.index, ev.name);
             break;
@@ -1200,7 +1210,7 @@ export class Agent {
  * the model keeps an anchor (what it wrote/edited) without the full payload
  * bloating context for the rest of the turn.
  */
-const PRE_TRUNCATE_ARG_CAP = 1000;
+const PRE_TRUNCATE_ARG_CAP = 5000;
 
 /**
  * Find the assistant toolCall matching `toolCallId` in the message history and

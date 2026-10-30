@@ -262,11 +262,13 @@ function loadAppConfig(): AppConfig {
   // exec back via createAdminRegistry() at turn time.
   const startupTools = resolveTelegramTools();
   for (const t of cliTools) startupTools.delete(t.name);
+  const model = coreConfig.model ?? provider.defaultModel;
   const registry = createDefaultRegistry({
     enabledTools: startupTools,
     tasks: false,
     interaction: false,
     provider,
+    model,
     // The subagent/explore factory is always available; individual enable is
     // filtered per-name via enabledTools (toggleable from the admin panel).
     subagent: true,
@@ -291,7 +293,7 @@ function loadAppConfig(): AppConfig {
       : {}),
     reasoningEffort: coreConfig.reasoningEffort,
     registry,
-    model: coreConfig.model ?? provider.defaultModel,
+    model,
     requestDelayMs: coreConfig.requestDelayMs,
     maxIterations: coreConfig.maxIterations,
     autoContinue: coreConfig.autoContinue,
@@ -462,12 +464,13 @@ class BotRunner {
     return tools;
   }
 
-  private createAdminRegistry(): ToolRegistry {
+  private createAdminRegistry(model = this.config.model): ToolRegistry {
     const registry = createDefaultRegistry({
       enabledTools: this.getActiveEnabledTools(),
       tasks: false,
       interaction: false,
       provider: this.config.provider,
+      model,
       subagent: true,
       subagentMaxIterations: this.config.maxIterations,
     });
@@ -500,6 +503,7 @@ class BotRunner {
         tasks: false,
         interaction: false,
         provider,
+        model: this.aiSettings.customDefaultModel,
         subagent: true,
         subagentMaxIterations: this.config.maxIterations,
       });
@@ -514,6 +518,7 @@ class BotRunner {
         tasks: false,
         interaction: false,
         provider: this.config.provider,
+        model: this.config.model,
         subagent: true,
         subagentMaxIterations: this.config.maxIterations,
       });
@@ -1164,7 +1169,7 @@ class BotRunner {
 
     // Admin private chats get a per-session registry that includes the shell (exec) tool for server administration.
     const adminPrivate = message.chat.type === "private" && this.isAdmin(message.from);
-    const registry = adminPrivate ? this.createAdminRegistry() : active.registry;
+    const registry = adminPrivate ? this.createAdminRegistry(active.model) : active.registry;
 
     const runtime: RuntimeSession = {
       agent: undefined as unknown as Agent,
@@ -1647,7 +1652,7 @@ class BotRunner {
     const activePrompt = this.getActiveProviderModel();
     const adminPrivateCtx = message.chat.type === "private" && this.isAdmin(message.from);
     const turnRegistry = adminPrivateCtx
-      ? this.createAdminRegistry()
+      ? this.createAdminRegistry(activePrompt.model)
       : activePrompt.registry;
     const freshPrompt = await this.buildSystemPromptFor(message, runtime, turnRegistry, adminPrivateCtx);
     runtime.agent.loadHistory(withSystemPrompt(runtime.session.messages, freshPrompt));

@@ -52,6 +52,7 @@ export interface UsageStats {
 
 export type StreamEvent =
   | { type: "content"; delta: string }
+  | { type: "reasoning_delta"; delta: string }
   | { type: "tool_call_start"; index: number; id: string; name: string }
   | { type: "tool_call_args"; index: number; delta: string }
   | {

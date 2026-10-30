@@ -98,7 +98,7 @@ export const AskUserModal = memo(function AskUserModal({ prompt, onClose }: AskU
     <div className="modal-backdrop">
       <div ref={dialogRef} className="modal ask-user-modal" role="dialog" aria-modal="true" aria-labelledby="ask-user-question">
         <div className="ask-user-header">
-          <span className="ask-user-badge">Pertanyaan</span>
+          <span className="ask-user-badge">Question</span>
         </div>
         <div className="ask-user-body">
           <div id="ask-user-question" className="ask-user-question">{prompt.question}</div>
@@ -122,16 +122,16 @@ export const AskUserModal = memo(function AskUserModal({ prompt, onClose }: AskU
               >
                 <button type="button" className="ask-user-free-select" aria-pressed={selectedIndex === freeTextIndex} onClick={() => setSelectedIndex(freeTextIndex)}>
                   <span className="ask-user-num">{prompt.choices.length + 1}</span>
-                  <span className="ask-user-item-label">Jawaban sendiri</span>
+                  <span className="ask-user-item-label">Custom answer</span>
                 </button>
                 {selectedIndex === freeTextIndex && (
                   <textarea
                     ref={textRef}
                     className="ask-user-text-input"
-                    aria-label="Jawaban sendiri"
+                    aria-label="Custom answer"
                     value={text}
                     onChange={(e) => setText(e.target.value)}
-                    placeholder={prompt.defaultChoice ?? "Ketik jawaban…"}
+                    placeholder={prompt.defaultChoice ?? "Type your answer…"}
                     rows={2}
                     onClick={(e) => e.stopPropagation()}
                     onKeyDown={(e) => e.stopPropagation()}
@@ -142,11 +142,11 @@ export const AskUserModal = memo(function AskUserModal({ prompt, onClose }: AskU
           </div>
         </div>
         <div className="ask-user-hint">
-          <kbd>↑</kbd><kbd>↓</kbd> pilih · <kbd>Enter</kbd> konfirmasi · <kbd>Esc</kbd> batal
+          <kbd>↑</kbd><kbd>↓</kbd> select · <kbd>Enter</kbd> confirm · <kbd>Esc</kbd> cancel
         </div>
         <div className="ask-user-actions">
           <button type="button" className="ask-user-cancel-btn" onClick={cancel}>
-            Batal
+            Cancel
           </button>
           <button
             type="button"
@@ -154,7 +154,7 @@ export const AskUserModal = memo(function AskUserModal({ prompt, onClose }: AskU
             disabled={!canSubmit}
             onClick={submit}
           >
-            Kirim
+            Send
           </button>
         </div>
       </div>

@@ -78,13 +78,13 @@ export function registerIpc(): void {
 
   ipcMain.handle("siberflow:pickFiles", async () => {
     if (!host!.getWorkdir()) {
-      return { error: "Pilih folder project dulu sebelum upload file." } as const;
+      return { error: "Pick a project folder before uploading files." } as const;
     }
     const focused = BrowserWindow.getFocusedWindow() ?? mainWindow;
     const result = await dialog.showOpenDialog(focused!, {
-      title: "Pilih file dokumen atau gambar",
+      title: "Select documents or images",
       filters: [
-        { name: "Dokumen dan gambar", extensions: ["xlsx", "docx", "pdf", "png", "jpg", "jpeg", "webp", "gif"] },
+        { name: "Documents and images", extensions: ["xlsx", "docx", "pdf", "png", "jpg", "jpeg", "webp", "gif"] },
         { name: "Excel Workbook", extensions: ["xlsx"] },
         { name: "Word Document", extensions: ["docx"] },
         { name: "PDF Document", extensions: ["pdf"] },

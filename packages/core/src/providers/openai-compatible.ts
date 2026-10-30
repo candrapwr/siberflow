@@ -200,6 +200,7 @@ export abstract class OpenAICompatibleProvider implements Provider {
         delta.reasoning_content.length > 0
       ) {
         reasoningContentLength += delta.reasoning_content.length;
+        yield { type: "reasoning_delta", delta: delta.reasoning_content };
       }
 
       if (delta.tool_calls) {

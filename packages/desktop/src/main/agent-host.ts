@@ -350,10 +350,13 @@ export class AgentHost {
     const enabledTools = new Set(this.settings.enabledTools);
     enabledTools.add("agent_general");
     enabledTools.add("agent_explorer");
+    const modelOverride = this.settings.model.trim();
+    const model = modelOverride.length > 0 ? modelOverride : this.provider.defaultModel;
     this.registry = createDefaultRegistry({
       filesystem: hasWorkdir,
       enabledTools,
       provider: this.provider,
+      model,
       subagent: true,
       subagentMaxIterations: this.settings.maxIterations,
     });
@@ -573,7 +576,7 @@ export class AgentHost {
    */
   async copyUploads(srcPaths: string[]): Promise<PickedFile[]> {
     if (!this.current) {
-      throw new Error("Tidak ada session aktif.");
+      throw new Error("No active session.");
     }
     const destDir = uploadsDirFor(this.current.id);
     // mode 0o700: owner-only, so other users on a shared Linux box can't read
@@ -590,7 +593,7 @@ export class AgentHost {
       else if (lower.endsWith(".docx")) kind = "docx";
       else if (lower.endsWith(".pdf")) kind = "pdf";
       else if ([".png", ".jpg", ".jpeg", ".webp", ".gif"].some((ext) => lower.endsWith(ext))) kind = "image";
-      else throw new Error(`File "${original}" bukan format dokumen atau gambar yang didukung.`);
+      else throw new Error(`File "${original}" is not a supported document or image format.`);
       const safe = sanitizeFileName(original, usedNames);
       usedNames.add(safe);
       const dest = join(destDir, safe);
@@ -750,6 +753,7 @@ export class AgentHost {
         ...(continuationNotice ? { continuationNotice } : {}),
         onAssistantStart: () => this.emit({ type: "assistant-start" }),
         onContent: (delta) => this.emit({ type: "assistant-content", delta }),
+        onReasoning: (delta) => this.emit({ type: "reasoning-update", delta }),
         onAssistantEnd: (_msg, meta) => {
           if (meta.usage) {
             turnAddPrompt += meta.usage.promptTokens;

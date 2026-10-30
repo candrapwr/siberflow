@@ -86,6 +86,7 @@ function buildSubRegistry(parentRegistry: ToolRegistry, requested: Set<string> |
 async function runAgent(
   task: string,
   parentProvider: Provider,
+  parentModel: string,
   subRegistry: ToolRegistry,
   systemPrompt: string,
   ctx: import("../base.js").ToolContext,
@@ -94,7 +95,7 @@ async function runAgent(
   const subAgent = new Agent({
     provider: parentProvider,
     registry: subRegistry,
-    model: parentProvider.defaultModel,
+    model: parentModel,
     systemPrompt,
     projectDir: ctx.projectDir,
     ...(ctx.execShellMode ? { execShellMode: ctx.execShellMode } : {}),
@@ -119,6 +120,7 @@ async function runAgent(
 /** Create the Agent General tool — delegates a task to a focused helper agent (delegated tools, clean context). */
 export function createAgentGeneralTool(
   parentProvider: Provider,
+  parentModel: string,
   parentRegistry: ToolRegistry,
   parentMaxIterations?: number,
 ): Tool {
@@ -143,7 +145,7 @@ export function createAgentGeneralTool(
           userId: ctx.userId ?? "unknown",
           tool: "agent_general",
           task,
-          model: parentProvider.defaultModel,
+          model: parentModel,
           status,
           ...(error ? { error } : {}),
           ...(requestBody ? { requestBody } : {}),
@@ -163,7 +165,7 @@ export function createAgentGeneralTool(
       progress?.("thinking", `${subRegistry.list().length} tools`);
       let result: string;
       try {
-        result = await runAgent(task, parentProvider, subRegistry, AGENT_GENERAL_SYSTEM_PROMPT, ctx, maxIter);
+        result = await runAgent(task, parentProvider, parentModel, subRegistry, AGENT_GENERAL_SYSTEM_PROMPT, ctx, maxIter);
       } catch (err) {
         const detail = formatError(err);
         progress?.("error", (err as Error).message);
@@ -181,6 +183,7 @@ export function createAgentGeneralTool(
 /** Create the Agent Explorer tool — a read-only search agent that summarizes what it finds. */
 export function createAgentExplorerTool(
   parentProvider: Provider,
+  parentModel: string,
   parentRegistry: ToolRegistry,
   parentMaxIterations?: number,
 ): Tool {
@@ -207,7 +210,7 @@ export function createAgentExplorerTool(
           userId: ctx.userId ?? "unknown",
           tool: "agent_explorer",
           task,
-          model: parentProvider.defaultModel,
+          model: parentModel,
           status,
           ...(error ? { error } : {}),
           ...(requestBody ? { requestBody } : {}),
@@ -226,7 +229,7 @@ export function createAgentExplorerTool(
       progress?.("thinking", "read-only exploration");
       let result: string;
       try {
-        result = await runAgent(task, parentProvider, subRegistry, AGENT_EXPLORER_SYSTEM_PROMPT, ctx, maxIter);
+        result = await runAgent(task, parentProvider, parentModel, subRegistry, AGENT_EXPLORER_SYSTEM_PROMPT, ctx, maxIter);
       } catch (err) {
         const detail = formatError(err);
         progress?.("error", (err as Error).message);

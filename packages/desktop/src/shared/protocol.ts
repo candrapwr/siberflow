@@ -175,6 +175,8 @@ export type MainEvent =
   | { type: "history"; messages: HistoryEntry[] }
   | { type: "assistant-start" }
   | { type: "assistant-content"; delta: string }
+  /** One streamed reasoning/thinking delta; renderer shows a live indicator. */
+  | { type: "reasoning-update"; delta: string }
   | { type: "iteration-end" }
   | { type: "assistant-end" }
   | { type: "tool-round-end" }

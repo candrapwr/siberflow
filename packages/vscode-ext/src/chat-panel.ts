@@ -465,9 +465,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const enabledTools = new Set(this.settings.enabledTools);
     enabledTools.add("agent_general");
     enabledTools.add("agent_explorer");
+    const modelOverride = this.settings.model.trim();
+    const model =
+      modelOverride.length > 0 ? modelOverride : this.provider.defaultModel;
     this.registry = createDefaultRegistry({
       enabledTools,
       provider: this.provider,
+      model,
       subagent: true,
       subagentMaxIterations: this.settings.maxIterations,
     });

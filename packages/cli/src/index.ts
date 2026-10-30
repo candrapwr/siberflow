@@ -30,14 +30,14 @@ async function main(): Promise<void> {
       : {}),
     reasoningEffort: config.reasoningEffort,
   });
+  const model = config.model ?? provider.defaultModel;
   const registry = createDefaultRegistry({
     enabledTools: config.enabledTools,
     provider,
+    model,
     subagent: config.subagent,
     subagentMaxIterations: config.maxIterations,
   });
-  const model = config.model ?? provider.defaultModel;
-
   await runRepl({
     provider,
     registry,

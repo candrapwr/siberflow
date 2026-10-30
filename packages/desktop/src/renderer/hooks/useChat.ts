@@ -87,6 +87,11 @@ interface ChatState {
    * progress label (e.g. "calling read_file…"). Shown as a nested indicator
    * inside the subagent tool block. */
   subagentPhase: { phase: string; detail?: string } | null;
+  /** Live reasoning/thinking stream stats for the current assistant
+   * iteration (chars + approximate word count), or null when the model is
+   * not emitting reasoning deltas. Drives the "AI is thinking (N words)"
+   * activity label. */
+  reasoning: { chars: number; words: number; lastWasSpace: boolean } | null;
   stopping: boolean;
   notices: Array<{ id: number; kind: "info" | "error" | "warn"; text: string }>;
   showActions: boolean;
@@ -118,6 +123,7 @@ const initial: ChatState = {
   waitingForAssistant: false,
   activity: null,
   subagentPhase: null,
+  reasoning: null,
   stopping: false,
   notices: [],
   showActions: false,
@@ -331,6 +337,7 @@ function reducer(state: ChatState, action: Action): ChatState {
         waitingForAssistant: false,
         activity: null,
         subagentPhase: null,
+        reasoning: null,
         // Clear notices on session load so stale error toasts from a previous
         // session don't linger on screen. (ready fires on app start AND on
         // every session switch via loadSessionById → postReady.)
@@ -369,6 +376,7 @@ function reducer(state: ChatState, action: Action): ChatState {
           stopping: false,
           activity: null,
           subagentPhase: null,
+          reasoning: null,
           usage: null,
         };
       }
@@ -399,18 +407,40 @@ function reducer(state: ChatState, action: Action): ChatState {
           busy: true,
           summarizing: false,
           stopping: false,
-          activity: { kind: "thinking", label: "AI sedang memikirkan respons" },
+          reasoning: null,
+          activity: { kind: "thinking", label: "AI is thinking" },
           showActions: false,
           messages,
         };
       }
+
+    case "reasoning-update": {
+      // Model is streaming reasoning/thinking text. Count words
+      // incrementally (a word = run of non-whitespace) so the composer can
+      // show live progress like "AI is thinking: 128 words".
+      const prev = state.reasoning ?? { chars: 0, words: 0, lastWasSpace: true };
+      let { chars, words, lastWasSpace } = prev;
+      for (const ch of e.delta) {
+        const sp = /\s/.test(ch);
+        if (!sp && lastWasSpace) words++;
+        lastWasSpace = sp;
+        chars++;
+      }
+      return {
+        ...state,
+        waitingForAssistant: false,
+        reasoning: { chars, words, lastWasSpace },
+        activity: { kind: "thinking", label: "AI is thinking", detail: `${words} words` },
+      };
+    }
 
     case "assistant-content":
       // Append text deltas to the last text block, or create one.
       return {
         ...state,
         waitingForAssistant: false,
-        activity: { kind: "thinking", label: "AI sedang menulis respons" },
+        reasoning: null,
+        activity: { kind: "thinking", label: "AI is writing" },
         messages: updateLastTurn(state.messages, (turn) => {
           const last = turn.blocks[turn.blocks.length - 1];
           if (last && last.kind === "text") {
@@ -433,8 +463,8 @@ function reducer(state: ChatState, action: Action): ChatState {
         ...state,
         waitingForAssistant: false,
         activity: e.name === "task_update"
-          ? { kind: "task", label: "Memperbarui task" }
-          : { kind: "tool", label: `Menjalankan ${e.name}` },
+          ? { kind: "task", label: "Updating task" }
+          : { kind: "tool", label: `Running ${e.name}` },
         messages: updateLastTurn(msgs, (turn) => {
           turn.blocks.push({
             kind: "tool",
@@ -469,7 +499,7 @@ function reducer(state: ChatState, action: Action): ChatState {
       // while the agent processes the returned output.
       return {
         ...state,
-        activity: { kind: "thinking", label: "Memproses hasil tool" },
+        activity: { kind: "thinking", label: "Processing tool result" },
         messages: updateLastTurn(state.messages, (turn) => {
           const blk = [...turn.blocks]
             .reverse()
@@ -486,6 +516,7 @@ function reducer(state: ChatState, action: Action): ChatState {
       // Remove a turn only when it contains hidden task bookkeeping alone.
       return {
         ...state,
+        reasoning: null,
         messages: dropTrailingEmptyAssistantTurn(state.messages),
       };
 
@@ -497,6 +528,7 @@ function reducer(state: ChatState, action: Action): ChatState {
         waitingForAssistant: false,
         activity: null,
         subagentPhase: null,
+        reasoning: null,
         stopping: false,
         showActions: !state.stopping,
       };
@@ -505,7 +537,7 @@ function reducer(state: ChatState, action: Action): ChatState {
       return {
         ...state,
         waitingForAssistant: true,
-        activity: { kind: "thinking", label: "Menunggu AI melanjutkan" },
+        activity: { kind: "thinking", label: "Waiting for AI" },
       };
 
     case "task-plan":
@@ -513,7 +545,7 @@ function reducer(state: ChatState, action: Action): ChatState {
         ...state,
         taskPlan: e.tasks,
         tasksRestored: false,
-        activity: { kind: "task", label: "Menyiapkan rencana kerja" },
+        activity: { kind: "task", label: "Planning tasks" },
       };
 
     case "tasks":
@@ -521,7 +553,7 @@ function reducer(state: ChatState, action: Action): ChatState {
         ...state,
         tasks: e.tasks,
         tasksRestored: e.restored === true,
-        ...(e.restored === true ? {} : { activity: { kind: "task" as const, label: "Mengerjakan task" } }),
+        ...(e.restored === true ? {} : { activity: { kind: "task" as const, label: "Working on tasks" } }),
       };
 
     case "context-optimized":
@@ -533,7 +565,7 @@ function reducer(state: ChatState, action: Action): ChatState {
       return {
         ...state,
         summarizing: true,
-        activity: { kind: "context", label: "Meringkas context percakapan" },
+        activity: { kind: "context", label: "Summarizing context" },
       };
 
     case "context-compacted":
@@ -546,12 +578,12 @@ function reducer(state: ChatState, action: Action): ChatState {
       // Track the subagent's progress so the UI can show a nested indicator.
       // Clear when the subagent reports "done" or "error".
       if (e.phase === "done" || e.phase === "error") {
-        return { ...state, subagentPhase: null, activity: { kind: "thinking", label: "Memproses hasil subagent" } };
+        return { ...state, subagentPhase: null, activity: { kind: "thinking", label: "Processing subagent result" } };
       }
       return {
         ...state,
         subagentPhase: { phase: e.phase, detail: e.detail },
-        activity: { kind: "subagent", label: "Subagent sedang bekerja", detail: e.detail ?? e.phase },
+        activity: { kind: "subagent", label: "Subagent is working", detail: e.detail ?? e.phase },
       };
 
     case "max-iterations":

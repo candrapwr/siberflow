@@ -92,8 +92,8 @@ export const TaskPanel = memo(function TaskPanel({
         <button
           type="button"
           className="task-close"
-          aria-label="Tutup daftar task"
-          title="Tutup daftar task"
+          aria-label="Close task list"
+          title="Close task list"
           onClick={(event) => {
             event.stopPropagation();
             setClosed(true);
@@ -109,7 +109,7 @@ export const TaskPanel = memo(function TaskPanel({
           {isPlan && active && (
             <div className="task-active-hint">
               <span className="task-active-dot task-active-dot-working" />
-              <span className="task-active-label">Sedang dikerjakan:</span>
+              <span className="task-active-label">In progress:</span>
               <strong>{active.content}</strong>
               <span className="thinking-dots" aria-hidden="true"><span /><span /><span /></span>
             </div>

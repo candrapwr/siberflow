@@ -590,7 +590,7 @@ Dua tool:
 
 Arsitektur ([spawn.ts](packages/core/src/tools/agent/spawn.ts)):
 
-- Factory pattern: `createAgentGeneralTool` / `createAgentExplorerTool(provider, registry, maxIter)` closure-capture parent's provider+registry (chicken-and-egg workaround karena `ToolContext` gak bawa provider).
+- Factory pattern: `createAgentGeneralTool` / `createAgentExplorerTool` closure-capture parent's provider, active model, and registry (chicken-and-egg workaround karena `ToolContext` gak bawa provider). Subagent memakai provider dan model yang sama dengan main agent, termasuk model override.
 - Saat execute: build sub-registry (filter parent tools), `new Agent({...})`, `subAgent.send(task)`, return final text (self-truncate 8K char).
 - Recursion guard: agent_general/agent_explorer tool selalu di-exclude dari sub-registry (depth-1 limit, hard cap).
 - Progress forwarding: subagent's `onToolCallStart`/`onToolResult` → `ctx.subagentProgress(phase, detail)` → `agent.currentEvents.onSubagentUpdate` → host UI indicator.

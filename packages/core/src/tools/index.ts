@@ -83,6 +83,8 @@ export interface RegistryOptions {
    * `ToolContext` carries none, so we closure-capture it here.
    */
   provider?: Provider;
+  /** Active model used by the parent Agent. Subagents inherit it; defaults to provider.defaultModel. */
+  model?: string;
   /**
    * Max iterations cap for subagents spawned by the `subagent` tool. When
    * unset, a safe fallback is used. Inherited from the parent agent's
@@ -136,8 +138,9 @@ export function createDefaultRegistry(opts: RegistryOptions = {}): ToolRegistry 
   // it true); individual enable/disable is then controlled by `enabledTools`,
   // so each can be toggled independently (e.g. from the Telegram admin panel).
   if (opts.subagent && opts.provider) {
-    const sub = createAgentGeneralTool(opts.provider, registry, opts.subagentMaxIterations);
-    const exp = createAgentExplorerTool(opts.provider, registry, opts.subagentMaxIterations);
+    const model = opts.model ?? opts.provider.defaultModel;
+    const sub = createAgentGeneralTool(opts.provider, model, registry, opts.subagentMaxIterations);
+    const exp = createAgentExplorerTool(opts.provider, model, registry, opts.subagentMaxIterations);
     if (enabled.has(sub.name)) registry.register(sub);
     if (enabled.has(exp.name)) registry.register(exp);
   }

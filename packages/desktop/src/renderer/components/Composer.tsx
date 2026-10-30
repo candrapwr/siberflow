@@ -38,8 +38,6 @@ interface ComposerProps {
   optimizeMode?: "drop" | "summary" | "recent" | "compact";
   /** True while the agent is making an LLM summarization call (compact mode). */
   summarizing?: boolean;
-  /** When set, a subagent tool is running; show its latest progress. */
-  subagentPhase?: { phase: string; detail?: string } | null;
   /** Current high-level activity label shown in the composer status line. */
   activity?: { kind: string; label: string; detail?: string } | null;
 }
@@ -59,7 +57,11 @@ function attachmentIcon(kind: AttachmentKind) {
   return FileExcelIcon;
 }
 
-export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, prefill, prefillKey, hasWorkdir = true, docEnabled = true, imageEnabled = false, usage = null, contextWindow = 200000, compactThreshold = 0.8, optimizeMode = "compact", summarizing = false, subagentPhase = null, activity = null }: ComposerProps) {
+export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, prefill, prefillKey, hasWorkdir = true, docEnabled = true, imageEnabled = false, usage = null, contextWindow = 200000, compactThreshold = 0.8, optimizeMode = "compact", summarizing = false, activity = null }: ComposerProps) {
+  // Subagent tool progress should not surface in the composer. The underlying
+  // `subagent-update` events still flow through the core; we just drop the
+  // composer-level indicator here.
+  const visibleActivity = activity?.kind === "subagent" ? null : activity;
   const [value, setValue] = useState("");
   const [attachments, setAttachments] = useState<PickedFile[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -114,7 +116,7 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
       const result = await ipc().pickFiles();
       if ("error" in result) {
         // Surface as a transient alert; the host already returns a localized
-        // message (e.g. "Pilih folder project dulu…").
+        // message (e.g. "Pick a project folder before uploading…").
         window.alert(result.error);
         return;
       }
@@ -159,12 +161,12 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
   const fileEnabled = docEnabled || imageEnabled;
   const uploadDisabled = busy || uploading || !hasWorkdir || !fileEnabled;
   const uploadTitle = !hasWorkdir
-    ? "Pilih folder project dulu sebelum upload"
+    ? "Pick a project folder before uploading"
     : !fileEnabled
-      ? "Aktifkan tool dokumen atau Analyze images di Tools settings untuk upload"
+      ? "Enable the document tool or Analyze images in Tools settings to upload"
       : uploading
-        ? "Menyalin file…"
-        : "Upload file dokumen atau gambar";
+        ? "Copying files…"
+        : "Upload documents or images";
 
   return (
     <div className="composer">
@@ -182,7 +184,7 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
                     className="attach-chip-x"
                     onClick={() => removeAttachment(i)}
                     disabled={busy}
-                    title="Hapus"
+                    title="Remove"
                   >
                     <XIcon size={11} />
                   </button>
@@ -196,7 +198,7 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={activity?.detail ? `${activity.label}: ${activity.detail}…` : subagentPhase ? `Agent: ${subagentPhase.detail ?? subagentPhase.phase}…` : summarizing ? "Summarizing context…" : busy ? "Siberflow is working…" : "What would you like to work on?"}
+          placeholder={visibleActivity?.detail ? `${visibleActivity.label}: ${visibleActivity.detail}…` : summarizing ? "Summarizing context…" : busy ? "Siberflow is working…" : "What would you like to work on?"}
           aria-label="Message Siberflow"
           disabled={busy}
           rows={1}
@@ -204,7 +206,7 @@ export const Composer = memo(function Composer({ busy, onSend, autoFocusKey, pre
         <div className="composer-toolbar">
           <button type="button" className="upload-btn" onClick={onPickFiles} disabled={uploadDisabled} title={uploadTitle} aria-label="Attach documents or images"><PaperclipIcon size={17} /></button>
           <span className={`composer-workspace${hasWorkdir ? " connected" : ""}`}><FolderIcon size={13} />{hasWorkdir ? "Workspace connected" : "No folder selected"}</span>
-          <span className="composer-send-label" role="status">{stopping ? "Stopping…" : uploading ? "Attaching…" : activity?.label ?? (busy ? "Working on it" : "")}</span>
+          <span className="composer-send-label" role="status">{stopping ? "Stopping…" : uploading ? "Attaching…" : visibleActivity?.label ?? (busy ? "Working on it" : "")}</span>
           {busy ? (
             <button className="send-btn stop" onClick={stop} disabled={stopping} title="Stop response" aria-label="Stop response"><StopIcon size={14} /></button>
           ) : (

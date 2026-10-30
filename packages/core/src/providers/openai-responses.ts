@@ -112,6 +112,16 @@ export class OpenAIResponsesProvider implements Provider {
       const ev = chunk as ResponsesEvent;
 
       switch (ev.type) {
+        // Reasoning models stream thinking as summary deltas (redacted
+        // reasoning is not exposed). Forward so hosts can show "AI sedang
+        // berpikir" with live progress, but never persist it into history.
+        case "response.reasoning_summary_text.delta":
+        case "response.reasoning_text.delta": {
+          const d = ev.delta ?? "";
+          if (d.length > 0) yield { type: "reasoning_delta", delta: d };
+          break;
+        }
+
         case "response.output_text.delta": {
           const d = ev.delta ?? "";
           if (d.length > 0) {

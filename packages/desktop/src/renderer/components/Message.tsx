@@ -360,7 +360,7 @@ const ImageAttachment = memo(function ImageAttachment({ path }: { path: string }
   }, [path]);
 
   if (!src) {
-    return <div className="user-image-attachment unavailable">Gambar tidak tersedia</div>;
+    return <div className="user-image-attachment unavailable">Image unavailable</div>;
   }
   return <img className="user-image-attachment" src={src} alt={fileName(path)} />;
 });
@@ -493,7 +493,7 @@ export const AssistantMessage = memo(function AssistantMessage({
         )}
         {waitingForAssistant && !activity && (
           <div className="iteration-loading" role="status" aria-live="polite">
-            <span>Menunggu respons AI</span>
+            <span>Waiting for AI</span>
             <span className="thinking-dots">
               <span />
               <span />
@@ -501,7 +501,7 @@ export const AssistantMessage = memo(function AssistantMessage({
             </span>
           </div>
         )}
-        {isEmpty && (
+        {isEmpty && !activity && !waitingForAssistant && (
           <span className="thinking-dots">
             <span />
             <span />
