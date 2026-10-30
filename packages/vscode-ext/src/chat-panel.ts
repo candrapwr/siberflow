@@ -42,7 +42,14 @@ import type {
 } from "./protocol.js";
 import type { Message } from "@siberflow/core";
 
-const VERSION = "0.6.3";
+const VERSION = "0.6.4";
+
+/** SiberGate gateway base URL (must match core/providers registry). */
+const SIBERGATE_BASE_URL = "https://api.idsiber.com/v1";
+/** Static vision model for analyze_image when the provider is SiberGate. */
+const SIBERGATE_VISION_MODEL = "ds-vision-flash";
+/** SiberGate's Exa-compatible web-search endpoint (gateway passthrough). */
+const SIBERGATE_EXA_BASE_URL = "https://api.idsiber.com/v1/generic/exa/";
 
 /** Default settings shared with the desktop app (protocol parity). */
 const DEFAULT_SETTINGS: SettingsValues = {
@@ -496,6 +503,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async applyMultimodalEnv(apiKeyInput: string | null = null): Promise<void> {
+    // SiberGate: multimodal (analyze_image) is fully automatic — same endpoint
+    // + API key as the active provider, static vision model. The user must NOT
+    // configure it (the UI hides these fields).
+    if (this.settings.provider === "sibergate") {
+      process.env.SIBERFLOW_MULTIMODAL_BASE_URL = SIBERGATE_BASE_URL;
+      process.env.SIBERFLOW_MULTIMODAL_MODEL = SIBERGATE_VISION_MODEL;
+      if (apiKeyInput !== null) await this.persistMultimodalKey(apiKeyInput);
+      if (this.apiKey) process.env.SIBERFLOW_MULTIMODAL_API_KEY = this.apiKey;
+      else delete process.env.SIBERFLOW_MULTIMODAL_API_KEY;
+      return;
+    }
     const baseUrl = this.settings.multimodalProvider.baseUrl.trim().replace(/\/+$/, "");
     const model = this.settings.multimodalProvider.model.trim();
     if (baseUrl) process.env.SIBERFLOW_MULTIMODAL_BASE_URL = baseUrl;
@@ -504,12 +522,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     else delete process.env.SIBERFLOW_MULTIMODAL_MODEL;
 
     if (apiKeyInput !== null) {
-      if (apiKeyInput.length > 0) await this.ctx.secrets.store(multimodalSecretKey(), apiKeyInput);
-      else await this.ctx.secrets.delete(multimodalSecretKey());
+      await this.persistMultimodalKey(apiKeyInput);
     }
     const key = await this.loadMultimodalApiKey();
     if (key) process.env.SIBERFLOW_MULTIMODAL_API_KEY = key;
     else delete process.env.SIBERFLOW_MULTIMODAL_API_KEY;
+  }
+
+  /** Store/clear the standalone multimodal API key (non-sibergate providers). */
+  private async persistMultimodalKey(apiKeyInput: string): Promise<void> {
+    if (apiKeyInput.length > 0) await this.ctx.secrets.store(multimodalSecretKey(), apiKeyInput);
+    else await this.ctx.secrets.delete(multimodalSecretKey());
   }
 
   /**
@@ -523,13 +546,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async applyExaEnv(apiKeyInput: string | null = null): Promise<void> {
+    // SiberGate: web_search is fully automatic — use the gateway's Exa endpoint
+    // and the active provider's API key. The user must NOT configure it (the
+    // UI hides the Exa key field and force-enables the web_search toggle).
+    if (this.settings.provider === "sibergate") {
+      if (apiKeyInput !== null) await this.persistExaKey(apiKeyInput);
+      process.env.SIBERFLOW_EXA_BASE_URL = SIBERGATE_EXA_BASE_URL;
+      if (this.apiKey) process.env.SIBERFLOW_EXA_API_KEY = this.apiKey;
+      else delete process.env.SIBERFLOW_EXA_API_KEY;
+      return;
+    }
     if (apiKeyInput !== null) {
-      if (apiKeyInput.length > 0) await this.ctx.secrets.store(exaSecretKey(), apiKeyInput);
-      else await this.ctx.secrets.delete(exaSecretKey());
+      await this.persistExaKey(apiKeyInput);
     }
     const key = await this.loadExaApiKey();
     if (key) process.env.SIBERFLOW_EXA_API_KEY = key;
     else delete process.env.SIBERFLOW_EXA_API_KEY;
+  }
+
+  /** Store/clear the standalone Exa API key (non-sibergate providers). */
+  private async persistExaKey(apiKeyInput: string): Promise<void> {
+    if (apiKeyInput.length > 0) await this.ctx.secrets.store(exaSecretKey(), apiKeyInput);
+    else await this.ctx.secrets.delete(exaSecretKey());
   }
 
   private rebuildAgent(): void {
@@ -542,6 +580,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (this.settings.subagent) {
       enabledTools.add("agent_general");
       enabledTools.add("agent_explorer");
+    }
+    // SiberGate: web_search is always active — its endpoint + key are wired
+    // automatically (applyExaEnv), so the model can use it without any setup.
+    if (this.settings.provider === "sibergate") {
+      enabledTools.add("web_search");
     }
     const modelOverride = this.settings.model.trim();
     const model =
@@ -2108,6 +2151,12 @@ body {
   display: flex;
   align-items: center;
   gap: 5px;
+}
+/* When empty (e.g. while streaming, since the activity card now carries the
+ * loading status), collapse the row so there is no dead gap under the input. */
+.composer-hint:empty {
+  display: none;
+  padding: 0;
 }
 .composer-hint kbd {
   font-family: var(--vscode-editor-font-family);

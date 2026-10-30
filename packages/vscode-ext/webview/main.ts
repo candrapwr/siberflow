@@ -358,9 +358,16 @@ function renderActivityCard(): void {
     activityDetailEl = activityEl.querySelector(".activity-copy small");
     activityKind = null;
   }
-  // Always (re)append so the card stays pinned below the newest message —
-  // moving a node does not restart its CSS animations.
-  messagesEl.appendChild(activityEl);
+  // Pin the card to the bottom ONLY when it isn't already the last child.
+  // Re-appending an in-DOM node (remove→insert) detaches it for a frame and
+  // RESTARTS its CSS animations (spinner rotate + dots bounce) from frame 0 —
+  // which is what made the card flicker while the word count ticked up. While
+  // reasoning/content streams, no new top-level block is added, so the card is
+  // already last and we leave it untouched (animations keep running smoothly).
+  // We only move it when a newer message/notice was appended below it.
+  if (messagesEl.lastElementChild !== activityEl) {
+    messagesEl.appendChild(activityEl);
+  }
   if (activityKind !== a.kind) {
     activityEl.className = `activity-card activity-${a.kind}`;
     activityKind = a.kind;
@@ -566,7 +573,7 @@ function showSettingsModal(
         <div class="help">Maximum completion tokens requested per LLM call. Default 50000.</div>
       </div>
     </div>
-    <div class="form-section">
+    <div class="form-section" id="cfg-sec-multimodal">
       <div class="form-section-title">Multimodal image analysis</div>
       <div class="form-row">
         <label>Base URL</label>
@@ -583,7 +590,7 @@ function showSettingsModal(
         <div class="form-help">Used only by analyze_image. Enable analyze_image in Tools.</div>
       </div>
     </div>
-    <div class="form-section">
+    <div class="form-section" id="cfg-sec-exa">
       <div class="form-section-title">Web search (Exa)</div>
       <div class="form-row">
         <label>API key</label>
@@ -713,42 +720,67 @@ function showSettingsModal(
   (modal.querySelector("#cfg-maxtokens") as HTMLInputElement).value =
     String(values.maxTokens ?? 50000);
 
-  // Build per-tool checkboxes. Each toggle adds/removes the tool name from the
-  // enabledTools array carried by the form state.
   const toolsContainer = modal.querySelector("#cfg-tools") as HTMLElement;
-  toolsContainer.innerHTML = "";
   const enabledSet = new Set(values.enabledTools);
-  for (const t of TOGGLE_TOOLS) {
-    const lbl = document.createElement("label");
-    lbl.className = "tool-toggle";
-    const cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.dataset.tool = t.name;
-    cb.checked = enabledSet.has(t.name);
-    // Tools that depend on a separately-stored API key are disabled (and
-    // unchecked) until that key exists, so the model never gets a tool it
-    // can't actually call. Currently: web_search needs the Exa key.
-    const needsExaKey = t.name === "web_search";
-    if (needsExaKey && !hasExaApiKey) {
-      cb.disabled = true;
-      cb.checked = false;
-      lbl.classList.add("tool-toggle-disabled");
+  const mmSection = modal.querySelector("#cfg-sec-multimodal") as HTMLElement;
+  const exaSection = modal.querySelector("#cfg-sec-exa") as HTMLElement;
+
+  // Build per-tool checkboxes. Each toggle adds/removes the tool name from the
+  // enabledTools array carried by the form state. Extracted into a function so
+  // it can be rebuilt when the user switches provider (SiberGate auto-enables
+  // web_search; other providers gate it behind the Exa key).
+  const buildToolToggles = (provider: string) => {
+    const isSibergate = provider === "sibergate";
+    toolsContainer.innerHTML = "";
+    for (const t of TOGGLE_TOOLS) {
+      const lbl = document.createElement("label");
+      lbl.className = "tool-toggle";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.dataset.tool = t.name;
+      cb.checked = enabledSet.has(t.name);
+      // web_search needs the Exa key for non-SiberGate providers; for SiberGate
+      // it is wired automatically, so it's always enabled (and forced on).
+      const needsExaKey = t.name === "web_search";
+      if (needsExaKey && isSibergate) {
+        cb.checked = true; // auto-active for SiberGate
+      } else if (needsExaKey && !hasExaApiKey) {
+        cb.disabled = true;
+        cb.checked = false;
+        lbl.classList.add("tool-toggle-disabled");
+      }
+      const name = document.createElement("span");
+      name.className = "tool-toggle-name";
+      name.textContent = t.label;
+      const grp = document.createElement("span");
+      grp.className = "tool-toggle-group";
+      grp.textContent =
+        needsExaKey && isSibergate
+          ? `${t.group} — auto (SiberGate)`
+          : needsExaKey && !hasExaApiKey
+            ? `${t.group} — set API key first`
+            : t.group;
+      lbl.appendChild(cb);
+      lbl.appendChild(name);
+      lbl.appendChild(grp);
+      toolsContainer.appendChild(lbl);
     }
-    const name = document.createElement("span");
-    name.className = "tool-toggle-name";
-    name.textContent = t.label;
-    const grp = document.createElement("span");
-    grp.className = "tool-toggle-group";
-    grp.textContent = needsExaKey && !hasExaApiKey ? `${t.group} — set API key first` : t.group;
-    lbl.appendChild(cb);
-    lbl.appendChild(name);
-    lbl.appendChild(grp);
-    toolsContainer.appendChild(lbl);
-  }
+  };
+
+  // For SiberGate, multimodal + Exa sections are hidden (fully automatic) and
+  // web_search is force-enabled. Toggle visibility on provider change.
+  const updateSibergateVisibility = () => {
+    const isSibergate = providerSelect.value === "sibergate";
+    mmSection.style.display = isSibergate ? "none" : "";
+    exaSection.style.display = isSibergate ? "none" : "";
+    buildToolToggles(providerSelect.value);
+  };
+  updateSibergateVisibility();
 
   providerSelect.addEventListener("change", () => {
     modelInput.value = "";
     updateCustomVisibility();
+    updateSibergateVisibility();
   });
 
   // Toggle the compact-mode tuning rows based on the selected optimize mode.
@@ -950,6 +982,14 @@ function renderComposer(): HTMLElement {
   };
   shell.appendChild(ta);
   shell.appendChild(btn);
+  // Seed the send button's initial idle state IMMEDIATELY via the node
+  // reference. The later updateComposerState() (called from mount()) looks the
+  // button up by ID, and at renderComposer time `el` is not yet attached to
+  // the document so that lookup finds nothing — leaving the icon blank on the
+  // very first open. Setting it here directly guarantees the arrow is present.
+  btn.innerHTML = ICONS.send;
+  btn.disabled = true;
+  btn.title = "Send (Enter)";
   el.appendChild(shell);
   // Context-usage progress bar (visible only in compact mode).
   const contextBar = document.createElement("div");
