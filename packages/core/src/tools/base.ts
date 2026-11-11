@@ -1,4 +1,4 @@
-import type { ToolSchema } from "../agent/types.js";
+import type { ContentBlock, ToolSchema } from "../agent/types.js";
 import type { TaskStore } from "../agent/tasks.js";
 
 /**
@@ -90,6 +90,13 @@ export interface ToolContext {
    * sandboxed to `projectDir` and never sees uploaded files.
    */
   uploadDir?: string;
+  /**
+   * Out-of-band queue used by `analyze_image_native` (native vision). The tool
+   * pushes multimodal content blocks here; the agent loop drains the queue
+   * after each tool round and injects them as a `user` message so the MAIN
+   * model sees the image directly. Initialized per-turn by the Agent.
+   */
+  pendingVisionBlocks?: ContentBlock[][];
   /**
    * Ask the user a question and await their response. Blocks the tool until
    * the user answers or cancels. Injected by the host (AgentHost /

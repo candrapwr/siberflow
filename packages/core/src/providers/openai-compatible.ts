@@ -1,6 +1,7 @@
 import type {
   AssistantMessage,
   ChatRequest,
+  ContentBlock,
   FinishReason,
   Message,
   StreamEvent,
@@ -8,6 +9,7 @@ import type {
   ToolSchema,
   UsageStats,
 } from "../agent/types.js";
+import { contentToText } from "../agent/types.js";
 import {
   DEFAULT_STREAM_IDLE_TIMEOUT_MS,
   DEFAULT_STREAM_TERMINAL_DRAIN_TIMEOUT_MS,
@@ -21,7 +23,7 @@ import { debug } from "../debug.js";
 
 interface OpenAIChatMessage {
   role: "system" | "user" | "assistant" | "tool";
-  content: string | null;
+  content: string | null | ContentBlock[];
   name?: string;
   tool_call_id?: string;
   tool_calls?: Array<{
@@ -296,8 +298,14 @@ export abstract class OpenAICompatibleProvider implements Provider {
 function toOpenAIMessage(m: Message): OpenAIChatMessage {
   switch (m.role) {
     case "system":
-    case "user":
-      return { role: m.role, content: m.content };
+    case "user": {
+      // A user turn may carry multimodal blocks (native-vision injection).
+      // Pass them straight through; string content keeps the old shape.
+      if (m.role === "user" && Array.isArray(m.content)) {
+        return { role: m.role, content: m.content };
+      }
+      return { role: m.role, content: contentToText(m.content) };
+    }
     case "assistant": {
       const hasToolCalls = !!(m.toolCalls && m.toolCalls.length > 0);
       return {

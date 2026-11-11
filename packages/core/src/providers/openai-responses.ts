@@ -8,6 +8,7 @@ import type {
   ToolSchema,
   UsageStats,
 } from "../agent/types.js";
+import { contentToText } from "../agent/types.js";
 import {
   DEFAULT_STREAM_IDLE_TIMEOUT_MS,
   DEFAULT_STREAM_TERMINAL_DRAIN_TIMEOUT_MS,
@@ -252,7 +253,9 @@ function toInputItems(m: Message): ResponseInputItem[] {
   switch (m.role) {
     case "system":
     case "user":
-      return [{ role: m.role, content: m.content }];
+      // Responses provider is out of scope for native-vision (image blocks)
+      // right now; flatten to text so widening content never breaks it.
+      return [{ role: m.role, content: contentToText(m.content) }];
     case "assistant": {
       const items: ResponseInputItem[] = [];
       if (m.content !== null && m.content.length > 0) {

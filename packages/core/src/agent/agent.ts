@@ -17,6 +17,7 @@ import {
 import { TaskStore, renderTaskList, type Task } from "./tasks.js";
 import { compactConversation } from "./compact.js";
 import { debug } from "../debug.js";
+import { contentToText, toVisionAwareMessages, type ContentBlock } from "./types.js";
 import type {
   AssistantMessage,
   FinishReason,
@@ -159,6 +160,14 @@ export interface AgentOptions {
   /** Auto-continue responses cut off by max output tokens (default: true). */
   autoContinue?: boolean;
   /**
+   * Native vision mode (default: false). Controls what image blocks are sent
+   * to the provider: ON → blocks are sent verbatim (main model reads pixels);
+   * OFF → image_url blocks are replaced by a deterministic text placeholder
+   * referencing the earlier native read. `this.messages` is NEVER mutated —
+   * history keeps the real blocks, so re-enabling vision restores them.
+   */
+  visionMode?: boolean;
+  /**
    * Pre-truncate large tool outputs/arguments to keep context lean (default:
    * true). Read in ToolContext.preTruncate by read_file/exec, and used here to
    * digest write_file/edit_file arguments after execution.
@@ -245,6 +254,8 @@ export class Agent {
   private readonly compactKeepRecent: number;
   private readonly tasksEnabled: boolean;
   private readonly autoContinue: boolean;
+  /** Mode-aware image serialization; see AgentOptions.visionMode. */
+  private readonly visionMode: boolean;
   /** Cap for subagent iterations; falls back to this.maxIterations when unset. */
   private readonly subagentMaxIterations: number;
   private readonly preservePartialHistoryOnAbort: boolean;
@@ -322,6 +333,7 @@ export class Agent {
     this.lastPromptTokens = opts.lastPromptTokens ?? 0;
     this.tasksEnabled = opts.tasksEnabled ?? false;
     this.autoContinue = opts.autoContinue ?? true;
+    this.visionMode = opts.visionMode ?? false;
     this.subagentMaxIterations = opts.subagentMaxIterations ?? this.maxIterations;
     this.preservePartialHistoryOnAbort =
       opts.preservePartialHistoryOnAbort ?? false;
@@ -435,7 +447,7 @@ export class Agent {
       }
     }
     if (lastUserIdx === -1) return null;
-    const text = this.messages[lastUserIdx]!.content;
+    const text = contentToText(this.messages[lastUserIdx]!.content as string | ContentBlock[]);
     // Truncate to just before the last user message so send() re-appends it.
     this.messages.length = lastUserIdx;
     return text;
@@ -451,6 +463,10 @@ export class Agent {
     this.consecutiveRunBrowserCount = 0;
     // Reset the mid-turn fold dedupe gate so a fresh turn can fold again.
     this.lastMidTurnFoldUpTo = -1;
+    // Fresh native-vision queue for this turn (analyze_image_native pushes
+    // image blocks here; drained after every tool round below).
+    const visionQueue: ContentBlock[][] = [];
+    this.ctx.pendingVisionBlocks = visionQueue;
     this.messages.push({ role: "user", content: userInput });
     events.onHistoryChanged?.();
     const continuationNotice = events.continuationNotice?.trim();
@@ -733,6 +749,18 @@ export class Agent {
         }
         events.onToolRoundEnd?.();
 
+        // Native vision: if analyze_image_native queued images this round,
+        // inject them as a multimodal `user` message BEFORE compaction runs,
+        // so the next iteration's LLM call actually sees the pixels. The
+        // provenance text (added by the tool) makes clear this is a
+        // tool-delivered image, not a user attachment.
+        if (visionQueue.length > 0) {
+          for (const blocks of visionQueue.splice(0, visionQueue.length)) {
+            this.messages.push({ role: "user", content: blocks });
+          }
+          events.onHistoryChanged?.();
+        }
+
         // Mid-turn sliding-window compaction: if context filled up DURING
         // this iteration loop, fold the oldest current-turn tool results
         // into the rolling summary (keep compactKeepRecent sub-turns verbatim)
@@ -862,7 +890,14 @@ export class Agent {
     // HTTP 400 ("must be followed by tool messages"). Catches every case the
     // optimizeContext-level sanitizer could miss (mid-turn aborts, race
     // conditions, corrupted rehydrated history). Pure and cheap.
-    const safeMessages = ensureToolCallBalance(messages);
+    // Vision-mode serialization: with vision OFF, image_url blocks become a
+    // text placeholder for THIS REQUEST ONLY — history keeps the real blocks,
+    // so text-only gateways never see pixels and re-enabling vision restores
+    // them automatically.
+    const safeMessages = toVisionAwareMessages(
+      ensureToolCallBalance(messages),
+      this.visionMode,
+    );
 
     let assistant: AssistantMessage | null = null;
     let finishReason: FinishReason = "other";

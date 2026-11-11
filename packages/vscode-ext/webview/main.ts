@@ -642,6 +642,11 @@ function showSettingsModal(
         <input type="checkbox" id="cfg-subagent">
       </div>
       <div class="form-help">When enabled, the AI can delegate tasks to helper sub-agents that run their own tool loops. Default off.</div>
+      <div class="form-row inline">
+        <label for="cfg-visionmode">Native vision (main model reads images)</label>
+        <input type="checkbox" id="cfg-visionmode">
+      </div>
+      <div class="form-help">If enabled, "analyze_image_native" replaces "analyze_image": images are injected directly into the conversation so the main model reads them itself (more accurate, needs a vision-capable model). Default off.</div>
       <div class="form-row">
         <label>Max iterations per turn</label>
         <input type="number" id="cfg-max" min="1" max="500">
@@ -738,6 +743,7 @@ function showSettingsModal(
   (modal.querySelector("#cfg-hidetools") as HTMLInputElement).checked = values.hideTools;
   (modal.querySelector("#cfg-debug") as HTMLInputElement).checked = values.debug;
   (modal.querySelector("#cfg-subagent") as HTMLInputElement).checked = values.subagent === true;
+  (modal.querySelector("#cfg-visionmode") as HTMLInputElement).checked = values.visionMode === true;
   (modal.querySelector("#cfg-max") as HTMLInputElement).value = String(values.maxIterations);
   (modal.querySelector("#cfg-delay") as HTMLInputElement).value = String(values.requestDelayMs);
   (modal.querySelector("#cfg-reasoning") as HTMLSelectElement).value =
@@ -854,6 +860,7 @@ function showSettingsModal(
     const hideTools = (modal.querySelector("#cfg-hidetools") as HTMLInputElement).checked;
     const debug = (modal.querySelector("#cfg-debug") as HTMLInputElement).checked;
     const subagent = (modal.querySelector("#cfg-subagent") as HTMLInputElement).checked;
+    const visionMode = (modal.querySelector("#cfg-visionmode") as HTMLInputElement).checked;
     const maxIterations = Math.max(
       1,
       parseInt((modal.querySelector("#cfg-max") as HTMLInputElement).value, 10) || 50,
@@ -907,6 +914,7 @@ function showSettingsModal(
         hideTools,
         debug,
         subagent,
+        visionMode,
         maxIterations,
         requestDelayMs,
         enabledTools,

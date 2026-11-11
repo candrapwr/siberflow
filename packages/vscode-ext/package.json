@@ -1,6 +1,6 @@
 {
   "name": "siberflow-chat",
-  "version": "0.6.9",
+  "version": "0.6.10",
   "displayName": "Siberflow",
   "description": "AI chat sidebar with multi-provider, tool calling, sandboxed file ops, and task checklists.",
   "publisher": "DatasiberLab",
@@ -260,6 +260,11 @@
           "type": "boolean",
           "default": false,
           "description": "Enable sub-agents (agent_general / agent_explorer delegation tools). Default OFF."
+        },
+        "siberflow.visionMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Native vision: images are read by the main model itself instead of a separate vision model. Default OFF."
         }
       }
     }

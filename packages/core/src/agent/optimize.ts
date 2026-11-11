@@ -1,4 +1,4 @@
-import type { Message } from "./types.js";
+import { contentToText, type ContentBlock, type Message } from "./types.js";
 
 export type OptimizeMode = "drop" | "summary" | "recent" | "compact";
 
@@ -504,8 +504,12 @@ function compressToolHistory(
 
   const finalizePendingUser = (): void => {
     if (mode === "summary" && pendingUserIdx !== -1 && turnSignatures.length > 0) {
-      const u = result[pendingUserIdx] as { role: "user"; content: string };
-      u.content = `${u.content}\n\n\n[SUMMARY]\n${turnSignatures.join("\n")}`;
+      const u = result[pendingUserIdx] as { role: "user"; content: string | ContentBlock[] };
+      const suffix = `\n\n\n[SUMMARY]\n${turnSignatures.join("\n")}`;
+      u.content =
+        typeof u.content === "string"
+          ? u.content + suffix
+          : [...u.content, { type: "text", text: suffix }];
     }
   };
 
@@ -579,7 +583,7 @@ function mergeAdjacent(messages: readonly Message[]): Message[] {
     if (last && last.role === "user" && m.role === "user") {
       merged[merged.length - 1] = {
         role: "user",
-        content: `${last.content}\n${m.content}`,
+        content: mergeUserContent(last.content, m.content),
       };
       continue;
     }
@@ -596,6 +600,22 @@ function mergeAdjacent(messages: readonly Message[]): Message[] {
     merged.push(m);
   }
   return merged;
+}
+
+/**
+ * Concatenate two user-message contents, preserving multimodal blocks when
+ * either side is a block array. String + string → joined string (cheap, the
+ * common path). Any array involved → normalize both to block arrays so images
+ * survive the merge (naive `${a}\n${b}` would stringify to "[object Object]").
+ */
+function mergeUserContent(
+  a: string | ContentBlock[],
+  b: string | ContentBlock[],
+): string | ContentBlock[] {
+  if (typeof a === "string" && typeof b === "string") return `${a}\n${b}`;
+  const toBlocks = (c: string | ContentBlock[]): ContentBlock[] =>
+    typeof c === "string" ? [{ type: "text", text: c }] : c;
+  return [...toBlocks(a), { type: "text", text: "\n" }, ...toBlocks(b)];
 }
 
 /**
@@ -621,7 +641,7 @@ export function serializeTurns(messages: readonly Message[]): string {
       continue;
     }
     if (m.role === "user") {
-      out.push(`[user]: ${cap(m.content)}`);
+      out.push(`[user]: ${cap(contentToText(m.content))}`);
       continue;
     }
     if (m.role === "assistant") {

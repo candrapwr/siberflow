@@ -160,7 +160,7 @@ function parseArgs(raw: unknown): AnalyzeImageArgs {
   return out;
 }
 
-async function resolveImageUrl(image: string, ctx: ToolContext): Promise<string> {
+export async function resolveImageUrl(image: string, ctx: ToolContext): Promise<string> {
   if (image.startsWith("data:image/")) return image;
   if (/^https?:\/\//i.test(image)) return image;
 

@@ -70,6 +70,7 @@ const DEFAULT_SETTINGS: SettingsValues = {
   hideTools: true,
   debug: false,
   subagent: false,
+  visionMode: false,
   maxIterations: 100,
   requestDelayMs: 100,
   enabledTools: [
@@ -435,6 +436,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       cfg.update("hideTools", values.hideTools, target),
       cfg.update("debug", values.debug, target),
       cfg.update("subagent", values.subagent, target),
+      cfg.update("visionMode", values.visionMode, target),
       cfg.update("maxIterations", values.maxIterations, target),
       cfg.update("requestDelayMs", values.requestDelayMs, target),
       cfg.update("enabledTools", values.enabledTools, target),
@@ -588,6 +590,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (this.settings.provider === "sibergate") {
       enabledTools.add("web_search");
     }
+    // Native vision mode: swap the sub-model image tool for the native one.
+    // Only when the user has image reading enabled at all — the toggle keeps
+    // its meaning ("image reading on/off"), visionMode decides WHO reads.
+    if (this.settings.visionMode) {
+      if (enabledTools.delete("analyze_image")) {
+        enabledTools.add("analyze_image_native");
+      }
+    } else {
+      if (enabledTools.delete("analyze_image_native")) {
+        enabledTools.add("analyze_image");
+      }
+    }
     const modelOverride = this.settings.model.trim();
     const model =
       modelOverride.length > 0 ? modelOverride : this.provider.defaultModel;
@@ -633,6 +647,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       contextOptimize: this.optimizeConfig(),
       tasksEnabled: true,
       autoContinue: this.settings.autoContinue,
+      visionMode: this.settings.visionMode,
       preTruncate: this.settings.preTruncate,
       maxIterations: this.settings.maxIterations,
       maxTokens: this.settings.maxTokens,
@@ -1354,6 +1369,7 @@ function readSettings(): SettingsValues {
     hideTools: cfg.get<boolean>("hideTools", true),
     debug: cfg.get<boolean>("debug", false),
     subagent: cfg.get<boolean>("subagent", false),
+    visionMode: cfg.get<boolean>("visionMode", false),
     maxIterations: cfg.get<number>("maxIterations", 100),
     requestDelayMs: cfg.get<number>("requestDelayMs", 100),
     enabledTools: cfg.get<string[]>("enabledTools", DEFAULT_SETTINGS.enabledTools),

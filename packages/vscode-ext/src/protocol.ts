@@ -141,6 +141,11 @@ export interface SettingsValues {
   /** Enable sub-agents (agent_general / agent_explorer delegation tools).
    * Default false — OFF unless the user turns it on in Settings. */
   subagent: boolean;
+  /** Native vision mode. When true, `analyze_image_native` replaces
+   * `analyze_image`: the image is injected into the conversation and the MAIN
+   * model reads it with its own vision (more accurate than a separate
+   * sub-model). Default false — the classic sub-model tool stays active. */
+  visionMode: boolean;
   maxIterations: number;
   /** Milliseconds to wait before each LLM request (anti rate-limit). 0 = off. */
   requestDelayMs: number;
