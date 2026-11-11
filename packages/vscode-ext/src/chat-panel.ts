@@ -42,7 +42,7 @@ import type {
 } from "./protocol.js";
 import type { Message } from "@siberflow/core";
 
-const VERSION = "0.6.6";
+const VERSION = "0.6.9";
 
 /** SiberGate gateway base URL (must match core/providers registry). */
 const SIBERGATE_BASE_URL = "https://api.idsiber.com/v1";
@@ -59,6 +59,7 @@ const DEFAULT_SETTINGS: SettingsValues = {
   model: "",
   reasoningEffort: "none",
   maxTokens: 50000,
+  streamIdleTimeoutSeconds: 120,
   contextOptimize: true,
   contextOptimizeMode: "compact",
   contextWindow: 200000,
@@ -423,6 +424,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       cfg.update("model", values.model, target),
       cfg.update("reasoningEffort", values.reasoningEffort, target),
       cfg.update("maxTokens", values.maxTokens, target),
+      cfg.update("streamIdleTimeoutSeconds", values.streamIdleTimeoutSeconds, target),
       cfg.update("contextOptimize", values.contextOptimize, target),
       cfg.update("contextOptimizeMode", values.contextOptimizeMode, target),
       cfg.update("contextWindow", values.contextWindow, target),
@@ -1236,6 +1238,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return {
         apiKey: this.apiKey,
         reasoningEffort: settings.reasoningEffort,
+        streamIdleTimeoutMs: settings.streamIdleTimeoutSeconds * 1000,
         ...(headers ? { headers } : {}),
       };
     }
@@ -1243,6 +1246,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       apiKey: this.apiKey,
       baseUrl: settings.customProvider.baseUrl,
       reasoningEffort: settings.reasoningEffort,
+      streamIdleTimeoutMs: settings.streamIdleTimeoutSeconds * 1000,
       ...(headers ? { headers } : {}),
       customName: settings.customProvider.name,
       customDefaultModel: settings.customProvider.defaultModel,
@@ -1339,6 +1343,7 @@ function readSettings(): SettingsValues {
     model: cfg.get<string>("model", ""),
     reasoningEffort: cfg.get<ReasoningEffort>("reasoningEffort", "none"),
     maxTokens: cfg.get<number>("maxTokens", 50000),
+    streamIdleTimeoutSeconds: cfg.get<number>("streamIdleTimeoutSeconds", 120),
     contextOptimize: cfg.get<boolean>("contextOptimize", true),
     contextOptimizeMode: cfg.get<OptimizeMode>("contextOptimizeMode", "compact"),
     contextWindow: cfg.get<number>("contextWindow", 200000),
@@ -1398,6 +1403,10 @@ function normalizeSettings(values: SettingsValues): SettingsValues {
   const maxTokens = Number.isFinite(maxTokensValue) && maxTokensValue > 0
     ? Math.min(Math.floor(maxTokensValue), 2_000_000)
     : DEFAULT_SETTINGS.maxTokens;
+  const streamIdleTimeoutSecondsValue = Number(values.streamIdleTimeoutSeconds);
+  const streamIdleTimeoutSeconds = Number.isFinite(streamIdleTimeoutSecondsValue)
+    ? Math.min(Math.max(Math.floor(streamIdleTimeoutSecondsValue), 10), 600)
+    : DEFAULT_SETTINGS.streamIdleTimeoutSeconds;
   const reasoningEffort =
     values.reasoningEffort === "low" ||
     values.reasoningEffort === "medium" ||
@@ -1411,6 +1420,7 @@ function normalizeSettings(values: SettingsValues): SettingsValues {
     subagent: values.subagent === true,
     contextWindow,
     maxTokens,
+    streamIdleTimeoutSeconds,
     reasoningEffort,
     customProvider: {
       name: customProvider.name.trim() || "custom",

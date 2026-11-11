@@ -8,7 +8,12 @@ import type {
   ToolSchema,
   UsageStats,
 } from "../agent/types.js";
-import type { Provider, ProviderConfig } from "./base.js";
+import {
+  DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+  DEFAULT_STREAM_TERMINAL_DRAIN_TIMEOUT_MS,
+  type Provider,
+  type ProviderConfig,
+} from "./base.js";
 import { providerHeaders } from "./headers.js";
 import { parseSSE } from "./sse.js";
 import { debug } from "../debug.js";
@@ -34,6 +39,7 @@ export class OpenAIResponsesProvider implements Provider {
   private readonly apiKey: string;
   private readonly baseUrl: string;
   private readonly headers: Record<string, string> | undefined;
+  private readonly streamIdleTimeoutMs: number;
 
   constructor(config: ProviderConfig) {
     if (!config.apiKey) {
@@ -42,6 +48,7 @@ export class OpenAIResponsesProvider implements Provider {
     this.apiKey = config.apiKey;
     this.baseUrl = config.baseUrl ?? DEFAULT_BASE_URL;
     this.headers = config.headers;
+    this.streamIdleTimeoutMs = config.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS;
   }
 
   async *chatStream(req: ChatRequest): AsyncIterable<StreamEvent> {
@@ -101,15 +108,19 @@ export class OpenAIResponsesProvider implements Provider {
     let content = "";
     let finishReason: FinishReason = "other";
     let usage: UsageStats | undefined;
+    let terminalSeen = false;
 
-    const idleTimeoutMs = req.maxTokens !== undefined && req.maxTokens <= 100
-      ? 3_000
-      : 30_000;
-    stream: for await (const chunk of parseSSE(res.body, {
-      idleTimeoutMs,
-      initialTimeoutMs: 60_000,
+    const terminalDrainTimeoutMs = Math.min(
+      DEFAULT_STREAM_TERMINAL_DRAIN_TIMEOUT_MS,
+      this.streamIdleTimeoutMs,
+    );
+    for await (const chunk of parseSSE(res.body, {
+      idleTimeoutMs: () => terminalSeen ? terminalDrainTimeoutMs : this.streamIdleTimeoutMs,
+      initialTimeoutMs: this.streamIdleTimeoutMs,
+      resetIdleTimeoutOnData: () => !terminalSeen,
     })) {
       const ev = chunk as ResponsesEvent;
+      if (terminalSeen) continue;
 
       switch (ev.type) {
         // Reasoning models stream thinking as summary deltas (redacted
@@ -176,17 +187,16 @@ export class OpenAIResponsesProvider implements Provider {
             };
           }
           finishReason = callsByItemId.size > 0 ? "tool_calls" : "stop";
-          // This is a terminal event. Do not require a trailing `[DONE]` or
-          // socket close from OpenAI-compatible gateways.
-          break stream;
+          terminalSeen = true;
+          // Drain the trailing [DONE]/EOF so a completed response does not
+          // appear as a client disconnect in the gateway logs.
+          break;
         }
 
         case "response.incomplete": {
           finishReason = "length";
-          // `response.incomplete` is the terminal event for a response that
-          // hit max_output_tokens. Do not wait for a gateway-specific trailing
-          // event or the UI can remain stuck in a busy state.
-          break stream;
+          terminalSeen = true;
+          break;
         }
 
         case "response.failed":
@@ -198,10 +208,6 @@ export class OpenAIResponsesProvider implements Provider {
           throw new Error(`openai-responses stream error: ${msg}`);
         }
       }
-    }
-
-    if (finishReason === "length" || finishReason === "stop" || finishReason === "tool_calls") {
-      await res.body.cancel().catch(() => undefined);
     }
 
     const toolCalls: ToolCall[] = [...callsByItemId.values()]

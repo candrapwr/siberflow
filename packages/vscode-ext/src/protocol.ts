@@ -123,6 +123,8 @@ export interface SettingsValues {
   reasoningEffort: ReasoningEffort;
   /** Maximum number of output tokens requested from the provider. */
   maxTokens: number;
+  /** Seconds without provider stream data before cancelling a request. */
+  streamIdleTimeoutSeconds: number;
   contextOptimize: boolean;
   contextOptimizeMode: OptimizeMode;
   /** Compact-mode: max prompt tokens (context window budget). Default 200000. */

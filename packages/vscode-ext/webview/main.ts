@@ -592,6 +592,11 @@ function showSettingsModal(
         <input type="number" id="cfg-maxtokens" min="1024" step="1024">
         <div class="help">Maximum completion tokens requested per LLM call. Default 50000.</div>
       </div>
+      <div class="form-row">
+        <label>Stream idle timeout (seconds)</label>
+        <input type="number" id="cfg-stream-idle-timeout" min="10" max="600" step="10">
+        <div class="help">Cancel only when no stream data arrives for this long. Default 120 seconds.</div>
+      </div>
     </div>
     <div class="form-section" id="cfg-sec-multimodal">
       <div class="form-section-title">Multimodal image analysis</div>
@@ -739,6 +744,8 @@ function showSettingsModal(
     values.reasoningEffort ?? "none";
   (modal.querySelector("#cfg-maxtokens") as HTMLInputElement).value =
     String(values.maxTokens ?? 50000);
+  (modal.querySelector("#cfg-stream-idle-timeout") as HTMLInputElement).value =
+    String(values.streamIdleTimeoutSeconds ?? 120);
 
   const toolsContainer = modal.querySelector("#cfg-tools") as HTMLElement;
   const enabledSet = new Set(values.enabledTools);
@@ -860,6 +867,13 @@ function showSettingsModal(
     const maxTokens = Number.isFinite(maxTokensRaw) && maxTokensRaw > 0
       ? Math.min(maxTokensRaw, 2_000_000)
       : 50000;
+    const streamIdleTimeoutSecondsRaw = parseInt(
+      (modal.querySelector("#cfg-stream-idle-timeout") as HTMLInputElement).value,
+      10,
+    );
+    const streamIdleTimeoutSeconds = Number.isFinite(streamIdleTimeoutSecondsRaw)
+      ? Math.min(Math.max(streamIdleTimeoutSecondsRaw, 10), 600)
+      : 120;
     // Collect checked tool names from the tools grid.
     const enabledTools = Array.from(
       modal.querySelectorAll<HTMLInputElement>("#cfg-tools input[type='checkbox']:checked"),
@@ -882,6 +896,7 @@ function showSettingsModal(
         model,
         reasoningEffort,
         maxTokens,
+        streamIdleTimeoutSeconds,
         contextOptimize,
         contextOptimizeMode,
         contextWindow,

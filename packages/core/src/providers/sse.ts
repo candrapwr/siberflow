@@ -9,6 +9,8 @@ export async function* parseSSE(
   options: {
     idleTimeoutMs?: number | (() => number);
     initialTimeoutMs?: number;
+    /** Reset the idle timer on received bytes; defaults to true. */
+    resetIdleTimeoutOnData?: () => boolean;
   } = {},
 ): AsyncIterable<unknown> {
   const reader = body.getReader();
@@ -20,14 +22,18 @@ export async function* parseSSE(
   const initialTimeoutMs = options.initialTimeoutMs ?? resolveIdleTimeoutMs();
   const startedAt = Date.now();
   let lastPayloadAt: number | null = null;
+  let lastActivityAt: number | null = null;
 
   try {
     while (true) {
       const readPromise = reader.read();
       let timer: ReturnType<typeof setTimeout> | undefined;
-      const activeTimeoutMs =
-        lastPayloadAt === null ? initialTimeoutMs : resolveIdleTimeoutMs();
-      const elapsed = Date.now() - (lastPayloadAt ?? startedAt);
+      const resetOnData = options.resetIdleTimeoutOnData?.() ?? true;
+      const lastActivity = resetOnData ? lastActivityAt : lastPayloadAt;
+      const activeTimeoutMs = lastActivity === null
+        ? initialTimeoutMs
+        : resolveIdleTimeoutMs();
+      const elapsed = Date.now() - (lastActivity ?? startedAt);
       const remainingMs = Math.max(1, activeTimeoutMs - elapsed);
       let result: ReadableStreamReadResult<Uint8Array> | "idle-timeout";
       try {
@@ -46,8 +52,8 @@ export async function* parseSSE(
       if (result === "idle-timeout") {
         // A few OpenAI-compatible gateways leave the HTTP stream open after
         // their final content chunk and omit both finish_reason and [DONE].
-        // Cancel the pending read, then let the provider finalize the content
-        // already collected instead of holding the agent/UI busy forever.
+        // Cancel only after no response bytes arrive for the idle window, then
+        // let the provider finalize content already collected.
         await reader.cancel("SSE idle timeout").catch(() => undefined);
         await readPromise.catch(() => undefined);
         return;
@@ -55,6 +61,7 @@ export async function* parseSSE(
 
       const { done, value } = result;
       if (done) break;
+      if (value.byteLength > 0) lastActivityAt = Date.now();
       buffer += decoder.decode(value, { stream: true });
 
       let separator: RegExpExecArray | null;

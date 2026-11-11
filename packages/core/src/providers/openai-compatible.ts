@@ -8,7 +8,13 @@ import type {
   ToolSchema,
   UsageStats,
 } from "../agent/types.js";
-import type { Provider, ProviderConfig, ReasoningEffort } from "./base.js";
+import {
+  DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+  DEFAULT_STREAM_TERMINAL_DRAIN_TIMEOUT_MS,
+  type Provider,
+  type ProviderConfig,
+  type ReasoningEffort,
+} from "./base.js";
 import { providerHeaders } from "./headers.js";
 import { parseSSE } from "./sse.js";
 import { debug } from "../debug.js";
@@ -76,6 +82,7 @@ export abstract class OpenAICompatibleProvider implements Provider {
   protected readonly headers: Record<string, string> | undefined;
   protected readonly includeUsageInStream: boolean;
   protected readonly reasoningEffort: ReasoningEffort;
+  protected readonly streamIdleTimeoutMs: number;
 
   constructor(config: ProviderConfig, opts: OpenAICompatibleOptions) {
     if (!config.apiKey) {
@@ -88,6 +95,7 @@ export abstract class OpenAICompatibleProvider implements Provider {
     this.headers = config.headers;
     this.includeUsageInStream = opts.includeUsageInStream ?? true;
     this.reasoningEffort = config.reasoningEffort ?? "none";
+    this.streamIdleTimeoutMs = config.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS;
   }
 
   protected requestBodyExtras(): Record<string, unknown> {
@@ -151,19 +159,21 @@ export abstract class OpenAICompatibleProvider implements Provider {
     let reasoningContentLength = 0;
     let terminalSeen = false;
 
-    const idleTimeoutMs = req.maxTokens !== undefined && req.maxTokens <= 100
-      ? 3_000
-      : 30_000;
+    const terminalDrainTimeoutMs = Math.min(
+      DEFAULT_STREAM_TERMINAL_DRAIN_TIMEOUT_MS,
+      this.streamIdleTimeoutMs,
+    );
     for await (const chunk of parseSSE(res.body, {
       // Do NOT break early after the terminal chunk. Gateways (DeepSeek,
       // Qwen, SiberGate, ...) send `data: [DONE]` last, and closing the body
       // before draining it makes nginx log a 499 "client disconnected before
       // stream completed" even though the answer was already complete. Let
-      // parseSSE reach [DONE]/EOF naturally (clean 200). The idle timeout is
-      // the only cancel path — it fires solely for gateways that omit both
-      // usage and [DONE] AND never close, where the socket is genuinely stuck.
-      idleTimeoutMs: () => terminalSeen ? 2_000 : idleTimeoutMs,
-      initialTimeoutMs: 60_000,
+      // parseSSE reach [DONE]/EOF naturally (clean 200). During generation,
+      // idle means no response bytes arrived for the configured interval;
+      // after the terminal event, allow a short drain grace for [DONE]/EOF.
+      idleTimeoutMs: () => terminalSeen ? terminalDrainTimeoutMs : this.streamIdleTimeoutMs,
+      initialTimeoutMs: this.streamIdleTimeoutMs,
+      resetIdleTimeoutOnData: () => !terminalSeen,
     })) {
       const data = chunk as StreamChunk;
       chunkCount++;
