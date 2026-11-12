@@ -19,6 +19,7 @@ import {
   saveSessionSync,
   SESSION_FORMAT_VERSION,
   optimizeContext,
+  contentToText,
   parseProviderHeadersEnv,
   uploadsDirFor,
   type Provider,
@@ -1313,7 +1314,9 @@ function filterHistory(messages: readonly Message[]): HistoryMessage[] {
   const out: HistoryMessage[] = [];
   for (const m of messages) {
     if (m.role === "user") {
-      out.push({ role: "user", content: m.content });
+      // History view is text-only; multimodal block content (native-vision
+      // injections) is projected via contentToText (image blocks → "[image]").
+      out.push({ role: "user", content: contentToText(m.content) });
     } else if (m.role === "assistant") {
       out.push({
         role: "assistant",
@@ -1822,7 +1825,21 @@ body {
 .msg .body pre code { background: transparent; border: none; padding: 0; font-size: 0.92em; }
 .msg .body table { border-collapse: collapse; margin: 8px 0; font-size: 0.92em; }
 .msg .body th, .msg .body td { border: 1px solid var(--sf-border); padding: 4px 8px; }
-.msg .body th { background: color-mix(in srgb, var(--sf-surface-alt) 60%, transparent); }
+.msg .body th { background: color-mix(in srgb, var(--sf-surface-alt) 60%, transparent); white-space: nowrap; }
+/* Wide markdown tables scroll horizontally instead of squashing columns.
+   The wrapper is added by enhanceTables() after every markdown render;
+   margins move onto it so the table itself can sit flush inside. */
+.msg .body .table-wrap { overflow-x: auto; margin: 8px 0; }
+.msg .body .table-wrap table { margin: 0; }
+.msg .body .table-wrap::-webkit-scrollbar { height: 8px; }
+.msg .body .table-wrap::-webkit-scrollbar-track { background: transparent; }
+.msg .body .table-wrap::-webkit-scrollbar-thumb {
+  background: var(--vscode-scrollbarSlider-background, rgba(121, 121, 121, 0.4));
+  border-radius: 4px;
+}
+.msg .body .table-wrap::-webkit-scrollbar-thumb:hover {
+  background: var(--vscode-scrollbarSlider-hoverBackground, rgba(100, 100, 100, 0.7));
+}
 .msg .body hr { border: none; border-top: 1px solid var(--sf-border); margin: 10px 0; }
 .msg .body .seg { white-space: pre-wrap; }
 .msg .body .seg:has(> p), .msg .body .seg:has(> ul), .msg .body .seg:has(> ol),

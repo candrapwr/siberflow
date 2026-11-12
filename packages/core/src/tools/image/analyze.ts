@@ -2,6 +2,7 @@ import { readFile, realpath } from "node:fs/promises";
 import { basename, extname, isAbsolute, relative, resolve } from "node:path";
 import type { Tool, ToolContext } from "../base.js";
 import { resolveWithin } from "../file/path-utils.js";
+import { compressDataUrl } from "./compress.js";
 
 interface AnalyzeImageArgs {
   image: string;
@@ -161,7 +162,7 @@ function parseArgs(raw: unknown): AnalyzeImageArgs {
 }
 
 export async function resolveImageUrl(image: string, ctx: ToolContext): Promise<string> {
-  if (image.startsWith("data:image/")) return image;
+  if (image.startsWith("data:image/")) return compressDataUrl(image);
   if (/^https?:\/\//i.test(image)) return image;
 
   const abs = await resolveImagePath(image, ctx);
@@ -172,7 +173,7 @@ export async function resolveImageUrl(image: string, ctx: ToolContext): Promise<
     );
   }
   const mime = mimeFor(abs);
-  return `data:${mime};base64,${data.toString("base64")}`;
+  return compressDataUrl(`data:${mime};base64,${data.toString("base64")}`);
 }
 
 async function resolveImagePath(image: string, ctx: ToolContext): Promise<string> {

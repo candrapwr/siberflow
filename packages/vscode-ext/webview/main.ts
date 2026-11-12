@@ -1392,6 +1392,7 @@ function appendAssistantContent(delta: string): void {
   if (now - streamLastRenderAt >= STREAM_MD_THROTTLE_MS) {
     streamLastRenderAt = now;
     currentTextEl.innerHTML = marked.parse(state.currentAssistantText) as string;
+    enhanceTables(currentTextEl);
   }
   scrollToBottom();
 }
@@ -1400,9 +1401,28 @@ function finalizeCurrentTextEl(): void {
   if (currentTextEl && state.currentAssistantText.length > 0) {
     currentTextEl.innerHTML = marked.parse(state.currentAssistantText) as string;
     enhanceCodeBlocks(currentTextEl);
+    enhanceTables(currentTextEl);
   }
   currentTextEl = null;
   state.currentAssistantText = "";
+}
+
+/**
+ * Wrap every markdown <table> in a horizontally scrollable container so wide
+ * tables keep readable columns instead of squashing them into the panel
+ * width. Idempotent (skips already-wrapped tables); called after each
+ * markdown render — innerHTML re-parses during streaming wipe the wrappers,
+ * so they must be re-applied with every render, and a partially-parsed
+ * streaming table is cheap to (re)wrap.
+ */
+function enhanceTables(container: HTMLElement): void {
+  for (const table of Array.from(container.querySelectorAll("table"))) {
+    if (table.parentElement?.classList.contains("table-wrap")) continue;
+    const wrap = document.createElement("div");
+    wrap.className = "table-wrap";
+    table.parentNode?.insertBefore(wrap, table);
+    wrap.appendChild(table);
+  }
 }
 
 /**
@@ -2437,6 +2457,7 @@ function restoreHistory(entries: HistoryMessage[]): void {
         seg.className = "seg";
         seg.innerHTML = marked.parse(entry.content) as string;
         enhanceCodeBlocks(seg);
+        enhanceTables(seg);
         turnBlocks.push(seg);
       }
       for (const call of entry.toolCalls ?? []) {

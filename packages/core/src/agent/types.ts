@@ -47,6 +47,64 @@ const IMAGE_PLACEHOLDER_TEXT =
   "preceding turns. Re-enable vision mode to view it again.]";
 
 /**
+ * Replacement left in place of an `image_url` block once the image's own turn
+ * is over. Native-vision base64 payloads are the single largest silent weight
+ * a long session carries: a 2–5 MB data URL stays in history AND in every
+ * persisted checkpoint forever. The model only ever needs the image DURING
+ * the turn it reads it (the assistant description + the provenance text
+ * survive), so the pixels are dropped at the start of the NEXT turn and
+ * replaced by this note — the file itself stays on disk and can be re-read
+ * via analyze_image_native with the original path.
+ */
+export const IMAGE_READ_NOTE_TEXT =
+  "[image removed from history after being read, to save context — re-read " +
+  "it with analyze_image_native using the original file path if you still need it]";
+
+/**
+ * Permanently strip `image_url` blocks from every message EXCEPT the newest
+ * `keepRecent` ones (those may still be the active turn's injections — the
+ * model must see their pixels). Blocks become a short text note; a message
+ * whose blocks were ALL images collapses back to plain string content, which
+ * keeps old hosts/serializers (and turn-boundary logic) seeing the canonical
+ * shape. Returns the number of image blocks removed; returns 0 fast when no
+ * stale images exist, so callers can run this every turn without cost.
+ *
+ * Rationale: a native-vision image is base64 (often MBs) that lives in
+ * `this.messages` and every persisted checkpoint for the session's lifetime.
+ * Its pixels are only useful in the turn they were read — the assistant's
+ * description of it is already in history — so later turns should not pay
+ * for it. The file remains on disk; the tool can re-read it on demand.
+ */
+export function stripStaleImageBlocks(
+  messages: Message[],
+  keepRecent = 1,
+): number {
+  let removed = 0;
+  const protectFrom = Math.max(0, messages.length - keepRecent);
+  for (let i = 0; i < protectFrom; i++) {
+    const m = messages[i]!;
+    if (!Array.isArray(m.content)) continue;
+    if (!m.content.some((b) => b.type === "image_url")) continue;
+    const blocks: ContentBlock[] = [];
+    for (const b of m.content) {
+      if (b.type === "image_url") {
+        removed++;
+        blocks.push({ type: "text", text: IMAGE_READ_NOTE_TEXT });
+      } else {
+        blocks.push(b);
+      }
+    }
+    if (removed > 0) {
+      const allImages = m.content.every((b) => b.type === "image_url");
+      (m as { content: string | ContentBlock[] }).content = allImages
+        ? IMAGE_READ_NOTE_TEXT
+        : blocks;
+    }
+  }
+  return removed;
+}
+
+/**
  * Build a vision-mode-aware VIEW of the conversation for a single provider
  * request. When `visionMode` is true this returns the messages unchanged. When
  * false, every `image_url` block in a user message is replaced with a text

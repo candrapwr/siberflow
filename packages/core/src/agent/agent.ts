@@ -17,7 +17,7 @@ import {
 import { TaskStore, renderTaskList, type Task } from "./tasks.js";
 import { compactConversation } from "./compact.js";
 import { debug } from "../debug.js";
-import { contentToText, toVisionAwareMessages, type ContentBlock } from "./types.js";
+import { contentToText, stripStaleImageBlocks, toVisionAwareMessages, type ContentBlock } from "./types.js";
 import type {
   AssistantMessage,
   FinishReason,
@@ -467,6 +467,18 @@ export class Agent {
     // image blocks here; drained after every tool round below).
     const visionQueue: ContentBlock[][] = [];
     this.ctx.pendingVisionBlocks = visionQueue;
+    // New turn = old images are dead weight. Native-vision base64 blocks
+    // injected by analyze_image_native stay in this.messages (and every
+    // persisted checkpoint) for the session's lifetime, but the model only
+    // needs them in the turn it reads them — the assistant's description of
+    // the image is already history. Strip all of them now (keepRecent=0:
+    // everything before this line belongs to previous turns); the files
+    // remain on disk and can be re-queued via the tool if still needed.
+    const strippedImages = stripStaleImageBlocks(this.messages, 0);
+    if (strippedImages > 0) {
+      debug(`🖼️ stripped ${strippedImages} stale image block(s) from history`);
+      events.onHistoryChanged?.();
+    }
     this.messages.push({ role: "user", content: userInput });
     events.onHistoryChanged?.();
     const continuationNotice = events.continuationNotice?.trim();
